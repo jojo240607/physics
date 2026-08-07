@@ -26,6 +26,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::window::{Window, WindowId};
 
 use phy_math::na::{Matrix4, Vector3};
+use phy_math::Vec3 as V3;
+use phy_optics::{OpticScene, OpticBody, OpticSubsystem, Precision, to_rgba8};
+use phy_rigid::{Body, Shape};
 
 /// 后台初始化完成事件。
 enum DemoEvent {
@@ -44,6 +47,7 @@ struct App {
     cube: Vec<raster::Tri>,
     sphere: Vec<raster::Tri>,
     paused: bool,
+    optics_mode: bool,
     dragging: bool,
     last_x: f64,
     last_y: f64,
@@ -65,6 +69,7 @@ impl App {
             cube: mesh::cube_tris(),
             sphere: mesh::sphere_tris(16, 12),
             paused: false,
+            optics_mode: false,
             dragging: false,
             last_x: 0.0,
             last_y: 0.0,
@@ -86,13 +91,17 @@ impl App {
         self.fb.clear();
         let (boxes, spheres) = self.scene.gather();
 
-        for inst in &boxes {
-            let m = instance_model(inst);
-            draw_mesh(&mut self.fb, &vp, &m, &self.cube, inst.color, &light);
-        }
-        for inst in &spheres {
-            let m = instance_model(inst);
-            draw_mesh(&mut self.fb, &vp, &m, &self.sphere, inst.color, &light);
+        if self.optics_mode {
+            self.render_optics();
+        } else {
+            for inst in &boxes {
+                let m = instance_model(inst);
+                draw_mesh(&mut self.fb, &vp, &m, &self.cube, inst.color, &light);
+            }
+            for inst in &spheres {
+                let m = instance_model(inst);
+                draw_mesh(&mut self.fb, &vp, &m, &self.sphere, inst.color, &light);
+            }
         }
 
         // 呈现
@@ -145,6 +154,68 @@ fn instance_model(inst: &scene::Instance) -> Matrix4<f64> {
         inst.m3[2] as f64,
         inst.m3[3] as f64,
     ])
+}
+
+/// 光学演示:用 phy-optics 的实时近似后端渲染一个玻璃球 + 地面,
+/// 复用当前相机位姿直接写入帧缓冲像素。
+impl App {
+    fn render_optics(&mut self) {
+    let (w, h) = (self.fb.width as usize, self.fb.height as usize);
+    // 由相机 yaw/pitch/distance 推导 eye 与 target。
+    let yaw = self.cam.yaw as f64;
+    let pitch = self.cam.pitch as f64;
+    let dist = self.cam.distance as f64;
+    let target = V3::new(0.0, 0.0, 0.0);
+    let eye = V3::new(
+        dist * (pitch.cos()) * (yaw.sin()),
+        dist * pitch.sin(),
+        dist * (pitch.cos()) * (yaw.cos()),
+    ) + target;
+    let up = V3::new(0.0, 1.0, 0.0);
+    let fov = std::f64::consts::FRAC_PI_4;
+
+    // 构建光学场景:地面(不透明)+ 玻璃球(透明,折射率 1.5)+ 一个小蓝玻璃球。
+    let mut scene = OpticScene::<f64>::new();
+    scene.add(OpticBody::new(
+        Body {
+            shape: Shape::Box {
+                half: V3::new(4.0, 0.1, 4.0),
+            },
+            pos: V3::new(0.0, -1.5, 0.0),
+            rot: phy_math::na::UnitQuaternion::identity(),
+            vel: V3::zeros(),
+            inv_mass: 0.0,
+        },
+        phy_optics::Surface::diffuse(V3::new(0.5, 0.5, 0.5)),
+    ));
+    scene.add(OpticBody::new(
+        Body {
+            shape: Shape::Sphere { r: 1.0 },
+            pos: V3::new(0.0, 0.0, 0.0),
+            rot: phy_math::na::UnitQuaternion::identity(),
+            vel: V3::zeros(),
+            inv_mass: 0.0,
+        },
+        phy_optics::Surface::glass(1.5, V3::new(0.9, 0.95, 1.0)),
+    ));
+    scene.add(OpticBody::new(
+        Body {
+            shape: Shape::Sphere { r: 0.5 },
+            pos: V3::new(1.8, -0.5, 0.5),
+            rot: phy_math::na::UnitQuaternion::identity(),
+            vel: V3::zeros(),
+            inv_mass: 0.0,
+        },
+        phy_optics::Surface::glass(1.33, V3::new(0.4, 0.6, 1.0)),
+    ));
+
+    let sub = OpticSubsystem::new(scene, Precision::Realtime);
+    let mut buf = vec![V3::new(0.0, 0.0, 0.0); w * h];
+    sub.render_camera(&mut buf, w, h, &eye, &target, &up, fov);
+    for (i, c) in buf.iter().enumerate() {
+        self.fb.pixels[i] = to_rgba8(c);
+    }
+    }
 }
 
 impl ApplicationHandler<DemoEvent> for App {
@@ -222,6 +293,7 @@ impl ApplicationHandler<DemoEvent> for App {
                     if let winit::keyboard::Key::Character(c) = &event.logical_key {
                         match c.as_str() {
                             "p" => self.paused = !self.paused,
+                            "o" => self.optics_mode = !self.optics_mode,
                             "r" => self.scene.reset(),
                             "g" => self.scene.add_boxes(8),
                             "b" => self.scene.add_spheres(6),
@@ -250,7 +322,7 @@ impl ApplicationHandler<DemoEvent> for App {
 
 fn main() {
     println!("phy-rigid · 3D demo (software rasterizer)");
-    println!("拖拽旋转 · 滚轮缩放 · P 暂停 · R 重置 · G 加盒 · B 加球 · I 统计 · 关闭窗口退出");
+    println!("拖拽旋转 · 滚轮缩放 · P 暂停 · O 光学模式 · R 重置 · G 加盒 · B 加球 · I 统计 · 关闭窗口退出");
 
     let event_loop = EventLoop::<DemoEvent>::with_user_event().build().unwrap();
     let mut app = App::new(&event_loop);

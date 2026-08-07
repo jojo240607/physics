@@ -1101,6 +1101,7 @@ version = "0.1.0"
 dependencies = [
  "nalgebra",
  "phy-math",
+ "phy-optics",
  "phy-rigid",
  "softbuffer",
  "winit",
@@ -1149,8 +1150,10 @@ name = "phy-optics"
 version = "0.1.0"
 dependencies = [
  "nalgebra",
+ "num-traits",
  "phy-core",
  "phy-math",
+ "phy-rigid",
  "serde",
 ]
 

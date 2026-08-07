@@ -6,6 +6,7 @@ version.workspace = true
 [dependencies]
 phy-math = { path = "../phy-math" }
 phy-rigid = { path = "../phy-rigid" }
+phy-optics = { path = "../phy-optics" }
 nalgebra = { workspace = true }
 winit = "0.30"
 softbuffer = "0.4"
