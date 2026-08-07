@@ -79,7 +79,7 @@ struct World<T: RealField> {
 | **M1 碰撞检测** | (phy-rigid) SAP broad-phase + 球/盒 SAT + 凸体 GJK-EPA; 接触点/法线/穿透深度 | ✅ 11 测试全过(球/盒/凸体相交与分离、旋转盒、SAP→Narrow 管线) |
 | **M2 刚体动力学** | 半隐式欧拉积分 + 顺序冲量(SI)速度求解(接触+库仑摩擦) + Split-Impulse 位置修正; 接触分离容差(pen≈0 视为相交) | ✅ 13 测试全过(单盒落地不穿透、双盒堆叠稳定) |
 | **M3 3D Demo** | N 盒/球落地堆叠,3D 实时渲染 + 轨道相机 + 交互(暂停/重置/加盒/加球) + 朗伯光照 | 可玩 Demo |
-| **M5 流体 SPH** | SPH 粒子法 + 与刚体耦合(浮沉/阻力) | 水面浮动刚体 |
+| **M5 流体 SPH** | SPH 粒子法 + 与刚体耦合(浮沉/阻力) | 水面浮动刚体 | ✅ `phy-fluid` 新 crate: Müller 2003 弱可压缩 SPH(Poly6/Spiky/ViscLaplacian 核) + 均匀空间哈希邻居搜索; 6 测试全过(密度收敛、溃坝不越界、静/动态刚体耦合浮力、粒子数守恒) |
 | **M6 光学双后端** | 离线光路追踪 / 实时近似,精度开关切换 | 折射/焦散/阴影 |
 | **M7 其他场** | 热/电磁等连续场(网格有限差分) | 可扩展场规则 |
 
@@ -107,3 +107,4 @@ struct World<T: RealField> {
 - 2026-08-07: 流体选 **SPH 粒子法**; 光学选 **双后端可切换**; 确定性/WASM **暂不做**(架构预留)。
 - 2026-08-07: M2 完成。求解器采用**顺序冲量 + 累积冲量钳制 + Split-Impulse 伪速度位置修正**(避免抖动/能量注入); 接触 SAT 加 `sep_eps=-1e-6` 容差,使恰好接触(pen≈0)被判为相交,修复堆叠测试中下盒穿地。
 - 2026-08-08: M3 完成。Demo 因本机 MinGW 8.1 链接器对 wgpu 巨型依赖树崩溃(`corrupt .drectve`, `ld returned 5`),**从 wgpu 转向纯 Rust 软件光栅化方案**:`winit 0.30` + `softbuffer 0.4` 做窗口/帧缓冲呈现,自研 CPU 光栅化器(`raster.rs`:透视正确插值 + Z 缓冲 + 朗伯光照)渲染 `RigidWorld<f64>` 的盒/球实例。无需 GPU 后端,保证在任意 MinGW 工具链下可编译运行。交互:拖拽旋转、滚轮缩放、P 暂停、R 重置、G 加盒、B 加球、I 统计。
+- 2026-08-08: M5 完成。`phy-rigid` 新增 `Shape::contains_local` + `Body::to_local/to_world`; 新建 `phy-fluid` crate: Müller 2003 弱可压缩 SPH(Poly6 密度/Spiky 压力梯度/ViscLaplacian 粘性核) + 均匀空间哈希邻居搜索。默认 h=0.2,单粒子质量由晶格核求和反算(`lattice_mass`)保证静止密度收敛。双向刚体耦合 `couple_bodies`: 静态体作不可穿透边界(位置推回 + 法向速度阻尼),动态体受阿基米德浮力 `-ρf·V_sub·g` + 无滑阻力反作用冲量。`FluidSubsystem` 适配 `phy_core::Subsystem`。6 测试全过(密度收敛、溃坝不越界、粒子数守恒、静/动态刚体耦合)。注意: 浮力测试须关闭重力隔离纯上举力,否则自由下落流体的下拽耦合会掩盖浮力。

@@ -1,11 +1,11 @@
 [package]
 name = "phy-fluid"
-version.workspace = true
 edition.workspace = true
+version.workspace = true
 license.workspace = true
 
 [dependencies]
-phy-core = { path = "../phy-core" }
 phy-math = { path = "../phy-math" }
-nalgebra.workspace = true
-serde.workspace = true
+phy-rigid = { path = "../phy-rigid" }
+phy-core = { path = "../phy-core" }
+num-traits = "0.2"

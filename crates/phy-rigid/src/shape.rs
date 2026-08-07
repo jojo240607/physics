@@ -57,6 +57,34 @@ impl<T: RealField + Copy> Shape<T> {
                 .fold(T::zero(), |a, b| if a > b { a } else { b }),
         }
     }
+
+    /// 局部空间点是否位于形状内部(含表面)。
+    /// 球/盒为闭式解;凸多面体用"所有面同侧(内法线朝向内)"判定。
+    pub fn contains_local(&self, p: &Vec3<T>) -> bool {
+        match self {
+            Shape::Sphere { r } => p.norm() <= *r,
+            Shape::Box { half } => {
+                p.x.abs() <= half.x && p.y.abs() <= half.y && p.z.abs() <= half.z
+            }
+            Shape::Convex {
+                vertices, faces, ..
+            } => {
+                for f in faces {
+                    let a = vertices[f[0]];
+                    let b = vertices[f[1]];
+                    let c = vertices[f[2]];
+                    // 由外向内的法线近似:取 (b-a)×(c-a) 指向质心一侧,
+                    // 若 p 在法线反向侧(外侧)则不在内部。
+                    let n = (b - a).cross(&(c - a));
+                    let to_p = *p - a;
+                    if to_p.dot(&n) > T::zero() {
+                        return false;
+                    }
+                }
+                true
+            }
+        }
+    }
 }
 
 /// 物体的世界位姿 + 形状,构成一个可参与碰撞的实体。
@@ -80,6 +108,16 @@ impl<T: RealField + Copy> Body<T> {
         let dir_local = self.rot.inverse() * dir_world;
         let p_local = self.shape.support_local(&dir_local);
         self.rot * p_local + self.pos
+    }
+
+    /// 世界坐标 -> 局部坐标。
+    pub fn to_local(&self, p_world: &Vec3<T>) -> Vec3<T> {
+        self.rot.inverse() * (*p_world - self.pos)
+    }
+
+    /// 局部坐标 -> 世界坐标。
+    pub fn to_world(&self, p_local: &Vec3<T>) -> Vec3<T> {
+        self.rot * *p_local + self.pos
     }
 
     /// 线速度(供求解器读取)。

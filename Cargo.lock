@@ -1120,10 +1120,10 @@ dependencies = [
 name = "phy-fluid"
 version = "0.1.0"
 dependencies = [
- "nalgebra",
+ "num-traits",
  "phy-core",
  "phy-math",
- "serde",
+ "phy-rigid",
 ]
 
 [[package]]
