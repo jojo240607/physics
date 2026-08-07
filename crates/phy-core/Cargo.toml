@@ -1,0 +1,10 @@
+[package]
+name = "phy-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+phy-math = { path = "../phy-math" }
+nalgebra.workspace = true
+thiserror.workspace = true
