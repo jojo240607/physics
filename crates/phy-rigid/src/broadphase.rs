@@ -65,6 +65,7 @@ mod tests {
             shape: Shape::Sphere { r: 1.0 },
             pos,
             rot: na::UnitQuaternion::identity(),
+            vel: Vec3::zeros(),
             inv_mass: 1.0,
         }
     }

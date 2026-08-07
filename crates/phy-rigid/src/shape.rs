@@ -67,6 +67,8 @@ pub struct Body<T: RealField + Copy> {
     pub pos: Vec3<T>,
     /// 世界旋转(四元数)。
     pub rot: na::UnitQuaternion<T>,
+    /// 线速度(世界)。
+    pub vel: Vec3<T>,
     /// 反质量(0 = 静态/无限质量)。
     pub inv_mass: T,
 }
@@ -78,6 +80,16 @@ impl<T: RealField + Copy> Body<T> {
         let dir_local = self.rot.inverse() * dir_world;
         let p_local = self.shape.support_local(&dir_local);
         self.rot * p_local + self.pos
+    }
+
+    /// 线速度(供求解器读取)。
+    pub fn lin_vel(&self) -> Vec3<T> {
+        self.vel
+    }
+
+    /// 施加线冲量(静态物体 inv_mass=0 无效果)。
+    pub fn apply_impulse(&mut self, j: Vec3<T>) {
+        self.vel += j * self.inv_mass;
     }
 }
 

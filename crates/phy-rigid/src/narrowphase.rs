@@ -233,10 +233,12 @@ pub fn box_box_sat<T: RealField + Copy>(a: &Body<T>, b: &Body<T>) -> Option<Cont
     let mut min_pen = big;
     let mut min_axis = Vec3::zeros();
 
+    // 分离容差:pen 略小于 0(恰好接触)仍视为相交,避免 touching 被误判分离
+    let sep_eps = T::from_f64(-1e-6).unwrap();
     for i in 0..3 {
         let axis = a_axes[i];
         let pen = sat_penetration(axis, &d, &a_axes, &b_axes, ra, rb);
-        if pen < T::zero() {
+        if pen < sep_eps {
             return None;
         }
         if pen < min_pen {
@@ -247,7 +249,7 @@ pub fn box_box_sat<T: RealField + Copy>(a: &Body<T>, b: &Body<T>) -> Option<Cont
     for i in 0..3 {
         let axis = b_axes[i];
         let pen = sat_penetration(axis, &d, &a_axes, &b_axes, ra, rb);
-        if pen < T::zero() {
+        if pen < sep_eps {
             return None;
         }
         if pen < min_pen {
@@ -263,7 +265,7 @@ pub fn box_box_sat<T: RealField + Copy>(a: &Body<T>, b: &Body<T>) -> Option<Cont
             }
             let axis = axis.normalize();
             let pen = sat_penetration(axis, &d, &a_axes, &b_axes, ra, rb);
-            if pen < T::zero() {
+            if pen < sep_eps {
                 return None;
             }
             if pen < min_pen {
