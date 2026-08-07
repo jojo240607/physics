@@ -75,8 +75,8 @@ struct World<T: RealField> {
 
 | 阶段 | 内容 | 交付 |
 |---|---|---|
-| **M0 地基** | workspace + crate 骨架; `phy-core` 的 `World`/`Subsystem`/`RealField` 接入; `phy-math` 基础类型; 单刚体自由落体解析校验 | `cargo test` 跑通第一个物理不变量 |
-| **M1 碰撞检测** | (phy-rigid) SAP broad-phase + 球/盒 SAT + 凸体 GJK-EPA; 接触点/法线/穿透深度 | 已知相交对返回正确接触 |
+| **M0 地基** | workspace + crate 骨架; `phy-core` 的 `World`/`Subsystem`/`RealField` 接入; `phy-math` 基础类型; 单刚体自由落体解析校验 | ✅ `cargo test` 跑通(2 测试) |
+| **M1 碰撞检测** | (phy-rigid) SAP broad-phase + 球/盒 SAT + 凸体 GJK-EPA; 接触点/法线/穿透深度 | ✅ 11 测试全过(球/盒/凸体相交与分离、旋转盒、SAP→Narrow 管线) |
 | **M2 刚体动力学** | Verlet/半隐式欧拉积分 + 顺序冲量求解(接触+摩擦) | 落地不穿透、堆叠稳定 |
 | **M3 wgpu Demo** | N 盒落地堆叠,3D 实时渲染 + 参数调节 + 轨迹导出 | 可玩 Demo |
 | **M5 流体 SPH** | SPH 粒子法 + 与刚体耦合(浮沉/阻力) | 水面浮动刚体 |
