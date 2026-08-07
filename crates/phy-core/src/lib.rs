@@ -4,7 +4,6 @@
 //! (任意物理规则(刚体/流体/光学/场)的统一接口)。
 //! `World::step` 在每个时间步依次驱动所有已注册子系统,实现多物理场可组合耦合。
 
-use phy_math::RealField;
 
 pub mod world;
 pub use world::{Subsystem, World};

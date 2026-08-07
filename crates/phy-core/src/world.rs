@@ -8,13 +8,18 @@
 use phy_math::RealField;
 
 /// 物理子系统接口:任何可挂在 World 上的物理规则。
+///
+/// M0 阶段 `step`/`couple` 仅接收时间步 `dt`,子系统自持状态;
+/// World 仅负责统一推进与时间累加。
+/// M5 起将引入共享状态存储(组件池)以支持跨子系统双向耦合,
+/// 彼时 `step`/`couple` 可改为接收 `&World`/`&mut World`。
 pub trait Subsystem<T: RealField> {
-    /// 推进自身一个时间步 `dt`(可读取/修改 `world` 共享状态)。
-    fn step(&mut self, world: &mut World<T>, dt: T);
+    /// 推进自身一个时间步 `dt`(以引用传入,避免泛型 move)。
+    fn step(&mut self, dt: &T);
 
     /// 与其他子系统的耦合阶段(如流体对刚体施加浮力/阻力)。
     /// 默认空实现:无耦合的子系统无需覆写。
-    fn couple(&self, _world: &mut World<T>) {}
+    fn couple(&mut self, _dt: &T) {}
 
     /// 子系统名称(用于调试/事件)。
     fn name(&self) -> &'static str {
@@ -52,16 +57,21 @@ impl<T: RealField> World<T> {
 
     /// 当前仿真时间。
     pub fn time(&self) -> T {
-        self.t
+        self.t.clone()
+    }
+
+    /// 已注册子系统数量。
+    pub fn subsystem_count(&self) -> usize {
+        self.subsystems.len()
     }
 
     /// 推进一个时间步 `dt`:先 step 后 couple,最后累加时间。
     pub fn step(&mut self, dt: T) {
         for s in self.subsystems.iter_mut() {
-            s.step(self, dt);
+            s.step(&dt);
         }
-        for s in self.subsystems.iter() {
-            s.couple(self);
+        for s in self.subsystems.iter_mut() {
+            s.couple(&dt);
         }
         self.t += dt;
     }
