@@ -14,6 +14,7 @@ mod heat;
 mod wave;
 mod em;
 mod grav;
+mod acoustic;
 
 pub use grid::{Bc, ScalarField};
 pub use grid_geometry::GridGeometry;
@@ -21,6 +22,7 @@ pub use heat::{HeatField, HeatFieldLike};
 pub use wave::WaveField;
 pub use em::{EmField, EmFieldLike};
 pub use grav::{GravField, GravFieldLike};
+pub use acoustic::{AcousticField, SOUND_SPEED_AIR};
 
 use phy_math::RealField;
 use phy_math::Vec3;

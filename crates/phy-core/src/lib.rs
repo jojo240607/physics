@@ -14,6 +14,12 @@ pub use events::{EventBus, EventKind, WorldEvent};
 pub mod spatial;
 pub use spatial::SpatialGrid;
 
+pub mod timestep;
+pub use timestep::{StepMode, TimeController};
+
+pub mod stats;
+pub use stats::{attach_stats_observer, StatsObserver};
+
 /// 引擎错误类型。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

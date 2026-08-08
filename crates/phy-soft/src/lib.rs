@@ -15,9 +15,11 @@
 //! 本里程碑软体本身只对静态地面/盒边界碰撞,可独立 `step`。
 
 mod body;
+mod cloth;
 mod sub;
 
 pub use body::{Particle, SoftBody, Spring};
+pub use cloth::{Cloth, DistanceConstraint};
 pub use sub::SoftSubsystem;
 
 /// 默认弹簧刚度(f64)。
