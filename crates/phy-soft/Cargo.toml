@@ -8,6 +8,7 @@ phy-math = { path = "../phy-math" }
 phy-core = { path = "../phy-core" }
 phy-rigid = { path = "../phy-rigid" }
 phy-fluid = { path = "../phy-fluid" }
+phy-field = { path = "../phy-field" }
 num-traits = "0.2"
 
 [dev-dependencies]

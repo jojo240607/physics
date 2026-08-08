@@ -1168,7 +1168,9 @@ name = "phy-rigid"
 version = "0.1.0"
 dependencies = [
  "nalgebra",
+ "num-traits",
  "phy-core",
+ "phy-field",
  "phy-math",
  "serde",
 ]
@@ -1179,6 +1181,7 @@ version = "0.1.0"
 dependencies = [
  "num-traits",
  "phy-core",
+ "phy-field",
  "phy-fluid",
  "phy-math",
  "phy-rigid",

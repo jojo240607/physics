@@ -3,6 +3,7 @@
 use std::any::Any;
 
 use phy_core::{Subsystem, World};
+use phy_field::{HeatField, HeatFieldLike};
 use phy_fluid::{CouplePoint, FluidSubsystem};
 use phy_math::RealField;
 use phy_rigid::RigidSubsystem;
@@ -20,6 +21,12 @@ pub struct SoftSubsystem<T: RealField + Copy + num_traits::ToPrimitive> {
     pub fluid_drag: T,
     /// 软体质点的等效密度(用于把质量换算成排开体积以算阿基米德浮力)。
     pub soft_density: T,
+    /// 热浮力温度膨胀系数 β(ρ(T)=ρ0/(1+β·(T-T_ref)))。0 表示无热浮力。
+    pub thermal_expansion: T,
+    /// 对流换热注入强度(运动质点加热场)。0 表示不注入热源。
+    pub heat_gain: T,
+    /// 热浮力参考温度 T_ref(环境温度基线,ρ(T_ref)=ρ0)。0 表示以 0 为环境温度。
+    pub t_ref: T,
 }
 
 impl<T: RealField + Copy + num_traits::ToPrimitive> SoftSubsystem<T> {
@@ -29,6 +36,9 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> SoftSubsystem<T> {
             body,
             fluid_drag: T::from_f64(3.0).unwrap(),
             soft_density: T::from_f64(1000.0).unwrap(),
+            thermal_expansion: T::zero(),
+            heat_gain: T::zero(),
+            t_ref: T::zero(),
         }
     }
 }
@@ -115,6 +125,33 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> Subsystem<T> for SoftSubsyst
                     p.vel += f * p.inv_mass * *dt;
                     p.force += f;
                 }
+            }
+        }
+
+        // (3) 软体↔热场:热浮力 + 对流换热(M11)。
+        if self.thermal_expansion > T::zero() || self.heat_gain > T::zero() {
+            let mut heat_idx = None;
+            let mut i = 0;
+            while let Some(s) = world.get(i) {
+                if s.as_any().downcast_ref::<HeatField<T>>().is_some() {
+                    heat_idx = Some(i);
+                    break;
+                }
+                i += 1;
+            }
+            if let Some(hi) = heat_idx {
+                let t_ref = self.t_ref;
+                let mut heat_box = world.remove(hi);
+                if let Some(heat) = heat_box.as_any_mut().downcast_mut::<HeatField<T>>() {
+                    self.body.couple_heat(
+                        heat,
+                        *dt,
+                        t_ref,
+                        self.thermal_expansion,
+                        self.heat_gain,
+                    );
+                }
+                world.insert(hi, heat_box);
             }
         }
     }

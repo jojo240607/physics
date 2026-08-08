@@ -147,11 +147,20 @@ impl Scene {
         fluid_sub.thermal_expansion = 0.5; // β:热浮力温度膨胀系数
         fluid_sub.heat_gain = 0.1; // 运动区域对流注入热源
 
+        // --- 默认场景启用 M11 刚体↔热、软体↔热双向耦合 ---
+        // 刚体/软体也感知热场:热浮力 + 对流换热,闭合四子系统耦合矩阵。
+        let mut rigid_sub = RigidSubsystem::new(rigid);
+        rigid_sub.thermal_expansion = 0.5;
+        rigid_sub.heat_gain = 0.1;
+        let mut soft_sub = SoftSubsystem::new(soft);
+        soft_sub.thermal_expansion = 0.5;
+        soft_sub.heat_gain = 0.1;
+
         // 注册到统一世界(顺序即 step 顺序)。
-        world.add_subsystem(Box::new(RigidSubsystem::new(rigid)));
+        world.add_subsystem(Box::new(rigid_sub));
         world.add_subsystem(Box::new(fluid_sub));
         world.add_subsystem(Box::new(heat));
-        world.add_subsystem(Box::new(SoftSubsystem::new(soft)));
+        world.add_subsystem(Box::new(soft_sub));
 
         Self {
             world,
@@ -735,5 +744,103 @@ mod tests {
 
     fn nx_center() -> usize {
         8
+    }
+
+    /// M11 集成:刚体↔热场 + 软体↔热场双向耦合在统一 World 中生效(无 NaN 且热浮力驱动)。
+    #[test]
+    fn world_couples_rigid_soft_heat() {
+        let mut w = World::<f64>::new();
+
+        // 热场:中心高温 T=100,其余 0(3x3x3 网格覆盖 [0,3]^3)。
+        let nx = 3usize;
+        let dx = 1.0;
+        let mut f = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
+        let hot = f.idx(1, 1, 1);
+        f.u[hot] = 100.0;
+        let mut heat_sub = HeatField::new(f, 0.1);
+        // 让热场在 step 里做扩散,thermally meaningful。
+        w.add_subsystem(Box::new(heat_sub));
+
+        // 刚体:球放在热场中心 (1,1,1)。
+        let mut rworld = RigidWorld::new();
+        rworld.gravity = Vec3::new(0.0, -9.81, 0.0);
+        rworld.add_body(Body {
+            shape: Shape::Sphere { r: 0.2 },
+            pos: Vec3::new(1.0, 1.0, 1.0),
+            rot: phy_math::na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+        let mut rsub = RigidSubsystem::new(rworld);
+        rsub.thermal_expansion = 0.5;
+        rsub.heat_gain = 0.1;
+        w.add_subsystem(Box::new(rsub));
+
+        // 软体:单个质点在热场中心。
+        let mut sbody = SoftBody::new(0.0);
+        sbody.gravity = Vec3::new(0.0, -9.81, 0.0);
+        sbody.particles.push(phy_soft::Particle {
+            pos: Vec3::new(1.0, 1.0, 1.0),
+            vel: Vec3::zeros(),
+            force: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+        let mut ssub = SoftSubsystem::new(sbody);
+        ssub.thermal_expansion = 0.5;
+        ssub.heat_gain = 0.1;
+        w.add_subsystem(Box::new(ssub));
+
+        // step 几帧,热浮力应在 couple 阶段把竖直速度上举(抵消重力)。
+        for _ in 0..10 {
+            w.step(1.0 / 60.0);
+        }
+
+        // 1) 刚体竖直速度应被热浮力显著上举(> 纯重力下落值)。
+        let mut ridx = None;
+        for i in 0..w.subsystem_count() {
+            if let Some(s) = w.get(i) {
+                if s.as_any().downcast_ref::<RigidSubsystem<f64>>().is_some() {
+                    ridx = Some(i);
+                    break;
+                }
+            }
+        }
+        let ridx = ridx.unwrap();
+        let rsub = w
+            .get(ridx)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<RigidSubsystem<f64>>()
+            .unwrap();
+        assert!(
+            rsub.world.bodies[0].vel.y > -9.81 * (10.0 / 60.0),
+            "热浮力应上举刚体, vy={}",
+            rsub.world.bodies[0].vel.y
+        );
+        assert!(rsub.world.bodies[0].vel.y.is_finite());
+
+        // 2) 软体质点同样被上举且有限。
+        let mut sidx = None;
+        for i in 0..w.subsystem_count() {
+            if let Some(s) = w.get(i) {
+                if s.as_any().downcast_ref::<SoftSubsystem<f64>>().is_some() {
+                    sidx = Some(i);
+                    break;
+                }
+            }
+        }
+        let sidx = sidx.unwrap();
+        let ssub = w
+            .get(sidx)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<SoftSubsystem<f64>>()
+            .unwrap();
+        assert!(ssub.body.particles[0].vel.y.is_finite());
+        assert!(
+            ssub.body.particles[0].vel.y > -9.81 * (10.0 / 60.0),
+            "热浮力应上举软体质点, vy={}",
+            ssub.body.particles[0].vel.y
+        );
     }
 }

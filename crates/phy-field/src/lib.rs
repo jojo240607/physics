@@ -101,6 +101,53 @@ impl<T: RealField + Copy> HeatFieldLike<T> for HeatField<T> {
     }
 }
 
+/// 把世界坐标 `p` 转换为场网格最近格点索引 (cx,cy,cz) 与单元内 [0,1) 偏移 (tx,ty,tz)。
+///
+/// 超出网格时夹紧到边界格(视为最近格点采样,不报错),供刚体/软体/流体统一复用。
+pub fn world_to_cell<T: RealField + Copy>(
+    heat: &dyn HeatFieldLike<T>,
+    p: Vec3<T>,
+) -> (usize, usize, usize, f64, f64, f64)
+where
+    T: num_traits::ToPrimitive,
+{
+    let o = heat.origin();
+    let dx = heat.cell_size();
+    let (nx, ny, nz) = heat.dims();
+    let fx = ((p.x - o.x) / dx).to_f64().unwrap_or(0.0);
+    let fy = ((p.y - o.y) / dx).to_f64().unwrap_or(0.0);
+    let fz = ((p.z - o.z) / dx).to_f64().unwrap_or(0.0);
+    let clamp_idx = |f: f64, n: usize| -> (usize, f64) {
+        if n <= 1 {
+            return (0, 0.0);
+        }
+        if f <= 0.0 {
+            (0, 0.0)
+        } else if f >= (n - 1) as f64 {
+            (n - 2, 1.0)
+        } else {
+            let fl = f.floor();
+            (fl as usize, f - fl)
+        }
+    };
+    let (cx, tx) = clamp_idx(fx, nx);
+    let (cy, ty) = clamp_idx(fy, ny);
+    let (cz, tz) = clamp_idx(fz, nz);
+    (cx, cy, cz, tx, ty, tz)
+}
+
+/// 在世界坐标 `p` 处三线性采样温度(越界夹紧到边界格)。供刚体/软体耦合复用。
+pub fn sample_world<T: RealField + Copy>(
+    heat: &dyn HeatFieldLike<T>,
+    p: Vec3<T>,
+) -> T
+where
+    T: num_traits::ToPrimitive,
+{
+    let (cx, cy, cz, tx, ty, tz) = world_to_cell(heat, p);
+    heat.sample_trilinear(cx, cy, cz, tx, ty, tz)
+}
+
 /// 热扩散子系统。
 pub struct HeatField<T: RealField + Copy> {
     /// 底层标量场(温度)。

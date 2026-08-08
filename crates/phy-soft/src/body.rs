@@ -1,5 +1,6 @@
 //! 软体质点-弹簧模型核心。
 
+use phy_field::HeatFieldLike;
 use phy_math::{gravity, RealField, Vec3};
 use phy_rigid::Body;
 
@@ -317,6 +318,46 @@ impl<T: RealField + Copy> SoftBody<T> {
         }
         impulse
     }
+
+    /// 软体↔热场双向耦合(M11):热浮力 + 对流换热。
+    ///
+    /// 对每个可动质点,在其位置处三线性采样温度 `T`,按密度修正
+    /// `ρ(T)=ρ0/(1+β·(T-T_ref))` 计算热浮力加速度修正 `a = -g·(ρ0-ρT)/ρ0`,
+    /// 以 `vel += a·dt` 注入(下一帧 velocity-Verlet 生效,与流体/刚体一致)。
+    /// 若 `heat_gain>0`,以 `heat_gain·‖vel‖·dt` 注入热源到质点所在网格单元。
+    pub fn couple_heat(
+        &mut self,
+        heat: &mut dyn HeatFieldLike<T>,
+        dt: T,
+        t_ref: T,
+        beta: T,
+        heat_gain: T,
+    ) where
+        T: num_traits::ToPrimitive,
+    {
+        let g = self.gravity; // 沿 -Y
+        for p in self.particles.iter_mut() {
+            if p.inv_mass <= T::zero() {
+                continue; // 固定点不参与热浮力。
+            }
+            let temp = phy_field::sample_world(heat, p.pos);
+            let denom = T::one() + beta * (temp - t_ref);
+            let rho_t = if denom > T::zero() {
+                T::one() / denom
+            } else {
+                T::one()
+            };
+            let buoy = -g * (T::one() - rho_t);
+            p.vel += buoy * dt;
+            if heat_gain > T::zero() {
+                let speed = p.vel.norm();
+                if speed > T::zero() {
+                    let (cx, cy, cz, _, _, _) = phy_field::world_to_cell(heat, p.pos);
+                    heat.add_source(cx, cy, cz, heat_gain * speed * dt);
+                }
+            }
+        }
+    }
 }
 
 /// 估计局部表面法线(指向形状内部最近表面外侧的单位方向)。
@@ -369,4 +410,60 @@ fn penetration_depth<T: RealField + Copy>(
     }
     // 返回到表面的距离(略加 epsilon 防止残留穿透)。
     (lo + hi) * T::from_f64(0.5).unwrap() + T::from_f64(1e-4).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use phy_field::{Bc, HeatField, ScalarField};
+
+    /// 热浮力应让热区中的软体质点获得向上速度修正。
+    #[test]
+    fn couple_heat_warmer_particle_rises() {
+        let nx = 3usize;
+        let dx = 1.0;
+        let mut f = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
+        let hot = f.idx(1, 1, 1);
+        f.u[hot] = 100.0; // 中心高温。
+        let mut heat = HeatField::new(f, 0.1);
+
+        // 单个可动质点在热场中心(世界 (1,1,1))。
+        let mut body = SoftBody::new(0.0);
+        body.gravity = Vec3::new(0.0, -9.81, 0.0);
+        body.particles.push(Particle {
+            pos: Vec3::new(1.0, 1.0, 1.0),
+            vel: Vec3::zeros(),
+            force: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+
+        let vy_before = body.particles[0].vel.y;
+        body.couple_heat(&mut heat, 0.1, 0.0, 0.5, 0.0);
+        let vy_after = body.particles[0].vel.y;
+
+        // 中心温度 100,β=0.5 → 向上修正显著。
+        assert!(vy_after > vy_before, "热质点应获得向上速度修正");
+        assert!(vy_after > -9.81 * 0.1, "热浮力应显著抵消重力");
+    }
+
+    /// 运动软体质点应把热源注入所在网格(对流换热)。
+    #[test]
+    fn couple_heat_injects_source_into_moving_particle() {
+        let nx = 3usize;
+        let dx = 1.0;
+        let f = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
+        let mut heat = HeatField::new(f, 0.1);
+
+        let mut body = SoftBody::new(0.0);
+        body.particles.push(Particle {
+            pos: Vec3::new(1.0, 1.0, 1.0),
+            vel: Vec3::new(2.0, 0.0, 0.0),
+            force: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+
+        body.couple_heat(&mut heat, 0.1, 0.0, 0.0, 0.1);
+        heat.field.step_diffusion(0.1, 0.01);
+        assert!(heat.field.sample(1, 1, 1) > 0.0, "运动质点应加热所在网格");
+    }
 }
