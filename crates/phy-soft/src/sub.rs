@@ -3,7 +3,7 @@
 use std::any::Any;
 
 use phy_core::{Subsystem, World};
-use phy_field::{HeatField, HeatFieldLike};
+use phy_field::HeatField;
 use phy_fluid::{CouplePoint, FluidSubsystem};
 use phy_math::RealField;
 use phy_rigid::RigidSubsystem;

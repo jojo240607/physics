@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use phy_field::{GridGeometry, HeatFieldLike};
+use phy_field::HeatFieldLike;
 use phy_math::{RealField, Vec3};
 use phy_rigid::shape::{Body, Shape};
 
