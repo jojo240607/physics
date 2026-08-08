@@ -106,6 +106,7 @@ struct World<T: RealField> {
 | **M15 World 空间索引** | 为 `World` 增加宽相位邻域查询能力(均匀网格哈希),供流体↔刚体、光学↔世界等"找附近对象"场景复用,把朴素 O(n²) 邻域搜索降到近似 O(n) | `SpatialGrid::neighbors(center,radius)` 返回半径内对象 id | ✅ `phy-core` 新增 `spatial.rs`:`SpatialGrid<T>`(固定 `cell_size` 的均匀网格哈希桶,`build` 批量插入点云,`neighbors` 扫描中心桶 ±span 共 27 桶并按欧氏距离二次过滤;`key_of` 用 `ToPrimitive` 把世界坐标映射到整数桶号)。`pub use spatial::SpatialGrid`。新增单测 `neighbors_finds_nearby_points_only`(原点近邻含自身、不含 100 远点)/`grid_partitions_into_buckets`(三点分三桶)。 |
 | **M16 光学↔World(刚体)耦合** | 让光学子系统能跟随刚体世界里的运动物体(如掉落玻璃球),使光线对每个时间步的最新刚体位姿正确求交 | 步进后光学体位置 == 对应刚体位置,运动玻璃球被光折射 | ✅ `phy-optics` 给 `OpticBody` 加 `source_rigid_idx: Option<usize>` + `from_rigid`/`sync_from_rigid`(把对应刚体最新 `Body` 搬入自身);`OpticSubsystem` 加 `optic_coupling: T` 字段与 `couple` 实现:动态 downcast 找 `RigidSubsystem`,对每个 `source_rigid_idx` 命中的光学体经 `world.remove`/`insert` 安全取可变引用同步位姿;`optic_coupling<=0` 时跳过(`name`/`step`/`as_any` 仍按基类实现)。`Scene::new` 把刚体世界地面 + 三个掉落小球镜像为光学体(小球 `from_rigid` 映射刚体索引 1/2/3、`optic_coupling=1.0`、`Precision::Offline`),物理驱动的光学场景成型。新增 demo 端到端 `world_couples_optic_rigid`(step 30 帧后跌落小球光学体 y 减小、且光学体位置与刚体逐分量完全一致;注:演示中央引力井会把小球横向吸引,x 也会变,故测试只断言 y 下落趋势 + 位置一致性,不约束 x)。`phy-io` 顺带加 `num-traits` 依赖与导出 API 见 M17。 |
 | **M17 光学焦散渲染** | 在光学后端增加焦散(caustics)计算:平行光经透明体折射后在接收面聚拢形成的亮纹,离线正向光线近似 | `Caustics::accumulate` 返回接收面强度网格(亮度峰值显著高于均值) | ✅ `phy-optics` 新增 `caustics.rs`:`Caustics` 在接收面(`plane_y`)上方均匀采样平行光射线(方向 = `-light_dir`),逐条 `march` 折射行进——命中透明体按 Fresnel 透射率 `(1-Fresnel)` 衰减能量并切换介质 IOR 继续,命中不透明接收面则把剩余通量累加到对应网格单元(全内反射/TIR 则该路不通量落到接收面);返回 `(grid, max_val)`。含 `#[cfg(feature="io_csv")]` 的 `write_caustics_csv` 供后续导出。新增单测 `caustics_concentrates_light_under_glass`(玻璃球 + 下方不透明地面,平行光自上而下,存在非零亮斑且 `max > mean*1.5` 证明光线被聚拢)。 |
+| **M18 刚体关节约束(Constraints)** | 把若干刚体连成链条/摆/机械结构的等式约束,复用现有顺序冲量求解器 | `Distance` 杆长收敛到目标、`Ball` 把动态体钉到静态锚点 | ✅ `phy-rigid` 新增 `joint.rs`:`Joint<T>` 枚举(`Ball` 球窝锚点重合 / `Distance` 定长杆)+ `JointConstraint<T>`(累积冲量 `lambda`);`solve_joints_velocity`(与 `solver.rs` 接触求解同构的顺序冲量累积冲量版,消除沿约束误差轴的相对速度,`lambda` 钳到 ≥0 作单边约束)+ `solve_joints_position`(split-impulse 伪速度投影,把残余距离误差按 `beta/dt` 目标消除,迭代至误差 < 1e-4 提前退出,不污染真实速度);`RigidWorld` 加 `joints: Vec<JointConstraint<T>>` 字段与 `add_joint(a,b,joint)`;`step` 在接触速度求解后插 `solve_joints_velocity`、在接触位置修正后插 `solve_joints_position`(复用同 `pseudo` 数组),使关节与碰撞共存。`pub use joint::{Joint, JointConstraint}`。新增单测 `distance_joint_keeps_rest_length_and_conserves_momentum`(两动态体杆长 2→收敛到 2、总动量守恒)+ `ball_joint_pins_body_to_static_anchor`(球窝挂静态锚点,600 帧后锚点不动、摆动体顶部 ≈ 锚点);demo 端到端 `world_drives_rigid_distance_joint`(经 `World` 驱动、downcast 取内部 `RigidWorld` 注关节,300 帧后间距收敛到 1.5)。验证: `cargo test --workspace` 全过(软体 11、刚体 22、流体 9、场 8、光学 6、demo 7;dam_break ~106s)。 |
 
 ---
 
@@ -118,6 +119,42 @@ struct World<T: RealField> {
   - 堆叠稳定(关键不变量)
 - `phy-io` 导出轨迹/场,供科研后处理与回归比对。
 - Demo 同时作为"肉眼验证"与"帧率/性能基线"。
+
+---
+
+## 5.5 规划外候选物理模型(路线图)
+
+> 截至 M17 + `phy-io`,内核已落地:刚体(含碰撞/约束求解)、SPH 流体、软体(弹簧晶格)、
+> 连续场(热/电磁/引力)、光学(折射/反射/焦散)、World 事件总线(M14)、空间索引(M15)。
+> 以下为**尚未实现、但能自然挂入现有 `Subsystem` + `couple` 框架**的物理模型候选,
+> 按"与现有架构契合度 + 用户最可能想要"排序,经与用户确认作为下一步路线图逐步实施。
+
+### 5.5.1 优先级排序(已与用户确认)
+
+| 序 | 模型 | 落地位置 | 与现有架构关系 | 实现成本 | 收益 |
+|---|---|---|---|---|---|
+| 1 | **约束关节(Constraints / Articulations)** | `phy-rigid` 扩展 | 复用现有顺序冲量求解器,每条关节 = 一组等式约束迭代求解 | 中 | Demo 立刻能挂钟摆/链条/机械臂,视觉冲击强 |
+| 2 | **带电粒子在电磁场中运动(洛伦兹力)** | `phy-rigid`×`phy-field` | 与 M13 引力耦合**完全对称**:`F=q(E+v×b)`,沉积电荷走 `rho.src` 同机制 | 低 | 实现成本最低,且与 M12 EM 场天然闭环 |
+| 3 | **布料/绳索(位置动力学 PBD)** | 新 crate `phy-cloth` | 距离/弯曲约束 + 投影碰撞,复用 M15 `SpatialGrid` 做邻域 | 中 | 游戏向最经典缺口(旗帜/衣服) |
+| 4 | **扩散-对流场 + 浮力闭环(Boussinesq)** | `phy-field`×`phy-fluid` | 在 M7 热扩散上加平流项 `∇·(v u)`,与 M4e 流体速度场耦合做烟羽/烟囱效应 | 中 | 把热/流体/浮力真正串成自然对流 |
+| 5 | **弹性/塑性连续介质(FEM 小变形)** | 新 crate `phy-solid` | 线性四面体 FEM,正确表现梁/板弯曲刚度、泊松比、屈服 | 高 | 比弹簧软体更物理正确 |
+| 6 | **声波 / 压力波场** | `phy-field` 加 `AcousticField` | 与现有 `WaveField`(电磁波)同构,仅相速度不同;复用焦散式网格可视化 | 低 | 声学传播/多普勒/遮挡衰减 |
+| 7 | **颗粒介质(PBD/DEM)** | 新 crate `phy-granular` | 大量小球接触求解,复用刚体窄相位(GJK/SAT) | 中 | 沙子/谷物 |
+| 8 | **破碎/碎屑(Voronoi fracture)** | `phy-rigid` 扩展 | 刚体被打碎成凸碎片,复用碰撞/求解器,碎片初速来自冲量 | 中 | 破坏效果 |
+| 9 | **车辆/轮子(raycast vehicle)** | `phy-rigid` 扩展 | 悬挂射线 + 轮胎摩擦,纯约束实现 | 中 | 游戏常用 |
+| 10 | **刚体↔流体双向耦合增强(浮力/阻力/涡)** | `phy-rigid`×`phy-fluid` | 流体局部速度/密度采样到刚体(阻力 = ½ρv²C_dA),刚体反推体积入流体源项;复用 M15 空间索引 | 中 | 闭环 M4b 的浮力/阻力 |
+| 11 | **时间缩放/子步长/变步长控制器** | `phy-core` | 固定 dt → 自适应子步 + 误差估计,保证刚性场景稳定 | 低 | 数值稳定性基础设施 |
+| 12 | **统计/热力学观测器** | `phy-core`/`phy-io` | 对子系统导出动能/势能/温度/熵,配合 M14 事件总线每步发统计做守恒性回归 | 低 | 科研可复现性 |
+
+### 5.5.2 逐步实施计划(本路线图)
+
+- **批次 A(低成本高契合,先做)**: #2 洛伦兹力 → #1 约束关节 → #11 变步长 → #6 声波场。
+- **批次 B(游戏向经典)**: #3 布料 PBD → #9 车辆 → #8 破碎。
+- **批次 C(科研向深度)**: #4 扩散-对流闭环 → #5 FEM → #7 颗粒 → #10 流体增强 → #12 统计观测器。
+
+每项落地时沿用既有约定:泛型 `RealField`、trait 解耦规避循环依赖(M4e/M16 先例)、
+`couple` 动态 downcast 查找依赖子系统(不硬编码下标)、新增子系统即写单测 + 端到端 `World` 测试、
+里程碑写入 §6 决策日志。
 
 ---
 
@@ -146,5 +183,6 @@ struct World<T: RealField> {
 - 2026-08-08: M14 完成。**World 事件总线**。`phy-core` 新增 `events.rs`:`EventBus<T>`(订阅者闭包 `FnMut(EventKind,&dyn Any)` + 待分发队列,回调内再 `publish` 也能安全循环 flush 避免重入)+ 内置 `WorldEvent<T>` 枚举(`SimStart`/`Step{t,dt}`/`SubsystemStepped`/`SimEnd`)+ 自定义 `publish_custom(Box<dyn Any>)`;`World` 持有 `bus` 字段、`subscribe()` 便捷方法,`step` 在首步前发 `SimStart`、所有 subsystem step/couple 之后发 `Step{t,dt}` 并 `flush`。**约束**:`T` 仅出现在方法签名(`WorldEvent<T>`),struct 字段不沾 `T`,需用 `PhantomData<fn()->T>` 占位否则 E0392(类型参数从未在字段使用);`step` 里 `self.t += dt` 会 move `dt`,后续 `WorldEvent::Step{t: self.t.clone(), dt}` 必须 `self.t += dt.clone()` 否则 E0382(第二次用已 move 的 dt)。新增单测 `step_emits_simstart_then_steps`/`custom_event_roundtrips_through_bus`(闭包须 `'static`,用 `Rc<RefCell>` 跨闭包借用,不能用局部 `&mut`)。
 - 2026-08-08: M15 完成。**World 空间索引**(宽相位邻域查询)。`phy-core` 新增 `spatial.rs`:`SpatialGrid<T>`,固定 `cell_size` 均匀网格哈希桶,`build` 批量插入点云,`neighbors(center,radius)` 扫描中心桶 ±span(跨 27 桶)并按欧氏距离二次过滤;`key_of` 用 `ToPrimitive` 把世界坐标映射到整数桶号(impl 需 `T: RealField + Copy + ToPrimitive`)。`pub use spatial::SpatialGrid`。新增单测 `neighbors_finds_nearby_points_only`/`grid_partitions_into_buckets`。为 `phy-core` 加 `num-traits` 依赖。
 - 2026-08-08: M16 完成。**光学↔World(刚体)耦合**。让光学子系统跟随刚体世界里的运动物体(掉落玻璃球),光线对每个时间步最新刚体位姿正确求交。`phy-optics` 给 `OpticBody` 加 `source_rigid_idx: Option<usize>` + `from_rigid`/`sync_from_rigid`(把对应刚体最新 `Body` 搬入自身);`OpticSubsystem` 加 `optic_coupling: T` 字段与 `couple` 实现——动态 downcast 找 `RigidSubsystem`,对每个 `source_rigid_idx` 命中的光学体经 `world.remove`/`insert` 安全取可变引用同步位姿(`optic_coupling<=0` 跳过;`name`/`step`/`as_any` 仍按基类实现)。**约束**:`OpticSubsystem` 的 struct impl 与 `impl Subsystem` 都需 `T: RealField + Copy + ToPrimitive`(因为 `couple` 里用到 `T::from_usize` 之类需 `ToPrimitive` 的算子隐含在 `OpticBody` 同步链路),否则 E0277。`Scene::new` 把刚体世界地面 + 三个掉落小球镜像为光学体(`Precision::Offline`,小球 `from_rigid` 映射刚体索引 1/2/3、`optic_coupling=1.0`),物理驱动的光学场景成型。新增 demo 端到端 `world_couples_optic_rigid`(step 30 帧后跌落小球光学体 y 减小、且光学体位置与刚体逐分量一致;演示中央引力井横向吸引小球,故只断言 y 下落趋势 + 位置一致性,不约束 x)。
-- 2026-08-08: M17 完成。**光学焦散(caustics)渲染**。`phy-optics` 新增 `caustics.rs`:`Caustics::accumulate(scene, light_dir, plane_y, half_extent, grid_n)` 在接收面上方均匀采样平行光射线(方向 = `-light_dir`),逐条 `march` 折射行进——命中透明体按 Fresnel 透射率 `(1-Fresnel)` 衰减能量并切换介质 IOR 继续,命中不透明接收面则把剩余通量累加到对应网格单元(全内反射则该路能量不落到接收面);返回 `(grid, max_val)`。含 `#[cfg(feature="io_csv")]` 的 `write_caustics_csv` 供后续 `phy-io` 对接导出。新增单测 `caustics_concentrates_light_under_glass`(玻璃球 + 下方不透明地面,平行光自上而下,存在非零亮斑且 `max > mean*1.5` 证明光线被聚拢成亮斑)。**验证**: `cargo test --workspace` 全过(软体 11、刚体 18、流体 9、场 8、光学 6、demo 6;dam_break ~108s)。至此原规划"剩余项"全部实现:事件总线(M14)、空间索引(M15)、光学↔World 耦合(M16)、焦散(M17);外加 `phy-io` 轨迹/场导出模块(M 见下条)。
+- 2026-08-08: M17 完成。**光学焦散(caustics)渲染**。`phy-optics` 新增 `caustics.rs`:`Caustics::accumulate(scene, light_dir, plane_y, half_extent, grid_n)` 在接收面上方均匀采样平行光射线(方向 = `-light_dir`),逐条 `march` 折射行进——命中透明体按 Fresnel 透射率 `(1-Fresnel)` 衰减能量并切换介质 IOR 继续,命中不透明接收面则把剩余通量累加到对应网格单元(全内反射则该路能量不落到接收面);返回 `(grid, max_val)`。含 `#[cfg(feature="io_csv")]` 的 `write_caustics_csv` 供后续 `phy-io` 对接导出。新增单测 `caustics_concentrates_light_under_glass`(玻璃球 + 下方不透明地面,平行光自上而下,存在非零亮斑且 `max > mean*1.5` 证明光线被聚拢成亮斑)。**验证**: `cargo test --workspace` 全过(软体 11、刚体 18、流体 9、场 8、光学 6、demo 6;dam_break ~108s)。原规划"剩余项"(M14/M15/M16/M17)+ phy-io 导出模块已全部实现;随后从 §5.5 路线图进入新增物理模型阶段,首项 M18 见下条。
 - 2026-08-08: M(phy-io) 完成。**`phy-io` 轨迹/场 CSV 导出落地**。此前 `phy-io` 为空壳 crate(M 前序规划里列为"场景描述解析、轨迹/场导出")。现实现三类导出:`csv.rs`(`CsvWriter` 轻量 CSV 写出)。`trajectory.rs`(`BodySample<T>` 从 `RigidWorld` 抓取位姿/速度/四元数快照,`write_trajectory` 写多帧轨迹)、`field_slice.rs`(`write_slice`/`write_center_slice` 把三维标量场切成 XY/XZ/YZ 二维 CSV 网格,附带每行世界坐标)。为 `phy-io` 加 `phy-rigid`/`phy-field`/`num-traits` 依赖;`T` 写出需 `Display` + `FromPrimitive`(列 id/行号用 `T::from_usize`)。新增单测 `trajectory_csv_has_header_and_one_row_per_body`/`field_slice_csv_has_grid_rows`(写到 `std::env::temp_dir` 后清理,避开 `AsRef<Path>` 与 `Cursor` 的类型错位)。至此 `phy-io` 从空壳变为可用导出后端,与 M14/M15/M16/M17 一起补齐 World 内核的工具链闭环。
+- 2026-08-08: M18 完成。**刚体关节约束(Constraints)**。`phy-rigid` 新增 `joint.rs`:`Joint<T>` 枚举(`Ball` 球窝=两局部锚点世界位置重合,3 自由度转动放开;`Distance` 定长杆=两锚点世界距离保持 `rest`)统一经 `world_anchors`/`error` 计算约束轴与带符号误差;`JointConstraint<T>` 持 `lambda`(累积冲量)。两个求解函数均与 `solver.rs` 接触求解**同构**的顺序冲量法:`solve_joints_velocity`(消除沿约束轴的相对速度,`lambda` 钳到 ≥0 作单边约束)+ `solve_joints_position`(split-impulse 伪速度投影,目标相对伪速度 = `beta/dt · err`,迭代至最大残余误差 < 1e-4 提前退出,不污染真实速度);`RigidWorld` 加 `joints: Vec<JointConstraint<T>>` 字段与 `add_joint(a,b,joint)`,`step` 在接触速度求解后插关节速度求解、在接触位置修正后插关节位置求解(复用同一 `pseudo` 数组),使关节与碰撞共存不乱。`pub use joint::{Joint, JointConstraint}`。新增单测 `distance_joint_keeps_rest_length_and_conserves_momentum`(两动态体杆长 2→收敛到 2、关重力下总动量守恒)、`ball_joint_pins_body_to_static_anchor`(球窝挂静态锚点,600 帧后锚点不动、摆动体顶部 ≈ 锚点);demo 端到端 `world_drives_rigid_distance_joint`(**注:§5.5 候选 #2 洛伦兹力实为 M12 已落地能力,非新增**,故优先做 #1 约束关节)。**验证**: `cargo test --workspace` 全过(软体 11、刚体 22、流体 9、场 8、光学 6、demo 7;dam_break ~106s)。下一步按 §5.5.2 批次 A 续做 #11 变步长 / #6 声波场,或按需跳到批次 B 布料 PBD。

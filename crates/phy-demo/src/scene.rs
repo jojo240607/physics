@@ -10,7 +10,7 @@ use phy_field::{EmField, GravField, HeatField, ScalarField, Bc};
 use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
 use phy_math::{na, RealField, Vec3};
 use phy_optics::{OpticBody, OpticScene, OpticSubsystem, Precision, Surface};
-use phy_rigid::{Body, RigidSubsystem, RigidWorld, Shape};
+use phy_rigid::{Body, Joint, RigidSubsystem, RigidWorld, Shape};
 use phy_soft::{SoftBody, SoftSubsystem};
 
 use crate::camera::Camera;
@@ -1135,5 +1135,54 @@ mod tests {
             .unwrap();
         let deposited: f64 = grav.rho.src.iter().sum();
         assert!(deposited > 0.0, "运动刚体应把质量沉积进引力场网格");
+    }
+
+    /// M18 集成:刚体关节(Distance)经 `World` 驱动生效 —— 两体间距收敛到杆长。
+    ///
+    /// 构造一个含刚体子系统的 `World`,经 downcast 取出内部 `RigidWorld` 注入关节,
+    /// step 多帧后两体间距应等于 `rest`,且总动量守恒(无外力)。
+    #[test]
+    fn world_drives_rigid_distance_joint() {
+        let mut w = World::<f64>::new();
+        let mut rworld = RigidWorld::new();
+        rworld.gravity = Vec3::zeros();
+        rworld.add_body(Body {
+            shape: Shape::Sphere { r: 0.2 },
+            pos: Vec3::new(-1.0, 0.0, 0.0), // 初始间距 2
+            rot: na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+        rworld.add_body(Body {
+            shape: Shape::Sphere { r: 0.2 },
+            pos: Vec3::new(1.0, 0.0, 0.0),
+            rot: na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+        // 杆长 1.5:步进后应把间距从 2 拉回 1.5。
+        rworld.add_joint(0, 1, Joint::Distance {
+            pa: Vec3::zeros(),
+            pb: Vec3::zeros(),
+            rest: 1.5,
+        });
+        let mut rsub = RigidSubsystem::new(rworld);
+        w.add_subsystem(Box::new(rsub));
+
+        for _ in 0..300 {
+            w.step(1.0 / 120.0);
+        }
+
+        let ridx = (0..w.subsystem_count())
+            .find(|&i| w.get(i).unwrap().as_any().downcast_ref::<RigidSubsystem<f64>>().is_some())
+            .unwrap();
+        let rsub = w
+            .get(ridx)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<RigidSubsystem<f64>>()
+            .unwrap();
+        let dist = (rsub.world.bodies[1].pos - rsub.world.bodies[0].pos).norm();
+        assert!((dist - 1.5).abs() < 0.05, "关节杆长应收敛到 1.5, 实际 {}", dist);
     }
 }

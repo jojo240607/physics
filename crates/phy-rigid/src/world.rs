@@ -12,6 +12,7 @@ use phy_math::{gravity, RealField, Vec3};
 
 use crate::broadphase::broadphase;
 use crate::contact::Contact;
+use crate::joint::{solve_joints_position, solve_joints_velocity, Joint, JointConstraint};
 use crate::narrowphase::collide;
 use crate::shape::Body;
 use crate::solver::{solve_position, solve_velocity, ContactConstraint, SolverParams};
@@ -21,6 +22,8 @@ pub struct RigidWorld<T: RealField + Copy> {
     pub bodies: Vec<Body<T>>,
     /// 每个刚体的电荷量(与 `bodies` 等长,0 = 中性)。用于电磁耦合。
     pub charges: Vec<T>,
+    /// 关节约束(M18):把刚体连成链条/摆/机械结构。
+    pub joints: Vec<JointConstraint<T>>,
     /// 重力(默认沿 -Y)。
     pub gravity: Vec3<T>,
     /// 求解参数。
@@ -38,6 +41,7 @@ impl<T: RealField + Copy> RigidWorld<T> {
         Self {
             bodies: Vec::new(),
             charges: Vec::new(),
+            joints: Vec::new(),
             gravity: gravity::<T>(),
             params: SolverParams::default(),
         }
@@ -54,6 +58,15 @@ impl<T: RealField + Copy> RigidWorld<T> {
         self.bodies.push(b);
         self.charges.push(q);
         self.bodies.len() - 1
+    }
+
+    /// 添加关节约束(M18),返回其索引。
+    ///
+    /// 关节在 `step` 的速度层 + 位置层与接触一起被顺序冲量法求解,
+    /// 使链条/摆/机械结构稳定(不破坏碰撞)。
+    pub fn add_joint(&mut self, a: usize, b: usize, joint: Joint<T>) -> usize {
+        self.joints.push(JointConstraint::new(a, b, joint));
+        self.joints.len() - 1
     }
 
     /// 推进一步。返回本步检测到的接触(供调试/渲染)。
@@ -80,6 +93,8 @@ impl<T: RealField + Copy> RigidWorld<T> {
 
         // 3. 速度求解(顺序冲量)
         solve_velocity(&mut self.bodies, &mut constraints, &self.params);
+        // 3b. 关节速度求解(与接触同构的顺序冲量,消除关节相对漂移速度)。
+        solve_joints_velocity(&mut self.bodies, &mut self.joints, self.params.iterations);
 
         // 4. 积分位置(用求解后速度)
         for b in self.bodies.iter_mut() {
@@ -99,6 +114,8 @@ impl<T: RealField + Copy> RigidWorld<T> {
             &mut pseudo,
             beta_over_dt,
         );
+        // 5b. 关节位置投影(split-impulse 伪速度):把残余关节距离误差消除而不污染真实速度。
+        solve_joints_position(&self.bodies, &self.joints, &mut pseudo, beta_over_dt);
         for (i, b) in self.bodies.iter_mut().enumerate() {
             if b.inv_mass > T::zero() {
                 b.pos += pseudo[i] * dt;
@@ -423,5 +440,84 @@ mod tests {
         // 沉积 m·‖v‖·dt = 1·2·0.1 = 0.2 到 (1,1,1)(经 rho.src)。
         let dep = grav.rho.src[grav.rho.idx(1, 1, 1)];
         assert!(dep > 0.0, "运动物体应把质量沉积进网格");
+    }
+
+    /// 定长杆关节:两动态体初始间距偏离目标,步进后应收敛到 rest,且总动量守恒。
+    #[test]
+    fn distance_joint_keeps_rest_length_and_conserves_momentum() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, 0.0, 0.0); // 关重力,专测约束
+        // 两球,初始间距 3,目标杆长 2。
+        let a = world.add_body(Body {
+            shape: Shape::Sphere { r: 0.2 },
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            rot: na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+        let b = world.add_body(Body {
+            shape: Shape::Sphere { r: 0.2 },
+            pos: Vec3::new(3.0, 0.0, 0.0),
+            rot: na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+        world.add_joint(a, b, Joint::Distance {
+            pa: Vec3::zeros(),
+            pb: Vec3::zeros(),
+            rest: 2.0,
+        });
+
+        let p0 = world.bodies[a].vel + world.bodies[b].vel; // 初始总动量(零)
+        for _ in 0..200 {
+            world.step(1.0 / 120.0);
+        }
+        let dist = (world.bodies[b].pos - world.bodies[a].pos).norm();
+        assert!((dist - 2.0).abs() < 0.05, "杆长应收敛到 2,实际 {}", dist);
+        let p1 = world.bodies[a].vel + world.bodies[b].vel;
+        assert!((p1 - p0).norm() < 1e-6, "无外力下总动量应守恒");
+    }
+
+    /// 球窝关节:动态体经球窝连到静态锚点,释放后锚点保持不动且两锚间距≈0。
+    #[test]
+    fn ball_joint_pins_body_to_static_anchor() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, -9.81, 0.0);
+        // 静态锚点在 (0,5,0)。
+        let anchor = world.add_body(Body {
+            shape: Shape::Sphere { r: 0.1 },
+            pos: Vec3::new(0.0, 5.0, 0.0),
+            rot: na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 0.0, // 静态
+        });
+        // 摆动体初始在锚点下方偏右 (1,4,0),经球窝挂在锚点上(pa 在锚点局部原点,
+        // pb 在摆动体顶部)。
+        let swing = world.add_body(Body {
+            shape: Shape::Sphere { r: 0.2 },
+            pos: Vec3::new(1.0, 4.0, 0.0),
+            rot: na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+        world.add_joint(anchor, swing, Joint::Ball {
+            pa: Vec3::zeros(),               // 锚点局部原点
+            pb: Vec3::new(0.0, 1.0, 0.0),    // 摆动体顶部(距质心 1 向上)
+        });
+
+        for _ in 0..600 {
+            world.step(1.0 / 120.0);
+        }
+        // 锚点应保持静止。
+        assert!(
+            (world.bodies[anchor].pos - Vec3::new(0.0, 5.0, 0.0)).norm() < 1e-9,
+            "静态锚点不应移动"
+        );
+        // 两锚点世界位置应几乎重合(球窝约束):摆动体顶部 ≈ (0,5,0)。
+        let swing_top = world.bodies[swing].pos + Vec3::new(0.0, 1.0, 0.0);
+        assert!(
+            (swing_top - Vec3::new(0.0, 5.0, 0.0)).norm() < 0.05,
+            "球窝锚点应重合, 实际 {}", (swing_top - Vec3::new(0.0, 5.0, 0.0)).norm()
+        );
     }
 }

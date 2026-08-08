@@ -13,6 +13,7 @@ pub mod contact;
 pub mod broadphase;
 pub mod narrowphase;
 pub mod solver;
+pub mod joint;
 pub mod subsystem;
 pub mod world;
 
@@ -21,6 +22,7 @@ pub use contact::Contact;
 pub use broadphase::broadphase;
 pub use narrowphase::collide;
 pub use solver::{SolverParams, solve_position, solve_velocity};
+pub use joint::{Joint, JointConstraint};
 pub use subsystem::RigidSubsystem;
 pub use world::RigidWorld;
 
