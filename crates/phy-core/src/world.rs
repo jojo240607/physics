@@ -30,9 +30,13 @@ pub trait Subsystem<T: RealField>: Any {
     /// 推进自身一个时间步 `dt`(以引用传入,避免泛型 move)。
     fn step(&mut self, dt: &T);
 
-    /// 与其他子系统的耦合阶段(如流体对刚体施加浮力/阻力)。
+    /// 与其他子系统的耦合阶段(如软体↔刚体、流体↔刚体)。
+    ///
+    /// 接收整个 `World` 的可变引用(不含自身),可经 `world.get_mut(i)`
+    /// 取出其他子系统做双向交互。`World::step` 在调用每个子系统的 `couple`
+    /// 前会临时把它从 `subsystems` 中取出,避免与 `world` 内其他元素别名。
     /// 默认空实现:无耦合的子系统无需覆写。
-    fn couple(&mut self, _dt: &T) {}
+    fn couple(&mut self, _world: &mut World<T>, _dt: &T) {}
 
     /// 子系统名称(用于调试/事件)。
     fn name(&self) -> &'static str {
@@ -89,12 +93,19 @@ impl<T: RealField> World<T> {
     }
 
     /// 推进一个时间步 `dt`:先 step 后 couple,最后累加时间。
+    ///
+    /// 耦合阶段对第 `i` 个子系统临时 `remove` 出 `subsystems`,以 `&mut World`
+    /// (不含自身)为参数调用其 `couple`,结束再 `insert` 回原位。这样 `couple`
+    /// 内部可经 `world.get_mut(j)` 安全可变访问其他子系统,而无别名冲突。
     pub fn step(&mut self, dt: T) {
         for s in self.subsystems.iter_mut() {
             s.step(&dt);
         }
-        for s in self.subsystems.iter_mut() {
-            s.couple(&dt);
+        let n = self.subsystems.len();
+        for i in 0..n {
+            let mut me = self.subsystems.remove(i);
+            me.couple(self, &dt);
+            self.subsystems.insert(i, me);
         }
         self.t += dt;
     }

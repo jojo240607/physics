@@ -138,6 +138,10 @@ pub struct Tri {
 ///
 /// `view_proj` 为列主序 mat4(f32);`model` 为实例模型矩阵(f64,内部转 f32)。
 /// `light` 为世界空间方向光方向(已归一化,指向光源)。
+///
+/// 当前 rigid 模式用更简单的线框/盒绘制,本网格光栅化为预留原语
+/// (未来可用于带三角网格的刚体渲染),故允许未使用。
+#[allow(dead_code)]
 pub fn draw_mesh(
     fb: &mut Framebuffer,
     view_proj: &Matrix4<f32>,
@@ -189,6 +193,7 @@ pub fn draw_mesh(
 }
 
 /// 透视正确的三角形光栅化(屏幕空间包围盒 + 边函数 + 1/w 插值)。
+#[allow(dead_code)]
 fn raster_triangle(
     fb: &mut Framebuffer,
     s: &[[f32; 2]; 3],
@@ -248,6 +253,7 @@ fn raster_triangle(
 }
 
 /// 2D 边函数(叉积符号 = 半平面)。
+#[allow(dead_code)]
 fn edge(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f32 {
     (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 }
