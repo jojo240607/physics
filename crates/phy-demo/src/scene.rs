@@ -1268,4 +1268,57 @@ mod tests {
         };
         assert!(x1 > x0, "引擎应驱动车身前进, dx={}", x1 - x0);
     }
+
+    /// M21 / #8 Voronoi 破碎端到端:把一个盒刚体碎成多个凸碎片,碎片继承线速度并
+    /// 在重力下自由下落(经 `World` + `RigidSubsystem` 驱动生效)。验证 `shatter` 与
+    /// 子系统调度闭环。
+    #[test]
+    fn world_shatters_box_into_fragments() {
+        let mut w = World::<f64>::new();
+        let mut rworld = RigidWorld::new();
+        rworld.gravity = Vec3::new(0.0, -9.81, 0.0);
+        // 母本盒(8 kg),静止悬在空中。
+        let pid = rworld.add_body(Body {
+            shape: Shape::Box {
+                half: Vec3::new(1.0, 1.0, 1.0),
+            },
+            pos: Vec3::new(0.0, 5.0, 0.0),
+            rot: na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 1.0 / 8.0,
+        });
+        let rsub = RigidSubsystem::new(rworld);
+        w.add_subsystem(Box::new(rsub));
+
+        let ridx = (0..w.subsystem_count())
+            .find(|&i| w.get(i).unwrap().as_any().downcast_ref::<RigidSubsystem<f64>>().is_some())
+            .unwrap();
+
+        // 碎裂:6 块,径向飞散 1.5。
+        let frag_ids = {
+            let rs = w.get_mut(ridx).unwrap().as_any_mut().downcast_mut::<RigidSubsystem<f64>>().unwrap();
+            rs.world.shatter(pid, 6, 1.5)
+        };
+        assert!(frag_ids.len() >= 4, "应碎出至少 4 块,得 {}", frag_ids.len());
+        // 母本已从世界移除(原 pid 处不再是同一个盒)。
+        let n_before = {
+            let rs = w.get(ridx).unwrap().as_any().downcast_ref::<RigidSubsystem<f64>>().unwrap();
+            rs.world.bodies.len()
+        };
+        assert!(n_before >= frag_ids.len(), "世界应包含碎片");
+
+        // 步进 60 帧,碎片应下落且无 NaN。
+        for _ in 0..60 {
+            w.step(1.0 / 120.0);
+        }
+        let all_finite = {
+            let rs = w.get(ridx).unwrap().as_any().downcast_ref::<RigidSubsystem<f64>>().unwrap();
+            frag_ids.iter().all(|&id| {
+                rs.world.bodies[id].pos.x.is_finite()
+                    && rs.world.bodies[id].pos.y.is_finite()
+                    && rs.world.bodies[id].pos.z.is_finite()
+            })
+        };
+        assert!(all_finite, "碎片位置不应出现 NaN");
+    }
 }

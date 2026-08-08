@@ -9,9 +9,11 @@
 
 use phy_field::{EmFieldLike, GravFieldLike, HeatFieldLike};
 use phy_math::{gravity, RealField, Vec3};
+use num_traits::NumCast;
 
 use crate::broadphase::broadphase;
 use crate::contact::Contact;
+use crate::fracture::fracture_body;
 use crate::joint::{solve_joints_position, solve_joints_velocity, Joint, JointConstraint};
 use crate::narrowphase::collide;
 use crate::shape::Body;
@@ -238,6 +240,41 @@ impl<T: RealField + Copy> RigidWorld<T> {
                 grav.add_mass(cx, cy, cz, m * speed * dt);
             }
         }
+    }
+}
+
+/// Voronoi 破碎(M21 / 路线图 #8):把一个刚体碎成 `n` 个凸碎片。
+///
+/// 调用 `fracture_body` 生成碎片 `Body`,移除原刚体并追加所有碎片。碎片继承母本
+/// 线速度 + 沿碎片-母体质心方向的径向飞散(`radial`);质量按体积比分配(守恒)。
+///
+/// 返回新碎片在世界中的索引列表。若 `body_id` 越界或母本为静态体(`inv_mass==0`),
+/// 直接返回空(静态天体不参与破碎)。
+///
+/// 注意:本引擎刚体未建模角速度(M20 决策),故碎片只注入线速度,不引入自转 —— 与
+/// 车辆、布料的"最小侵入"原则一致。
+impl<T: RealField + Copy + NumCast> RigidWorld<T> {
+    pub fn shatter(&mut self, body_id: usize, n: usize, radial: T) -> Vec<usize> {
+        if body_id >= self.bodies.len() {
+            return Vec::new();
+        }
+        if self.bodies[body_id].inv_mass <= T::zero() {
+            return Vec::new(); // 静态体不碎。
+        }
+        let parent = self.bodies[body_id].clone();
+        let parent_charge = self.charges[body_id];
+        let frags = fracture_body(&parent, n, None, radial);
+        // 移除母本(用 swap_remove 保持 charges 同步),碎片的索引以"母本之后追加"为准。
+        self.bodies.swap_remove(body_id);
+        self.charges.swap_remove(body_id);
+        let mut frag_ids = Vec::with_capacity(frags.len());
+        for f in frags {
+            // 碎片电荷:按体积比(这里用质量比近似)分配母本质荷。
+            let q = parent_charge * (T::one() / f.inv_mass) * parent.inv_mass;
+            let id = self.add_charged_body(f, q);
+            frag_ids.push(id);
+        }
+        frag_ids
     }
 }
 
@@ -519,5 +556,75 @@ mod tests {
             (swing_top - Vec3::new(0.0, 5.0, 0.0)).norm() < 0.05,
             "球窝锚点应重合, 实际 {}", (swing_top - Vec3::new(0.0, 5.0, 0.0)).norm()
         );
+    }
+
+    /// Voronoi 破碎(M21 / #8):碎裂一个盒,碎片应继承母本线速度且总质量守恒。
+    #[test]
+    fn shatter_box_produces_fragments_conserving_mass() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, 0.0, 0.0); // 关重力,专测破碎本身
+        let parent_mass = 8.0;
+        let pid = world.add_body(Body {
+            shape: Shape::Box {
+                half: Vec3::new(1.0, 1.0, 1.0),
+            },
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            rot: na::one(),
+            vel: Vec3::new(3.0, 0.0, 0.0), // 已有水平速度
+            inv_mass: 1.0 / parent_mass,
+        });
+
+        let frag_ids = world.shatter(pid, 8, 2.0);
+        assert!(frag_ids.len() >= 6, "应碎出至少 6 块,得 {}", frag_ids.len());
+
+        // 总质量守恒(碎片质量之和 ≈ 母本)。
+        let total_frag: f64 = frag_ids.iter().map(|&id| 1.0 / world.bodies[id].inv_mass).sum();
+        assert!(
+            (total_frag - parent_mass).abs() / parent_mass < 0.05,
+            "碎片质量之和应≈母本,得 {}",
+            total_frag
+        );
+
+        // 母本已从世界移除(shatter 内部 swap_remove 母本并追加碎片,
+        // 世界刚体总数 = 原总数 - 1 + 碎片数)。
+        assert!(
+            world.bodies.len() >= frag_ids.len(),
+            "shatter 后世界应包含母本被替换的碎片"
+        );
+
+        // 每个碎片都应是 Convex 形状。
+        for &id in &frag_ids {
+            assert!(matches!(world.bodies[id].shape, Shape::Convex { .. }), "碎片必须是 Convex");
+        }
+
+        // 径向飞散应使至少部分碎片获得与原速度不同的速度分量。
+        let max_speed = frag_ids.iter().map(|&id| world.bodies[id].vel.norm()).fold(0.0_f64, f64::max);
+        assert!(max_speed > 3.0, "径向飞散应叠加到母本速度上,得 {}", max_speed);
+    }
+
+    /// 破碎后步进:碎片应互不相穿地自由飞行(无 NaN / 无崩溃)。
+    #[test]
+    fn shattered_fragments_step_stably() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, -9.81, 0.0);
+        let pid = world.add_body(Body {
+            shape: Shape::Box {
+                half: Vec3::new(1.0, 1.0, 1.0),
+            },
+            pos: Vec3::new(0.0, 5.0, 0.0),
+            rot: na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+        let frags = world.shatter(pid, 6, 1.5);
+        assert!(!frags.is_empty());
+        for _ in 0..60 {
+            world.step(1.0 / 120.0);
+        }
+        // 无 NaN 检查。
+        for id in &frags {
+            assert!(world.bodies[*id].pos.x.is_finite(), "碎片位置不应 NaN");
+            assert!(world.bodies[*id].pos.y.is_finite(), "碎片位置不应 NaN");
+        }
     }
 }

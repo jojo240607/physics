@@ -17,6 +17,7 @@ pub mod joint;
 pub mod raycast;
 pub mod subsystem;
 pub mod vehicle;
+pub mod fracture;
 pub mod world;
 
 pub use shape::{Body, Shape};
@@ -28,6 +29,7 @@ pub use joint::{Joint, JointConstraint};
 pub use raycast::{ray_cast, RayHit};
 pub use subsystem::RigidSubsystem;
 pub use vehicle::{Vehicle, Wheel};
+pub use fracture::{fracture_body, fracture_convex, convex_volume_centroid};
 pub use world::RigidWorld;
 
 #[cfg(test)]
