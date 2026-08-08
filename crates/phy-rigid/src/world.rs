@@ -7,8 +7,7 @@
 //! 4. 积分位置(用求解后的速度)
 //! 5. 位置修正(防止穿透累积)
 
-use phy_field::EmFieldLike;
-use phy_field::HeatFieldLike;
+use phy_field::{EmFieldLike, GravFieldLike, HeatFieldLike};
 use phy_math::{gravity, RealField, Vec3};
 
 use crate::broadphase::broadphase;
@@ -189,12 +188,47 @@ impl<T: RealField + Copy> RigidWorld<T> {
             }
         }
     }
+
+    /// 刚体↔引力场双向耦合(M13):局部引力井偏转 + 运动质量沉积。
+    ///
+    /// 对每个可动刚体,在其质心处三线性采样局部引力加速度 `g_local = -∇Φ`
+    /// (空间变化的引力井,叠加在 `RigidWorld.gravity` 的均匀重力之上),以
+    /// `vel += g_local·dt·grav_coupling` 注入(下一帧 `step` 生效,与热浮力/电磁一致)。
+    /// 同时把运动物体的等效质量通量 `m·‖v‖·dt` 沉积进所在网格(运动团块塑造引力井),
+    /// 实现双向耦合。质量 `m = 1/inv_mass`。
+    pub fn couple_grav(
+        &mut self,
+        grav: &mut dyn GravFieldLike<T>,
+        dt: T,
+        grav_coupling: T,
+    ) where
+        T: num_traits::ToPrimitive,
+    {
+        if grav_coupling <= T::zero() {
+            return;
+        }
+        for b in self.bodies.iter_mut() {
+            if b.inv_mass <= T::zero() {
+                continue; // 静态物体不受局部引力加速(其质量由静态天体注入贡献)。
+            }
+            let g_local = phy_field::sample_g_field(grav, b.pos);
+            b.vel += g_local * dt * grav_coupling;
+            // 运动质量沉积:运动团块把质量通量注入网格,反向塑造引力井。
+            let speed = b.vel.norm();
+            if speed > T::zero() {
+                let m = T::one() / b.inv_mass;
+                let (cx, cy, cz, _, _, _) = phy_field::world_to_cell(grav, b.pos);
+                grav.add_mass(cx, cy, cz, m * speed * dt);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use phy_field::{Bc, EmField, HeatField, ScalarField};
+    use phy_core::Subsystem;
+    use phy_field::{Bc, EmField, GravField, HeatField, ScalarField};
     use phy_math::na;
 
     use crate::shape::Shape;
@@ -341,5 +375,53 @@ mod tests {
         // 沉积 q·‖v‖·dt = 1·2·0.1 = 0.2 到 (1,1,1)(经 rho.src,由 EmField::step 注入 u)。
         let dep = em.rho.src[em.rho.idx(1, 1, 1)];
         assert!(dep > 0.0, "运动带电体应把电荷沉积进网格");
+    }
+
+    /// 局部引力井应把邻近刚体加速指向质量源(吸引)。
+    #[test]
+    fn couple_grav_attracts_body_toward_mass() {
+        // 5x5x5 引力场,中心放一个静态大质量天体(质量源注入中心格)。
+        let nx = 5usize;
+        let dx = 1.0;
+        let mut rho = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
+        rho.add_source(2, 2, 2, 10.0); // 天体质量源。
+        let mut grav = GravField::build(rho, 1.0);
+        grav.step(&0.1); // 松弛出引力井。
+
+        let mut world = RigidWorld::new();
+        world.gravity = Vec3::new(0.0, 0.0, 0.0); // 关掉均匀重力,专测局部引力。
+        // 物体放在天体右侧 (x=3,y=2,z=2),应被吸引向 -X(指向中心 x=2)。
+        let body = Body {
+            shape: Shape::Sphere { r: 0.2.into() },
+            pos: Vec3::new(3.0, 2.0, 2.0),
+            rot: na::one(),
+            vel: Vec3::new(0.0, 0.0, 0.0),
+            inv_mass: 1.0,
+        };
+        world.add_body(body);
+        world.couple_grav(&mut grav, 0.1, 1.0);
+        assert!(world.bodies[0].vel.x < 0.0, "物体应被右侧的天体吸引加速朝 -X");
+    }
+
+    /// 运动物体应把质量沉积进所在网格(双向耦合:质量→引力井)。
+    #[test]
+    fn couple_grav_deposits_mass_from_moving_body() {
+        let nx = 3usize;
+        let rho = ScalarField::<f64>::new(nx, nx, nx, 1.0, 0.0, Bc::Neumann);
+        let mut grav = GravField::build(rho, 1.0);
+        let mut world = RigidWorld::new();
+        world.gravity = Vec3::new(0.0, 0.0, 0.0);
+        let body = Body {
+            shape: Shape::Sphere { r: 0.2.into() },
+            pos: Vec3::new(1.0, 1.0, 1.0),
+            rot: na::one(),
+            vel: Vec3::new(2.0, 0.0, 0.0), // 已有速度,m=1
+            inv_mass: 1.0,
+        };
+        world.add_body(body);
+        world.couple_grav(&mut grav, 0.1, 1.0);
+        // 沉积 m·‖v‖·dt = 1·2·0.1 = 0.2 到 (1,1,1)(经 rho.src)。
+        let dep = grav.rho.src[grav.rho.idx(1, 1, 1)];
+        assert!(dep > 0.0, "运动物体应把质量沉积进网格");
     }
 }

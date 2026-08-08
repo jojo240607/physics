@@ -6,7 +6,7 @@
 use std::any::Any;
 
 use phy_core::World;
-use phy_field::{EmField, HeatField, ScalarField, Bc};
+use phy_field::{EmField, GravField, HeatField, ScalarField, Bc};
 use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
 use phy_math::{na, RealField, Vec3};
 use phy_rigid::{Body, RigidSubsystem, RigidWorld, Shape};
@@ -144,6 +144,28 @@ impl Scene {
         let mut em = EmField::<f64>::build(erho, 1.0);
         em.b_ext = Vec3::new(0.0, 0.0, 0.5); // 轻微外加 B,演示 v×B 偏转
 
+        // --- 引力场(M13) ---
+        // 与热场/电磁同几何的质量密度网格(覆盖 [-8,8]³,dx=0.5)。在中心下方放一个
+        // 静态大质量天体(质量源注入一个网格),形成局部引力井,演示刚体被吸引偏转。
+        let grho = ScalarField::<f64>::new(32, 32, 32, 0.5, 0.0, Bc::Neumann);
+        let mut grav = GravField::<f64>::build(grho, 1.0);
+        // 天体质量源:放在中心 (16,8,16) 区域附近(网格坐标原点在 -8,故世界坐标 0 对应格 16)。
+        let gcx = 16usize;
+        let gcy = 8usize; // 偏下方(y=-4),演示上方小球被向下吸引
+        let gcz = 16usize;
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    grav.rho.add_source(
+                        (gcx as isize + dx) as usize,
+                        (gcy as isize + dy) as usize,
+                        (gcz as isize + dz) as usize,
+                        50.0,
+                    );
+                }
+            }
+        }
+
         // --- 软体(M4) ---
         // 悬挂的 6x6x6 晶格软块(顶部层钉扎),落在地面上方自由晃动。
         let soft = SoftBody::<f64>::from_lattice(6, 6, 6, 0.6, Vec3::new(0.0, 2.0, 0.0));
@@ -163,6 +185,7 @@ impl Scene {
         rigid_sub.thermal_expansion = 0.5;
         rigid_sub.heat_gain = 0.1;
         rigid_sub.em_coupling = 1.0; // M12: 启用刚体↔电磁洛伦兹耦合
+        rigid_sub.grav_coupling = 1.0; // M13: 启用刚体↔引力井双向耦合
         let mut soft_sub = SoftSubsystem::new(soft);
         soft_sub.thermal_expansion = 0.5;
         soft_sub.heat_gain = 0.1;
@@ -173,6 +196,7 @@ impl Scene {
         world.add_subsystem(Box::new(heat));
         world.add_subsystem(Box::new(soft_sub));
         world.add_subsystem(Box::new(em)); // 电磁场(M12)
+        world.add_subsystem(Box::new(grav)); // 引力场(M13)
 
         Self {
             world,
@@ -924,5 +948,83 @@ mod tests {
             .unwrap();
         let deposited: f64 = em.rho.src.iter().sum();
         assert!(deposited > 0.0, "运动带电体应把电荷沉积进电场网格");
+    }
+
+    /// M13 集成:刚体↔引力场双向耦合在统一 World 中生效。
+    ///
+    /// 构造一个静态大质量天体(质量源注入引力网格)+ 一个上方刚体,step 多帧后:
+    /// 天体形成的局部引力井应把刚体向下(朝向天体)加速;运动刚体同时把质量沉积进网格。
+    #[test]
+    fn world_couples_rigid_grav() {
+        let mut w = World::<f64>::new();
+
+        // 引力场:覆盖 [-8,8]³、dx=0.5,中心下方放静态天体质量源。
+        let nx = 32usize;
+        let dx = 16.0 / (nx as f64 - 1.0);
+        let grho = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann)
+            .with_origin(Vec3::new(-8.0, -8.0, -8.0));
+        let mut grav = GravField::<f64>::build(grho, 1.0);
+        // 天体放在低处 (world y=-4 → 格 8),形成向下吸引力。
+        let gcx = 16usize;
+        let gcy = 8usize;
+        let gcz = 16usize;
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dxk in -1..=1 {
+                    grav.rho.add_source(
+                        (gcx as isize + dxk) as usize,
+                        (gcy as isize + dy) as usize,
+                        (gcz as isize + dz) as usize,
+                        50.0,
+                    );
+                }
+            }
+        }
+        w.add_subsystem(Box::new(grav));
+
+        // 刚体:放在天体正上方 (world y=+4),初速为零,应被引力井向下加速。
+        let mut rworld = RigidWorld::new();
+        rworld.gravity = Vec3::new(0.0, 0.0, 0.0); // 关掉均匀重力,专测局部引力井
+        rworld.add_body(Body {
+            shape: Shape::Sphere { r: 0.2 },
+            pos: Vec3::new(0.0, 4.0, 0.0), // 天体上方
+            rot: phy_math::na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+        let mut rsub = RigidSubsystem::new(rworld);
+        rsub.grav_coupling = 1.0;
+        w.add_subsystem(Box::new(rsub));
+
+        // step 数帧后,刚体应被向下吸引(朝向天体,v.y 应变为负)。
+        for _ in 0..20 {
+            w.step(1.0 / 60.0);
+        }
+
+        let ridx = (0..w.subsystem_count())
+            .find(|&i| w.get(i).unwrap().as_any().downcast_ref::<RigidSubsystem<f64>>().is_some())
+            .unwrap();
+        let rsub = w
+            .get(ridx)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<RigidSubsystem<f64>>()
+            .unwrap();
+        let b = &rsub.world.bodies[0];
+        assert!(b.vel.y.is_finite(), "引力耦合后速度应有限");
+        assert!(b.vel.y < 0.0, "刚体应被下方天体引力井向下吸引, vy={}", b.vel.y);
+
+        // 运动刚体把质量沉积进 rho.src(双向耦合:质量→引力井)。
+        let gidx = (0..w.subsystem_count())
+            .find(|&i| w.get(i).unwrap().as_any().downcast_ref::<GravField<f64>>().is_some())
+            .unwrap();
+        let grav = w
+            .get(gidx)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<GravField<f64>>()
+            .unwrap();
+        let deposited: f64 = grav.rho.src.iter().sum();
+        assert!(deposited > 0.0, "运动刚体应把质量沉积进引力场网格");
     }
 }

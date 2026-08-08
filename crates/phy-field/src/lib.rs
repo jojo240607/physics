@@ -13,12 +13,14 @@ mod grid_geometry;
 mod heat;
 mod wave;
 mod em;
+mod grav;
 
 pub use grid::{Bc, ScalarField};
 pub use grid_geometry::GridGeometry;
 pub use heat::{HeatField, HeatFieldLike};
 pub use wave::WaveField;
 pub use em::{EmField, EmFieldLike};
+pub use grav::{GravField, GravFieldLike};
 
 use phy_math::RealField;
 use phy_math::Vec3;
@@ -81,6 +83,18 @@ where
 {
     let (cx, cy, cz, tx, ty, tz) = world_to_cell(em, p);
     em.sample_e_field(cx, cy, cz, tx, ty, tz)
+}
+
+/// 在世界坐标 `p` 处三线性采样引力加速度矢量(越界夹紧到边界格)。供刚体耦合复用。
+pub fn sample_g_field<T: RealField + Copy>(
+    grav: &dyn GravFieldLike<T>,
+    p: Vec3<T>,
+) -> Vec3<T>
+where
+    T: num_traits::ToPrimitive,
+{
+    let (cx, cy, cz, tx, ty, tz) = world_to_cell(grav, p);
+    grav.sample_g_field(cx, cy, cz, tx, ty, tz)
 }
 
 #[cfg(test)]
@@ -281,5 +295,44 @@ mod tests {
         em.add_charge(1, 1, 1, 2.0);
         // add_charge 累加到 rho.src(源缓冲),由 step 注入 u。
         assert!((em.rho.src[em.rho.idx(1, 1, 1)] - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn grav_poisson_yields_attractive_field_toward_mass() {
+        // 中心放正质量 → 泊松松弛出引力势 Φ(质量处为负),引力 g=-∇Φ 应指向质量:
+        // 右侧 g.x<0(指向中心)、左侧 g.x>0,吸引。
+        let n = 11usize;
+        let dx = 1.0_f64;
+        let mut rho = ScalarField::<f64>::new(n, 1, 1, dx, 0.0, Bc::Neumann);
+        rho.u[n / 2] = 1.0;
+        let mut grav = GravField::build(rho, 1.0);
+        grav.step(&0.1_f64);
+        let c = n / 2;
+        let g_right = grav.g[grav.idx(c + 1, 0, 0)].x;
+        let g_left = grav.g[grav.idx(c - 1, 0, 0)].x;
+        assert!(g_right < 0.0, "质量右侧应被吸引(g.x<0 指向中心): {}", g_right);
+        assert!(g_left > 0.0, "质量左侧应被吸引(g.x>0 指向中心): {}", g_left);
+        assert!(grav.g[grav.idx(c, 0, 0)].x.abs() < 1e-9, "对称中心 g.x≈0");
+    }
+
+    #[test]
+    fn grav_sample_g_field_trilinear_finite() {
+        let n = 5usize;
+        let mut rho = ScalarField::<f64>::new(n, n, n, 1.0, 0.0, Bc::Neumann);
+        let cc = rho.idx(2, 2, 2);
+        rho.u[cc] = 1.0;
+        let mut grav = GravField::build(rho, 1.0);
+        grav.step(&0.1_f64);
+        let g = grav.sample_g_field(2, 2, 2, 0.5, 0.5, 0.5);
+        assert!(g.x.is_finite() && g.y.is_finite() && g.z.is_finite());
+    }
+
+    #[test]
+    fn grav_add_mass_accumulates_into_rho() {
+        let rho = ScalarField::<f64>::new(3, 3, 3, 1.0, 0.0, Bc::Neumann);
+        let mut grav = GravField::build(rho, 1.0);
+        grav.add_mass(1, 1, 1, 3.0);
+        // add_mass 累加到 rho.src(源缓冲),由 step 注入 u。
+        assert!((grav.rho.src[grav.rho.idx(1, 1, 1)] - 3.0).abs() < 1e-12);
     }
 }

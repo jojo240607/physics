@@ -3,7 +3,7 @@
 use std::any::Any;
 
 use phy_core::{Subsystem, World};
-use phy_field::{EmField, HeatField};
+use phy_field::{EmField, GravField, HeatField};
 use phy_math::RealField;
 
 use crate::world::RigidWorld;
@@ -23,6 +23,8 @@ pub struct RigidSubsystem<T: RealField + Copy + num_traits::ToPrimitive> {
     pub t_ref: T,
     /// 电磁耦合强度(洛伦兹力缩放)。0 表示无电磁耦合。
     pub em_coupling: T,
+    /// 引力耦合强度(局部引力井加速度缩放)。0 表示无引力场耦合。
+    pub grav_coupling: T,
 }
 
 impl<T: RealField + Copy + num_traits::ToPrimitive> RigidSubsystem<T> {
@@ -34,6 +36,7 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> RigidSubsystem<T> {
             heat_gain: T::zero(),
             t_ref: T::zero(),
             em_coupling: T::zero(),
+            grav_coupling: T::zero(),
         }
     }
 }
@@ -51,12 +54,14 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> Subsystem<T> for RigidSubsys
         self.world.step(*dt);
     }
 
-    /// 刚体↔热场 / 刚体↔电磁场 双向耦合。
+    /// 刚体↔热场 / 刚体↔电磁场 / 刚体↔引力场 双向耦合。
     ///
     /// 若 `thermal_expansion>0` 或 `heat_gain>0`,在 `World` 中动态查找 `HeatField`
     /// 子系统,经 `remove`/`insert` 安全取可变引用后调用 `RigidWorld::couple_heat`。
     /// 若 `em_coupling>0` 且世界中存在带电刚体,动态查找 `EmField` 子系统并调用
     /// `RigidWorld::couple_em`(洛伦兹力 + 运动感应电荷)。
+    /// 若 `grav_coupling>0`,动态查找 `GravField` 子系统并调用 `RigidWorld::couple_grav`
+    /// (局部引力井偏转 + 运动质量沉积)。
     fn couple(&mut self, world: &mut World<T>, dt: &T) {
         // 刚体↔热场(M11)。
         if self.thermal_expansion > T::zero() || self.heat_gain > T::zero() {
@@ -102,6 +107,28 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> Subsystem<T> for RigidSubsys
                     .expect("em subsystem type mismatch");
                 self.world.couple_em(em, *dt, self.em_coupling);
                 world.insert(ei, em_box);
+            }
+        }
+        // 刚体↔引力场(M13)。
+        if self.grav_coupling > T::zero() {
+            let n = world.subsystem_count();
+            let mut grav_idx: Option<usize> = None;
+            for i in 0..n {
+                if let Some(s) = world.get(i) {
+                    if s.as_any().downcast_ref::<GravField<T>>().is_some() {
+                        grav_idx = Some(i);
+                        break;
+                    }
+                }
+            }
+            if let Some(gi) = grav_idx {
+                let mut grav_box = world.remove(gi);
+                let grav = grav_box
+                    .as_any_mut()
+                    .downcast_mut::<GravField<T>>()
+                    .expect("grav subsystem type mismatch");
+                self.world.couple_grav(grav, *dt, self.grav_coupling);
+                world.insert(gi, grav_box);
             }
         }
     }
