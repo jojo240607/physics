@@ -30,6 +30,8 @@ pub enum DemoMode {
     Optics,
     /// 流体 + 热场联合耦合(M4e 流体↔热双向耦合,M9 接入 Demo)。
     FluidHeat,
+    /// 全耦合综合场景(M10):刚/流/软/热四子系统共存于同一 World,渲染全部。
+    All,
 }
 
 impl DemoMode {
@@ -41,7 +43,8 @@ impl DemoMode {
             DemoMode::Heat => DemoMode::Soft,
             DemoMode::Soft => DemoMode::Optics,
             DemoMode::Optics => DemoMode::FluidHeat,
-            DemoMode::FluidHeat => DemoMode::Rigid,
+            DemoMode::FluidHeat => DemoMode::All,
+            DemoMode::All => DemoMode::Rigid,
         }
     }
 
@@ -54,6 +57,7 @@ impl DemoMode {
             DemoMode::Soft => "Soft Body",
             DemoMode::Optics => "Optics",
             DemoMode::FluidHeat => "Fluid+Heat (M4e)",
+            DemoMode::All => "All (M10)",
         }
     }
 }
@@ -264,6 +268,7 @@ impl Scene {
             DemoMode::Soft => self.render_soft(fb, cam),
             DemoMode::Optics => { /* 光学由 App 独立渲染,这里不处理 */ }
             DemoMode::FluidHeat => self.render_fluid_heat(fb, cam),
+            DemoMode::All => self.render_all(fb, cam),
         }
     }
 
@@ -403,6 +408,97 @@ impl Scene {
         }
 
         // 2) 流体粒子(前景,蓝点)。
+        if let Some(fi) = fidx {
+            if let Some(fs) = self.world.get(fi).unwrap().as_any().downcast_ref::<FluidSubsystem<f64>>() {
+                for p in &fs.world.particles {
+                    if let Some((sx, sy, depth)) = project_point(cam, fb, p.pos) {
+                        let r = (2.0 * depth).clamp(1.0, 8.0) as i32;
+                        fb.fill_circle(sx, sy, r, depth as f32, [40u8, 120u8, 255u8]);
+                    }
+                }
+            }
+        }
+    }
+
+    /// 全耦合综合渲染(M10):四子系统同框。
+    ///
+    /// 顺序(由远及近):热场切片(蓝→红)→ 软体弹簧(灰白)→ 刚体(实体)→ 流体粒子(蓝)。
+    /// 动态 downcast 查各子系统下标,不依赖注册顺序;展示 M4b/d/e 全部耦合共存于一个 World。
+    fn render_all(&self, fb: &mut Framebuffer, cam: &Camera) {
+        // 动态查找四个子系统索引。
+        let mut ridx = None;
+        let mut fidx = None;
+        let mut sidx = None;
+        let mut hidx = None;
+        for i in 0..self.world.subsystem_count() {
+            if let Some(s) = self.world.get(i) {
+                if s.as_any().downcast_ref::<RigidSubsystem<f64>>().is_some() {
+                    ridx = Some(i);
+                }
+                if s.as_any().downcast_ref::<FluidSubsystem<f64>>().is_some() {
+                    fidx = Some(i);
+                }
+                if s.as_any().downcast_ref::<SoftSubsystem<f64>>().is_some() {
+                    sidx = Some(i);
+                }
+                if s.as_any().downcast_ref::<HeatField<f64>>().is_some() {
+                    hidx = Some(i);
+                }
+            }
+        }
+
+        // 1) 热场切片(背景)。
+        if let Some(hi) = hidx {
+            if let Some(h) = self.world.get(hi).unwrap().as_any().downcast_ref::<HeatField<f64>>() {
+                let f = &h.field;
+                let nx = f.nx;
+                let ny = f.ny;
+                let nz = f.nz;
+                let iy = ny / 2;
+                let tmax = f.max_abs().max(1e-6);
+                for ix in 0..nx {
+                    for iz in 0..nz {
+                        let v = f.u[f.idx(ix, iy, iz)];
+                        let wx = f.origin.x + (ix as f64) * f.dx;
+                        let wy = f.origin.y + (iy as f64) * f.dx;
+                        let wz = f.origin.z + (iz as f64) * f.dx;
+                        if let Some((sx, sy, depth)) = project_point(cam, fb, Vec3::new(wx, wy + 0.05, wz)) {
+                            let t = (v / tmax).clamp(0.0, 1.0);
+                            let col = [(t * 255.0) as u8, 40u8, ((1.0 - t) * 255.0) as u8];
+                            fb.fill_circle(sx, sy, 3, depth as f32, col);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2) 软体弹簧(灰白)。
+        if let Some(si) = sidx {
+            if let Some(ss) = self.world.get(si).unwrap().as_any().downcast_ref::<SoftSubsystem<f64>>() {
+                let body = &ss.body;
+                for s in &body.springs {
+                    let pa = body.particles[s.a].pos;
+                    let pb = body.particles[s.b].pos;
+                    if let (Some((ax, ay, da)), Some((bx, by, db))) =
+                        (project_point(cam, fb, pa), project_point(cam, fb, pb))
+                    {
+                        let depth = ((da + db) * 0.5) as f32;
+                        fb.draw_line(ax, ay, bx, by, depth, [180u8, 180u8, 200u8]);
+                    }
+                }
+            }
+        }
+
+        // 3) 刚体(实体)。
+        if let Some(ri) = ridx {
+            if let Some(rs) = self.world.get(ri).unwrap().as_any().downcast_ref::<RigidSubsystem<f64>>() {
+                for b in &rs.world.bodies {
+                    render_body(fb, cam, b);
+                }
+            }
+        }
+
+        // 4) 流体粒子(前景,蓝点)。
         if let Some(fi) = fidx {
             if let Some(fs) = self.world.get(fi).unwrap().as_any().downcast_ref::<FluidSubsystem<f64>>() {
                 for p in &fs.world.particles {

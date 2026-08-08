@@ -256,6 +256,7 @@ impl ApplicationHandler<DemoEvent> for App {
                             "f" => self.scene.set_mode(DemoMode::Fluid),
                             "h" => self.scene.set_mode(DemoMode::Heat),
                             "s" => self.scene.set_mode(DemoMode::Soft),
+                            "a" => self.scene.set_mode(DemoMode::All),
                             "r" => self.scene.reset(),
                             "q" => self.scene.set_mode(DemoMode::FluidHeat),
                             "i" => {
@@ -285,7 +286,7 @@ impl ApplicationHandler<DemoEvent> for App {
 
 fn main() {
     println!("phy-demo · multi-physics (software rasterizer)");
-    println!("拖拽旋转 · 滚轮缩放 · P 暂停 · O 循环模式 · F 流体 · H 热场 · S 软体 · R 重置 · I 统计 · 关闭窗口退出");
+    println!("拖拽旋转 · 滚轮缩放 · P 暂停 · O 循环模式 · F 流体 · H 热场 · S 软体 · Q 流体+热 · A 全耦合 · R 重置 · I 统计 · 关闭窗口退出");
 
     let event_loop = EventLoop::<DemoEvent>::with_user_event().build().unwrap();
     let mut app = App::new(&event_loop);
