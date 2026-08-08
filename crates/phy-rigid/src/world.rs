@@ -7,6 +7,7 @@
 //! 4. 积分位置(用求解后的速度)
 //! 5. 位置修正(防止穿透累积)
 
+use phy_field::EmFieldLike;
 use phy_field::HeatFieldLike;
 use phy_math::{gravity, RealField, Vec3};
 
@@ -19,6 +20,8 @@ use crate::solver::{solve_position, solve_velocity, ContactConstraint, SolverPar
 /// 刚体动力学世界。
 pub struct RigidWorld<T: RealField + Copy> {
     pub bodies: Vec<Body<T>>,
+    /// 每个刚体的电荷量(与 `bodies` 等长,0 = 中性)。用于电磁耦合。
+    pub charges: Vec<T>,
     /// 重力(默认沿 -Y)。
     pub gravity: Vec3<T>,
     /// 求解参数。
@@ -35,6 +38,7 @@ impl<T: RealField + Copy> RigidWorld<T> {
     pub fn new() -> Self {
         Self {
             bodies: Vec::new(),
+            charges: Vec::new(),
             gravity: gravity::<T>(),
             params: SolverParams::default(),
         }
@@ -42,6 +46,14 @@ impl<T: RealField + Copy> RigidWorld<T> {
 
     pub fn add_body(&mut self, b: Body<T>) -> usize {
         self.bodies.push(b);
+        self.charges.push(T::zero());
+        self.bodies.len() - 1
+    }
+
+    /// 添加带电刚体,返回其索引。电荷量 `q` 存入并行 `charges` 向量。
+    pub fn add_charged_body(&mut self, b: Body<T>, q: T) -> usize {
+        self.bodies.push(b);
+        self.charges.push(q);
         self.bodies.len() - 1
     }
 
@@ -139,12 +151,50 @@ impl<T: RealField + Copy> RigidWorld<T> {
             }
         }
     }
+
+    /// 刚体↔电磁场双向耦合(M12):洛伦兹力 + 运动感应电荷。
+    ///
+    /// 对每个带电刚体(`q≠0`),在其质心处三线性采样电场 `E`,施加洛伦兹力
+    /// `F = q·(E + v×B_ext)`(`B_ext` 为电磁场外加均匀磁场,默认零),以
+    /// `vel += (F/m)·dt` 注入(下一帧 `step` 生效,与热浮力一致)。
+    /// 同时把运动带电体的等效电流 `q·‖v‖·dt` 沉积进所在网格的电荷密度
+    /// (运动物体感应/产生电荷,反向影响电场),实现双向耦合。
+    pub fn couple_em(
+        &mut self,
+        em: &mut dyn EmFieldLike<T>,
+        dt: T,
+        em_coupling: T,
+    ) where
+        T: num_traits::ToPrimitive,
+    {
+        if em_coupling <= T::zero() {
+            return;
+        }
+        for (idx, b) in self.bodies.iter_mut().enumerate() {
+            let q = self.charges[idx];
+            if b.inv_mass <= T::zero() || q == T::zero() {
+                continue; // 静态或中性物体不参与电磁耦合。
+            }
+            let e = phy_field::sample_e_field(em, b.pos);
+            let b_ext = em.b_ext();
+            // 洛伦兹力 F = q·(E + v×B)。
+            let lorentz = e + b.vel.cross(&b_ext);
+            let f = lorentz * q;
+            b.vel += f * b.inv_mass * dt * em_coupling;
+            // 运动感应电荷沉积:q·‖v‖·dt 注入所在网格(反向影响电场)。
+            let speed = b.vel.norm();
+            if speed > T::zero() {
+                let (cx, cy, cz, _, _, _) = phy_field::world_to_cell(em, b.pos);
+                em.add_charge(cx, cy, cz, q * speed * dt);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use phy_field::{Bc, HeatField, ScalarField};
+    use phy_field::{Bc, EmField, HeatField, ScalarField};
     use phy_math::na;
 
     use crate::shape::Shape;
@@ -208,5 +258,88 @@ mod tests {
         heat.field.step_diffusion(0.1, 0.01);
         let injected = heat.field.sample(1, 1, 1);
         assert!(injected > 0.0, "运动刚体应加热所在网格");
+    }
+
+    /// 洛伦兹力的电场项:正电荷在 +X 电场中应获得 +X 方向速度。
+    #[test]
+    fn couple_em_electric_force_on_charge() {
+        let nx = 3usize;
+        let dx = 1.0;
+        let mut rho = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
+        let mut em = EmField::build(rho, 1.0);
+        // 直接铺设一个沿 +X 的均匀电场(跳过泊松松弛,专测力项)。
+        for e in em.e.iter_mut() {
+            *e = Vec3::new(1.0, 0.0, 0.0);
+        }
+        let mut world = RigidWorld::new();
+        let body = Body {
+            shape: Shape::Sphere { r: 0.2.into() },
+            pos: Vec3::new(1.0, 1.0, 1.0),
+            rot: na::one(),
+            vel: Vec3::new(0.0, 0.0, 0.0),
+            inv_mass: 1.0,
+        };
+        world.add_charged_body(body, 1.0); // q=+1
+
+        world.couple_em(&mut em, 0.1, 1.0);
+        // F = q·E = +1·(+X) → vx 应为正。
+        assert!(world.bodies[0].vel.x > 0.0, "正电荷在 +X 电场中应受力加速 +X");
+        // 中性或静态物体不受影响:放一个中性体验证。
+        let neutral = Body {
+            shape: Shape::Sphere { r: 0.2.into() },
+            pos: Vec3::new(1.0, 1.0, 1.0),
+            rot: na::one(),
+            vel: Vec3::new(0.0, 0.0, 0.0),
+            inv_mass: 1.0,
+        };
+        world.add_body(neutral);
+        let vx_before = world.bodies[1].vel.x;
+        world.couple_em(&mut em, 0.1, 1.0);
+        assert!(
+            (world.bodies[1].vel.x - vx_before).abs() < 1e-12,
+            "中性物体不应受电磁力"
+        );
+    }
+
+    /// 洛伦兹力的磁场项:v×B 应产生垂直于 v 与 B 的偏转。
+    #[test]
+    fn couple_em_velocity_cross_b_deflects() {
+        let nx = 3usize;
+        let mut rho = ScalarField::<f64>::new(nx, nx, nx, 1.0, 0.0, Bc::Neumann);
+        let mut em = EmField::build(rho, 1.0);
+        em.b_ext = Vec3::new(0.0, 0.0, 1.0); // B 沿 +Z
+        let mut world = RigidWorld::new();
+        // 速度沿 +X,电荷 +1 → v×B = X×Z = -Y → 应获得 -Y 速度。
+        let body = Body {
+            shape: Shape::Sphere { r: 0.2.into() },
+            pos: Vec3::new(1.0, 1.0, 1.0),
+            rot: na::one(),
+            vel: Vec3::new(1.0, 0.0, 0.0),
+            inv_mass: 1.0,
+        };
+        world.add_charged_body(body, 1.0);
+        world.couple_em(&mut em, 0.1, 1.0);
+        assert!(world.bodies[0].vel.y < 0.0, "v(+X)×B(+Z) 应产生 -Y 偏转");
+    }
+
+    /// 运动带电体应把电荷沉积进所在网格(双向耦合:电荷→电场)。
+    #[test]
+    fn couple_em_deposits_charge_from_moving_body() {
+        let nx = 3usize;
+        let mut rho = ScalarField::<f64>::new(nx, nx, nx, 1.0, 0.0, Bc::Neumann);
+        let mut em = EmField::build(rho, 1.0);
+        let mut world = RigidWorld::new();
+        let body = Body {
+            shape: Shape::Sphere { r: 0.2.into() },
+            pos: Vec3::new(1.0, 1.0, 1.0),
+            rot: na::one(),
+            vel: Vec3::new(2.0, 0.0, 0.0), // 已有速度
+            inv_mass: 1.0,
+        };
+        world.add_charged_body(body, 1.0);
+        world.couple_em(&mut em, 0.1, 1.0);
+        // 沉积 q·‖v‖·dt = 1·2·0.1 = 0.2 到 (1,1,1)(经 rho.src,由 EmField::step 注入 u)。
+        let dep = em.rho.src[em.rho.idx(1, 1, 1)];
+        assert!(dep > 0.0, "运动带电体应把电荷沉积进网格");
     }
 }

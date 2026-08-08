@@ -3,7 +3,7 @@
 use std::any::Any;
 
 use phy_core::{Subsystem, World};
-use phy_field::{HeatField, HeatFieldLike};
+use phy_field::{GridGeometry, HeatField, HeatFieldLike};
 use phy_math::RealField;
 
 use crate::sph::FluidWorld;

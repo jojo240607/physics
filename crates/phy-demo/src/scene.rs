@@ -6,7 +6,7 @@
 use std::any::Any;
 
 use phy_core::World;
-use phy_field::{HeatField, ScalarField, Bc};
+use phy_field::{EmField, HeatField, ScalarField, Bc};
 use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
 use phy_math::{na, RealField, Vec3};
 use phy_rigid::{Body, RigidSubsystem, RigidWorld, Shape};
@@ -95,16 +95,19 @@ impl Scene {
             vel: Vec3::zeros(),
             inv_mass: 0.0,
         });
-        // 掉落小球。
+        // 掉落小球(带电,演示电磁洛伦兹力偏转)。
         for i in 0..3 {
             let r = 1.0 + 0.3 * (i as f64);
-            rigid.add_body(Body {
-                shape: Shape::Sphere { r },
-                pos: Vec3::new(-6.0 + i as f64 * 6.0, 8.0 + i as f64 * 2.0, 0.0),
-                rot: na::UnitQuaternion::identity(),
-                vel: Vec3::zeros(),
-                inv_mass: 1.0 / 2.0,
-            });
+            rigid.add_charged_body(
+                Body {
+                    shape: Shape::Sphere { r },
+                    pos: Vec3::new(-6.0 + i as f64 * 6.0, 8.0 + i as f64 * 2.0, 0.0),
+                    rot: na::UnitQuaternion::identity(),
+                    vel: Vec3::zeros(),
+                    inv_mass: 1.0 / 2.0,
+                },
+                if i == 1 { 5.0 } else { -5.0 }, // 中间球 +5,两侧 -5(相反电荷反向偏转)
+            );
         }
 
         // --- 流体(M5) ---
@@ -134,6 +137,13 @@ impl Scene {
         }
         let heat = HeatField::<f64>::new(field, 0.1);
 
+        // --- 电磁场(M12) ---
+        // 与热场同几何的电荷密度网格(覆盖 [-8,8]³,dx=0.5),默认零电荷;洛伦兹力由
+        // 带电刚体在 couple 阶段采样电场施加。外加均匀 B 默认零(纯电场力为主)。
+        let erho = ScalarField::<f64>::new(32, 32, 32, 0.5, 0.0, Bc::Neumann);
+        let mut em = EmField::<f64>::build(erho, 1.0);
+        em.b_ext = Vec3::new(0.0, 0.0, 0.5); // 轻微外加 B,演示 v×B 偏转
+
         // --- 软体(M4) ---
         // 悬挂的 6x6x6 晶格软块(顶部层钉扎),落在地面上方自由晃动。
         let soft = SoftBody::<f64>::from_lattice(6, 6, 6, 0.6, Vec3::new(0.0, 2.0, 0.0));
@@ -152,6 +162,7 @@ impl Scene {
         let mut rigid_sub = RigidSubsystem::new(rigid);
         rigid_sub.thermal_expansion = 0.5;
         rigid_sub.heat_gain = 0.1;
+        rigid_sub.em_coupling = 1.0; // M12: 启用刚体↔电磁洛伦兹耦合
         let mut soft_sub = SoftSubsystem::new(soft);
         soft_sub.thermal_expansion = 0.5;
         soft_sub.heat_gain = 0.1;
@@ -161,6 +172,7 @@ impl Scene {
         world.add_subsystem(Box::new(fluid_sub));
         world.add_subsystem(Box::new(heat));
         world.add_subsystem(Box::new(soft_sub));
+        world.add_subsystem(Box::new(em)); // 电磁场(M12)
 
         Self {
             world,
@@ -842,5 +854,75 @@ mod tests {
             "热浮力应上举软体质点, vy={}",
             ssub.body.particles[0].vel.y
         );
+    }
+
+    /// M12 集成:刚体↔电磁场双向耦合在统一 World 中生效。
+    ///
+    /// 构造带电刚体 + 电磁场(含外加 B),step 多帧后:电场/磁场洛伦兹力使带电体速度
+    /// 被改变(且全场有限);运动带电体把电荷沉积进网格(rho.src 非零)。
+    #[test]
+    fn world_couples_rigid_em() {
+        let mut w = World::<f64>::new();
+
+        // 电磁场:覆盖 [-3,3]³、dx=0.5,外加 Z 向 B。
+        let nx = 13usize;
+        let dx = 6.0 / (nx as f64 - 1.0);
+        let erho = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann)
+            .with_origin(Vec3::new(-3.0, -3.0, -3.0));
+        let mut em = EmField::<f64>::build(erho, 1.0);
+        em.b_ext = Vec3::new(0.0, 0.0, 2.0);
+        w.add_subsystem(Box::new(em));
+
+        // 刚体:带电球,初速度 +X,在 X-Z 平面运动,受 v×B=(X×Z)=-Y 偏转 + 电场(零,纯磁)。
+        let mut rworld = RigidWorld::new();
+        rworld.gravity = Vec3::new(0.0, -9.81, 0.0);
+        rworld.add_charged_body(
+            Body {
+                shape: Shape::Sphere { r: 0.2 },
+                pos: Vec3::new(0.0, 0.0, 0.0),
+                rot: phy_math::na::one(),
+                vel: Vec3::new(2.0, 0.0, 0.0), // 初速 +X
+                inv_mass: 1.0,
+            },
+            1.0,
+        );
+        let mut rsub = RigidSubsystem::new(rworld);
+        rsub.em_coupling = 1.0;
+        w.add_subsystem(Box::new(rsub));
+
+        // 记录初速,step 后应有偏转(纯重力只改 vy,vx 不受重力影响)。
+        let vx0 = 2.0;
+        for _ in 0..30 {
+            w.step(1.0 / 60.0);
+        }
+
+        let ridx = (0..w.subsystem_count())
+            .find(|&i| w.get(i).unwrap().as_any().downcast_ref::<RigidSubsystem<f64>>().is_some())
+            .unwrap();
+        let rsub = w
+            .get(ridx)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<RigidSubsystem<f64>>()
+            .unwrap();
+        let b = &rsub.world.bodies[0];
+        assert!(b.vel.x.is_finite() && b.vel.y.is_finite() && b.vel.z.is_finite());
+        // v×B 产生 -Y 偏转:vy 应明显偏离纯重力值(纯重力 30 帧 ≈ -9.81*0.5=-4.9;
+        // 叠加磁偏转后 vy 应更负,且 vz 也因耦合产生非零分量)。
+        assert!(b.vel.y < -9.81 * (30.0 / 60.0), "v×B 应额外下压 vy, vy={}", b.vel.y);
+        assert!(b.vel.x < vx0, "磁场应使 vx 衰减(能量转入 z), vx={}", b.vel.x);
+
+        // 运动带电体把电荷沉积进 rho.src(双向耦合:电荷→电场)。
+        let eidx = (0..w.subsystem_count())
+            .find(|&i| w.get(i).unwrap().as_any().downcast_ref::<EmField<f64>>().is_some())
+            .unwrap();
+        let em = w
+            .get(eidx)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<EmField<f64>>()
+            .unwrap();
+        let deposited: f64 = em.rho.src.iter().sum();
+        assert!(deposited > 0.0, "运动带电体应把电荷沉积进电场网格");
     }
 }
