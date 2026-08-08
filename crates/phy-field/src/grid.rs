@@ -143,6 +143,33 @@ impl<T: RealField + Copy> ScalarField<T> {
         r
     }
 
+    /// 私有三线性插值:在基格 (bx,by,bz) 内按偏移 (tx,ty,tz)∈[0,1] 取值。
+    /// 用于平流回溯采样,越界基格夹紧到有效范围。注意:采样**快照** `u_prev`
+    /// (平流前由 `advect` 拷入),避免读到同一步已写出的新值。
+    fn trilinear(&self, bx: usize, by: usize, bz: usize, tx: T, ty: T, tz: T) -> T {
+        let nx = self.nx;
+        let ny = self.ny;
+        let nz = self.nz;
+        let x1 = (bx + 1).min(nx - 1);
+        let y1 = (by + 1).min(ny - 1);
+        let z1 = (bz + 1).min(nz - 1);
+        let c000 = self.u_prev[self.idx(bx, by, bz)];
+        let c100 = self.u_prev[self.idx(x1, by, bz)];
+        let c010 = self.u_prev[self.idx(bx, y1, bz)];
+        let c110 = self.u_prev[self.idx(x1, y1, bz)];
+        let c001 = self.u_prev[self.idx(bx, by, z1)];
+        let c101 = self.u_prev[self.idx(x1, by, z1)];
+        let c011 = self.u_prev[self.idx(bx, y1, z1)];
+        let c111 = self.u_prev[self.idx(x1, y1, z1)];
+        let x00 = c000 + (c100 - c000) * tx;
+        let x10 = c010 + (c110 - c010) * tx;
+        let x01 = c001 + (c101 - c001) * tx;
+        let x11 = c011 + (c111 - c011) * tx;
+        let y0 = x00 + (x10 - x00) * ty;
+        let y1 = x01 + (x11 - x01) * ty;
+        y0 + (y1 - y0) * tz
+    }
+
     /// 波动一步(leapfrog 显式)。`c2 = c²`。需要 prior 状态(u_prev)。
     /// 第一步自动从 u 复制构造 prior(零速度初始化)。
     pub fn step_wave(&mut self, c2: T, dt: T) {
@@ -193,5 +220,146 @@ impl<T: RealField + Copy> ScalarField<T> {
             }
         }
         m
+    }
+}
+
+/// 需要 `T: ToPrimitive` 的平流相关方法(回溯/插值的世界坐标换算用到 `to_f64`)。
+impl<T: RealField + Copy + num_traits::ToPrimitive> ScalarField<T> {
+    /// 半拉格朗日平流一步:∂u/∂t + v·∇u = 0。
+    ///
+    /// 对每个网格点,按速度场 `vel` 回溯轨迹 `x_back = x - v(x)·dt`,
+    /// 用三线性插值取回 `u` 赋给新场。该方法**无条件稳定**(回溯 + 插值),
+    /// 不需要像 FTCS 那样限制 dt。`vel` 为任意世界坐标 → 速度矢量的闭包,
+    /// 典型来源是 SPH 速度场采样(实现热浮力↔对流的 Boussinesq 闭环)。
+    ///
+    /// 越界回溯点夹紧到边界格(Neumann 型无通量近似)。
+    pub fn advect<F>(&mut self, vel: &F, dt: T)
+    where
+        F: Fn(Vec3<T>) -> Vec3<T>,
+    {
+        // 以 u_prev 作快照源,u 作输出,避免读取刚写入的值。
+        self.u_prev.copy_from_slice(&self.u);
+        let dx = self.dx.to_f64().unwrap();
+        let ox = self.origin.x.to_f64().unwrap();
+        let oy = self.origin.y.to_f64().unwrap();
+        let oz = self.origin.z.to_f64().unwrap();
+        let (nx, ny, nz) = (self.nx, self.ny, self.nz);
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let c = self.idx(i, j, k);
+                    let wx = ox + dx * (i as f64);
+                    let wy = oy + dx * (j as f64);
+                    let wz = oz + dx * (k as f64);
+                    let x = Vec3::new(
+                        T::from_f64(wx).unwrap(),
+                        T::from_f64(wy).unwrap(),
+                        T::from_f64(wz).unwrap(),
+                    );
+                    let v = vel(x);
+                    let back = x - v * dt;
+                    // 世界坐标 → 带夹紧的基格 + 单元内偏移(与 lib::world_to_cell 同语义)。
+                    let dx = self.dx.to_f64().unwrap();
+                    let obx = back.x.to_f64().unwrap() - ox;
+                    let oby = back.y.to_f64().unwrap() - oy;
+                    let obz = back.z.to_f64().unwrap() - oz;
+                    let fx = (obx / dx).floor();
+                    let fy = (oby / dx).floor();
+                    let fz = (obz / dx).floor();
+                    let nx_m1 = (nx - 1) as f64;
+                    let ny_m1 = (ny - 1) as f64;
+                    let nz_m1 = (nz - 1) as f64;
+                    let bx = fx.max(0.0).min(nx_m1) as usize;
+                    let by = fy.max(0.0).min(ny_m1) as usize;
+                    let bz = fz.max(0.0).min(nz_m1) as usize;
+                    let tx = T::from_f64(obx / dx - fx).unwrap();
+                    let ty = T::from_f64(oby / dx - fy).unwrap();
+                    let tz = T::from_f64(obz / dx - fz).unwrap();
+                    let val = self.trilinear(bx, by, bz, tx, ty, tz);
+                    self.u[c] = val;
+                }
+            }
+        }
+    }
+
+    /// 扩散-对流混合步:先平流(半拉格朗日)后扩散(FTCS)。
+    ///
+    /// 顺序:u ← advect(u);u ← diffuse(u)。两步各自基于 `u_prev` 快照互不污染。
+    /// 扩散数 `r = α·dt/dx²` 仍须 ≤ 1/6,否则 `step_diffusion` 会 panic 提示调参。
+    /// 返回扩散步的稳定性数 `r`(平流步本身无条件稳定,不贡献 r)。
+    pub fn step_advection_diffusion<F>(&mut self, vel: &F, alpha: T, dt: T) -> T
+    where
+        F: Fn(Vec3<T>) -> Vec3<T>,
+    {
+        self.advect(vel, dt);
+        self.step_diffusion(alpha, dt)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Bc;
+
+    #[test]
+    fn advect_translates_peak_with_uniform_velocity() {
+        // 初始在中心放一个温度峰,施加沿 +x 的匀速流,平流应把峰整体平移 v·dt。
+        let mut f = ScalarField::<f64>::new(16, 16, 16, 0.5, 0.0, Bc::Neumann);
+        let c = (8, 8, 8);
+        let ci = f.idx(c.0, c.1, c.2);
+        f.u[ci] = 1.0;
+        let vx = 0.5; // 单位速度,dt=1 => 平移 1 个 dx(=0.5)
+        let dt = 1.0;
+        let vel = |_p: Vec3<f64>| Vec3::new(vx, 0.0, 0.0);
+        f.advect(&vel, dt);
+        // 峰值应出现在 x 方向 +2 个格处(1.0 * dt/dx = 1 个单元,半拉格朗日取回前位置)。
+        let new_i = (c.0 as f64 + vx * dt / f.dx).round() as usize;
+        let new_ci = f.idx(new_i.min(15), c.1, c.2);
+        assert!(f.u[new_ci] > 0.8, "平流后峰应平移到 i={}, 实测={}", new_i, f.u[new_ci]);
+        // 原位置应基本清空(被带走)。
+        assert!(f.u[ci] < 0.2, "原位置温度应被平流带走, 实测={}", f.u[ci]);
+    }
+
+    #[test]
+    fn advect_conserves_mass_nearly() {
+        // 半拉格朗日平流对平滑分布近似守恒总量(闭合边界下不溢出)。
+        let mut f = ScalarField::<f64>::new(24, 24, 24, 0.5, 0.0, Bc::Neumann);
+        // 高斯型分布
+        let ox = 12.0 * f.dx;
+        for k in 0..24 {
+            for j in 0..24 {
+                for i in 0..24 {
+                    let x = i as f64 * f.dx - ox;
+                    let y = j as f64 * f.dx - ox;
+                    let z = k as f64 * f.dx - ox;
+                    let ci = f.idx(i, j, k);
+                    f.u[ci] = (-(x * x + y * y + z * z) / 0.3).exp();
+                }
+            }
+        }
+        let sum0: f64 = f.u.iter().sum();
+        // 旋转流(无散度),总量应高度守恒。
+        let vel = |p: Vec3<f64>| Vec3::new(-p.y, p.x, 0.0);
+        for _ in 0..10 {
+            f.advect(&vel, 0.05);
+        }
+        let sum1: f64 = f.u.iter().sum();
+        let rel = (sum1 - sum0).abs() / sum0;
+        assert!(rel < 0.05, "旋转流平流质量相对漂移 {} 应 <5%", rel);
+    }
+
+    #[test]
+    fn step_advection_diffusion_is_stable_and_finite() {
+        let mut f = ScalarField::<f64>::new(20, 20, 20, 0.5, 0.0, Bc::Neumann);
+        let ci = f.idx(10, 10, 10);
+        f.u[ci] = 10.0;
+        // α·dt/dx² = 0.02/0.25 < 1/6,稳定;流场为常数平移。
+        let vel = |_p: Vec3<f64>| Vec3::new(0.2, 0.0, 0.0);
+        let r = f.step_advection_diffusion(&vel, 0.02, 0.1);
+        assert!(r < 1.0 / 6.0 + 1e-9, "扩散数应稳定, r={}", r);
+        assert!(f.u.iter().all(|&v| v.is_finite()), "对流-扩散后场应有限");
+        // 总量不应爆炸。
+        let sum: f64 = f.u.iter().sum();
+        assert!(sum < 1e3, "总量应受限, sum={}", sum);
     }
 }

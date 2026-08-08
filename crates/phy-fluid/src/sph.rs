@@ -325,21 +325,27 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidWorld<T> {
                     * (mu * m_i * self.particles[j].mass / rho_j * lap);
             });
 
-            // 加速度: (f_press + f_visc) / ρ_i + g
+            // SPH 近邻加速度(压力+粘性),不含体力;重力/浮力在 integrate 经 body_acc 叠加,
+            // 这样 `couple_heat`/`couple_points` 在 step→couple 阶段写入的浮力不会被此处覆盖。
             let acc = if rho_i > T::zero() {
                 (f_press + f_visc) / rho_i
             } else {
                 Vec3::zeros()
-            } + self.params.gravity;
+            };
             self.particles[i].acc = acc;
         }
     }
 
     /// 半隐式欧拉:v += a dt; x += v dt。
+    /// 总加速度 = SPH 近邻加速度 `acc` + 体力 `body_acc`(重力 + 浮力等耦合体力);
+    /// 结算后立即清零 `body_acc`,使浮力每帧由 `couple` 重新写入(对齐 World 的 step→couple 约定)。
     fn integrate(&mut self, dt: T) {
+        let g = self.params.gravity;
         for pt in self.particles.iter_mut() {
-            pt.vel += pt.acc * dt;
+            let a = pt.acc + g + pt.body_acc;
+            pt.vel += a * dt;
             pt.pos += pt.vel * dt;
+            pt.body_acc = Vec3::zeros();
         }
     }
 
@@ -492,7 +498,6 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidWorld<T> {
         if self.particles.is_empty() {
             return;
         }
-        let rho_f = self.params.rest_density;
         let g = self.params.gravity;
         let lo = self.params.bounds_min;
         let hi = self.params.bounds_max;
@@ -520,6 +525,44 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidWorld<T> {
             let tz = (z - hmin.z) / dx - fz;
             Some((cx, cy, cz, tx, ty, tz))
         };
+        // 安装对流速度场采样器:把当前 SPH 粒子速度快照按最近邻插值给热场,
+        // 使热场在下一步做扩散-对流求解(Boussinesq 闭环:热羽流被自身流速带走)。
+        // 闭包捕获快照(可 'static),按网格查询点数线性扫描,规模可控。
+        let samp_pos: Vec<(f64, f64, f64)> = self
+            .particles
+            .iter()
+            .map(|p| {
+                (
+                    p.pos.x.to_f64().unwrap_or(0.0),
+                    p.pos.y.to_f64().unwrap_or(0.0),
+                    p.pos.z.to_f64().unwrap_or(0.0),
+                )
+            })
+            .collect();
+        let samp_vel: Vec<Vec3<T>> = self.particles.iter().map(|p| p.vel).collect();
+        let vel_fn: Box<dyn Fn(Vec3<T>) -> Vec3<T>> = Box::new(move |q: Vec3<T>| {
+            let qx = q.x.to_f64().unwrap_or(0.0);
+            let qy = q.y.to_f64().unwrap_or(0.0);
+            let qz = q.z.to_f64().unwrap_or(0.0);
+            let mut bi = 0usize;
+            let mut bd = f64::INFINITY;
+            for (i, s) in samp_pos.iter().enumerate() {
+                let dxq = qx - s.0;
+                let dyq = qy - s.1;
+                let dzq = qz - s.2;
+                let d = dxq * dxq + dyq * dyq + dzq * dzq;
+                if d < bd {
+                    bd = d;
+                    bi = i;
+                }
+            }
+            if samp_vel.is_empty() {
+                Vec3::new(T::zero(), T::zero(), T::zero())
+            } else {
+                samp_vel[bi]
+            }
+        });
+        heat.set_vel_sampler(Some(vel_fn));
         for pt in self.particles.iter_mut() {
             // 仅对流体盒内的粒子做热浮力(盒外无温度场)。
             if pt.pos.x < lo.x || pt.pos.x > hi.x
@@ -541,18 +584,15 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidWorld<T> {
             } else {
                 t_ref
             };
-            // 密度随温度变化:ρ(T) = ρ0 / (1 + β·(T - T_ref))。
-            let denom = T::one() + beta * (temp - t_ref);
-            let rho_t = if denom > T::zero() {
-                rho_f / denom
-            } else {
-                rho_f
-            };
-            // 热浮力修正粒子加速度:等效为在重力反方向叠加一个上浮加速度。
-            // 浮力加速度 = -g · (ρ_f - ρ_t)/ρ_f(热区 ρ_t<ρ_f ⇒ 额外上举)。
-            // 注意 g 为加速度向量(此处为 (0,-9.81,0),向下),加“-g”才是向上。
-            let buoy_corr = -g * (rho_f - rho_t) / rho_f;
-            pt.acc += buoy_corr;
+            // Boussinesq 浮力(单位质量体力):
+            // 暖流体(ρ_t<ρ_f)应上浮。对单个流体微元,重力作用于其真实质量
+            // (ρ_t·g,向下),而排开环境流体(密度 ρ_f)获得全浮力 ρ_f·g(向上),
+            // 合力 ÷ 微元质量 ρ_t ⇒ 加速度 = -g·(ρ_f/ρ_t - 1)。
+            // 代入 ρ_t = ρ0/(1+β·ΔT),ρ_f/ρ_t = 1+β·ΔT,得 加速度 = -g·β·ΔT。
+            // 当 ΔT>0(暖)时该修正沿 -g 的反方向(向上),使暖羽流真正上举;
+            // 这与 step() 中施加的均匀重力 g 叠加后,暖粒子净加速度向上。
+            let buoy_corr = -g * beta * (temp - t_ref);
+            pt.body_acc += buoy_corr;
             // 对流热源:把速度幅值注入热场(运动区域升温)。
             if heat_gain > T::zero() {
                 let speed = pt.vel.norm();
@@ -675,6 +715,7 @@ fn na_distance<T: RealField + Copy>(a: &Vec3<T>, b: &Vec3<T>) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use phy_core::Subsystem;
     use phy_math::Vec3;
 
     fn test_params() -> SphParams<f64> {
@@ -885,9 +926,12 @@ mod tests {
         w.particles.push(pt);
 
         // 温度场:下半温 0,上半温 1(在 y>0 处热)。
+        // 温度剖面按局部 y = iy*dx - nx*dx/2 构建,故把场原点设到 (-8,-8,-8)
+        // 使格点 iy 对应世界坐标 -8+iy,从而“热区”正好在世界 y>0(粒子所在处)。
         let nx = 16usize;
         let dx = 1.0_f64;
-        let mut f = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
+        let mut f = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann)
+            .with_origin(Vec3::new(-8.0, -8.0, -8.0));
         for iy in 0..nx {
             let y = (iy as f64) * dx - (nx as f64) * dx / 2.0;
             let t = if y > 0.0 { 1.0 } else { 0.0 };
@@ -904,12 +948,13 @@ mod tests {
         // 调用(通过 HeatFieldLike trait 对象)。
         w.couple_heat(&mut heat, 0.01, t_ref, beta, 0.0);
 
-        // 热区:ρ_t < ρ_f ⇒ buoy_corr > 0 ⇒ acc.y 应 > -9.81(比纯重力上举更强)。
-        let acc = w.particles[0].acc;
+        // 热区:浮力写入 body_acc,净加速度 = g + body_acc;暖区 body_acc.y > 0
+        // 使净加速度比纯重力(-9.81)更向上(更接近 0 或为正)。
+        let net_y = w.params.gravity.y + w.particles[0].body_acc.y;
         assert!(
-            acc.y > -9.81,
-            "热区粒子应获得向上热浮力修正(acc.y > -g), got {}",
-            acc.y
+            net_y > -9.81,
+            "热区粒子应获得向上热浮力修正(净 acc.y > -g), got {}",
+            net_y
         );
     }
 
@@ -940,6 +985,86 @@ mod tests {
             "运动区域热场应升温, before={}, after={}",
             before,
             after
+        );
+    }
+
+    #[test]
+    fn boussinesq_closed_loop_plume_rises_and_advects() {
+        // Boussinesq 闭环:暖斑受浮力上升 → 流体获得向上速度 → 该速度场使热场被对流
+        // 平流(vel_sampler 由 couple_heat 安装)→ 暖斑随流上移。验证热浮力↔对流闭环。
+        use phy_field::{Bc, HeatField, ScalarField};
+        let mut p = test_params();
+        p.gravity = Vec3::new(0.0, -9.81, 0.0);
+        let mut w = FluidWorld::new(p);
+        // 用小盒填少量流体,避免大计算量。粒子集中在世界原点附近。
+        w.particles.clear();
+        let n = 3;
+        let dxp = 0.4_f64;
+        for ix in 0..n {
+            for iy in 0..n {
+                for iz in 0..n {
+                    let x = (ix as f64 - 1.0) * dxp;
+                    let y = (iy as f64 - 1.0) * dxp;
+                    let z = (iz as f64 - 1.0) * dxp;
+                    w.particles.push(Particle::new(Vec3::new(x, y, z), 0.05));
+                }
+            }
+        }
+
+        // 热场:把网格原点设为 (-8,-8,-8),使中心格 (8,8,8) 正好映射到世界原点
+        // (流体粒子所在处),这样暖斑在流体内、浮力真正驱动闭环。
+        let nx = 16usize;
+        let dx = 1.0_f64;
+        let mut f = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann)
+            .with_origin(Vec3::new(-8.0, -8.0, -8.0));
+        let c = (8usize, 8usize, 8usize);
+        let ci = f.idx(c.0, c.1, c.2);
+        f.u[ci] = 5.0;
+        let mut heat = HeatField::new(f, 0.01);
+        let t_ref = 0.0_f64;
+        let beta = 0.5_f64;
+
+        let warm_centroid_y = |h: &HeatField<f64>| -> f64 {
+            let mut sy = 0.0;
+            let mut sw = 0.0;
+            for iz in 0..nx {
+                for iy in 0..nx {
+                    for ix in 0..nx {
+                        let v = h.field.u[h.field.idx(ix, iy, iz)];
+                        if v > 0.1 {
+                            sy += (iy as f64) * dx * v;
+                            sw += v;
+                        }
+                    }
+                }
+            }
+            if sw > 0.0 {
+                sy / sw
+            } else {
+                0.0
+            }
+        };
+
+        let y0 = warm_centroid_y(&heat);
+        let dt = 0.005_f64;
+        for _ in 0..40 {
+            // 每帧:1) couple_heat 刷新速度采样器 + 施热浮力 + 注入热源;
+            //       2) 热场 step 用该速度做扩散-对流;3) 流体 step 推进(浮力加速度已入 acc)。
+            w.couple_heat(&mut heat, dt, t_ref, beta, 0.01);
+            heat.step(&dt);
+            w.step(dt);
+        }
+        let y1 = warm_centroid_y(&heat);
+        assert!(
+            y1 > y0 + dx * 0.05,
+            "Boussinesq 闭环下暖斑质心应上升(热浮力驱动对流平流): y0={}, y1={}",
+            y0,
+            y1
+        );
+        // 场仍有限(没有数值爆炸)。
+        assert!(
+            heat.field.u.iter().all(|&v| v.is_finite()),
+            "闭环多帧步进后热场应有限"
         );
     }
 }

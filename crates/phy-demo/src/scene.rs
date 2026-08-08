@@ -716,9 +716,14 @@ mod tests {
 
     #[test]
     fn world_couples_fluid_heat_thermal_buoyancy() {
-        // 上热下冷 → 上方流体粒子获得向上浮力修正(acc.y > -g)。
+        // 上热下冷 → 上方流体粒子获得向上浮力修正(竖直速度向上)。
+        // 注意 World::step 顺序为 step→couple,浮力经 body_acc 在下一帧 integrate 才生效,
+        // 故需多步(step 几帧)后浮力才会反映到粒子速度上。
         let mut w = build_fluid_heat_world(true);
-        w.step(1.0 / 60.0);
+        let dt = 1.0 / 60.0;
+        for _ in 0..4 {
+            w.step(dt);
+        }
         // 动态查找流体子系统索引(不依赖注册顺序)。
         let mut fidx = None;
         for i in 0..w.subsystem_count() {
@@ -736,14 +741,16 @@ mod tests {
             .as_any()
             .downcast_ref::<FluidSubsystem<f64>>()
             .unwrap();
-        // 取一个位于 y>0(热区)的粒子,验证其竖直加速度被上举修正。
+        // 取一个位于 y>0(热区)的粒子,验证数帧后其竖直速度向上
+        // (热浮力经 body_acc 在 integrate 中叠加,使暖粒子上举)。
         let mut found = false;
         for p in &fsub.world.particles {
             if p.pos.y > 0.0 {
+                // 暖粒子应获向上浮力 → 竖直速度为正(向上)。
                 assert!(
-                    p.acc.y > -9.81,
-                    "热区粒子应获向上热浮力修正, acc.y={}",
-                    p.acc.y
+                    p.vel.y > 0.0,
+                    "热区粒子应获向上热浮力修正(vel.y > 0), vel.y={}",
+                    p.vel.y
                 );
                 found = true;
                 break;

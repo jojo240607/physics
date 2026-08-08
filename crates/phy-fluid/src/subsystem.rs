@@ -3,7 +3,7 @@
 use std::any::Any;
 
 use phy_core::{Subsystem, World};
-use phy_field::{GridGeometry, HeatField, HeatFieldLike};
+use phy_field::{HeatField, HeatFieldLike};
 use phy_math::RealField;
 
 use crate::sph::FluidWorld;
@@ -21,6 +21,10 @@ pub struct FluidSubsystem<T: RealField + Copy + num_traits::ToPrimitive> {
     pub thermal_expansion: T,
     /// 对流换热注入强度(运动区域升温)。0 表示不注入热源。
     pub heat_gain: T,
+    /// 参考温度 T_ref(环境温度基线,对应 ρ(T_ref)=ρ0)。浮力按 ΔT=T−T_ref 计算,
+    /// 暖区(ΔT>0)上举、冷区(ΔT<0)下沉。默认 0(与物理"无浮力基线"一致)。
+    /// 注意:切勿取热场中心格作为 T_ref(若热场最热处恰在中心,会让所有浮力归零/反向)。
+    pub t_ref: T,
 }
 
 impl<T: RealField + Copy + num_traits::ToPrimitive> FluidSubsystem<T> {
@@ -30,6 +34,7 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidSubsystem<T> {
             world,
             thermal_expansion: T::zero(),
             heat_gain: T::zero(),
+            t_ref: T::zero(),
         }
     }
 }
@@ -63,21 +68,9 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> Subsystem<T> for FluidSubsys
             }
         }
         if let Some(hi) = heat_idx {
-            // 取热场参考温度(取为场初值不便,这里取场格点最小值作为 T_ref 近似)。
-            // 更稳妥:T_ref 取热度场原点初值;这里用场中心采样作为 t_ref。
-            let t_ref = {
-                let h = world.get(hi).unwrap();
-                let hf = h.as_any().downcast_ref::<HeatField<T>>().unwrap();
-                let (nx, ny, nz) = hf.dims();
-                hf.sample_trilinear(
-                    nx / 2,
-                    ny / 2,
-                    nz / 2,
-                    0.0,
-                    0.0,
-                    0.0,
-                )
-            };
+            // 参考温度 T_ref 取子系统显式配置(默认 0,即环境温度基线),
+            // 不取热场中心格采样(否则最热处落在中心时所有浮力归零/反向,见 M11 记录)。
+            let t_ref = self.t_ref;
             // 取出热场可变引用(此时 self 不在 World 中,无别名冲突)。
             let mut heat_box = world.remove(hi);
             let heat = heat_box

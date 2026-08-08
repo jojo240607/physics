@@ -8,6 +8,7 @@ members = [
     "crates/phy-soft",
     "crates/phy-optics",
     "crates/phy-field",
+    "crates/phy-solid",
     "crates/phy-io",
     "crates/phy-demo",
 ]
