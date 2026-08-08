@@ -7,10 +7,12 @@
 //!   弹簧力 + 重力 + 地面/边界碰撞(单向:软体被静态边界挡住)。
 //! - `SoftSubsystem`:适配 `phy_core::Subsystem`,挂到 `World` 统一调度。
 //!
-//! 与刚体(M3)的双向耦合已接入 Demo:`SoftBody::collide_body` 用刚体形状的
-//! `contains_local` 检测穿透并沿外法线把质点推出,可动刚体同时收到反向冲量
-//! (见 `phy-demo` 的 `Scene::couple_soft_rigid`)。本里程碑软体本身只对静态
-//! 地面/盒边界碰撞,可独立 `step`。
+//! 与刚体(M3)、流体(M5)的双向耦合均经 `World::couple` 阶段完成:
+//! - 软体↔刚体:`SoftBody::collide_body` 用刚体形状 `contains_local` 检测穿透,
+//!   沿外法线把质点推出,可动刚体同时收到反向冲量;
+//! - 软体↔流体:`SoftSubsystem::couple` 把软体质点打包成 `CouplePoint` 交给
+//!   `FluidWorld::couple_points`,获得浮力 + 阻力(soft→fluid 反向动量在流体侧分配)。
+//! 本里程碑软体本身只对静态地面/盒边界碰撞,可独立 `step`。
 
 mod body;
 mod sub;
@@ -29,8 +31,7 @@ pub const DEFAULT_VERLET_DAMP: f64 = 0.99;
 mod tests {
     use super::*;
     use phy_math::na;
-    use phy_core::World;
-    use phy_math::{gravity, RealField, Vec3};
+    use phy_math::{gravity, Vec3};
 
     #[test]
     fn free_fall_single_particle() {
@@ -166,5 +167,81 @@ mod tests {
         soft.particles[0].vel = Vec3::new(-1.0, 0.0, 0.0);
         let imp = soft.collide_body(&body);
         assert!(imp.x > 0.0, "movable body should receive +x impulse, got {}", imp.x);
+    }
+
+    #[test]
+    fn world_couples_soft_fluid_rigid() {
+        // 端到端:World 中同时挂刚体/流体/软体,step 时软体应同时与两者耦合。
+        // 用较小的流体盒 + 少量软体质点,验证:无 panic、无 NaN、耦合阶段
+        // (动态查找子系统下标 + 软体↔刚体/↔流体)可正常运行。
+        use phy_core::World;
+        use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
+        use phy_rigid::{Body, RigidSubsystem, RigidWorld, Shape};
+
+        let mut world: World<f64> = World::default();
+
+        // 刚体:静态地面 + 一个可动球。
+        let mut rigid = RigidWorld::<f64>::new();
+        rigid.add_body(Body {
+            shape: Shape::Box {
+                half: Vec3::new(20.0, 0.5, 20.0),
+            },
+            pos: Vec3::new(0.0, -0.5, 0.0),
+            rot: na::UnitQuaternion::identity(),
+            vel: Vec3::zeros(),
+            inv_mass: 0.0,
+        });
+        rigid.add_body(Body {
+            shape: Shape::Sphere { r: 0.5 },
+            pos: Vec3::new(0.0, 1.0, 0.0),
+            rot: na::UnitQuaternion::identity(),
+            vel: Vec3::zeros(),
+            inv_mass: 1.0 / 2.0,
+        });
+
+        // 流体:小盒(避免 1000+ 粒子拖慢测试)。
+        let mut fp = SphParams::<f64>::defaults();
+        fp.bounds_min = Vec3::new(-2.0, 0.0, -2.0);
+        fp.bounds_max = Vec3::new(2.0, 4.0, 2.0);
+        let mut fluid = FluidWorld::new(fp);
+        fluid.fill_box(
+            Vec3::new(-1.0, 0.5, -1.0),
+            Vec3::new(1.0, 3.0, 1.0),
+            0.4,
+            0.1,
+        );
+
+        // 软体:少量质点,部分浸入流体盒内(应受浮力上举)。
+        let mut soft = SoftBody::<f64>::new(-9.81);
+        let _ = soft.add_particle(Vec3::new(0.0, 1.5, 0.0), 1.0); // 在流体盒内
+        let _ = soft.add_particle(Vec3::new(0.0, 5.0, 0.0), 1.0); // 在流体盒外(仅重力)
+
+        world.add_subsystem(Box::new(RigidSubsystem::new(rigid)));
+        world.add_subsystem(Box::new(FluidSubsystem::new(fluid)));
+        world.add_subsystem(Box::new(SoftSubsystem::new(soft)));
+
+        for _ in 0..40 {
+            world.step(1.0 / 60.0);
+        }
+
+        // 取回软体,验证所有质点有限(耦合未产生 NaN/爆炸)。
+        let soft = world
+            .get(2)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<SoftSubsystem<f64>>()
+            .unwrap();
+        for p in &soft.body.particles {
+            assert!(p.pos.x.is_finite() && p.pos.y.is_finite() && p.pos.z.is_finite());
+            assert!(p.vel.x.is_finite() && p.vel.y.is_finite() && p.vel.z.is_finite());
+        }
+        // 浸入流体的质点应受到向上的净力(浮力 > 重力分量),力 y 分量应 > 纯重力。
+        // 纯重力 force.y = m*g = -1*9.81 ≈ -9.81;浮力使其更靠近 0 或为正。
+        let submerged = &soft.body.particles[0];
+        assert!(
+            submerged.force.y > -9.81,
+            "浸入流体的质点应受浮力(force.y 应大于纯重力 -9.81), got {}",
+            submerged.force.y
+        );
     }
 }

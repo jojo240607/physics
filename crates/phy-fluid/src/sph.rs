@@ -120,6 +120,34 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> Grid<T> {
     }
 }
 
+/// 软体 / 任意点质量与流体的耦合接口所用的单点描述。
+///
+/// 调用方填入 `pos`/`vel`/`mass`,`couple_points` 计算施加到该点的合力(浮力+阻力)
+/// 写入 `force`;调用方据此更新点速度,即完成 fluid→soft 作用。soft→fluid 的
+/// 反向动量由 `couple_points` 内部直接分配到邻域流体粒子,无需调用方处理。
+pub struct CouplePoint<T: RealField + Copy> {
+    /// 点世界坐标(只读输入)。
+    pub pos: Vec3<T>,
+    /// 点速度(只读输入)。
+    pub vel: Vec3<T>,
+    /// 点质量(只读输入)。
+    pub mass: T,
+    /// 输出:本步施加到该点的净力(浮力 + 阻力)。
+    pub force: Vec3<T>,
+}
+
+impl<T: RealField + Copy> CouplePoint<T> {
+    /// 构造一个待耦合点。
+    pub fn new(pos: Vec3<T>, vel: Vec3<T>, mass: T) -> Self {
+        Self {
+            pos,
+            vel,
+            mass,
+            force: Vec3::zeros(),
+        }
+    }
+}
+
 /// SPH 流体世界。
 pub struct FluidWorld<T: RealField + Copy + num_traits::ToPrimitive> {
     /// 求解参数。
@@ -437,7 +465,87 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidWorld<T> {
         }
     }
 
-    /// 把穿透粒子的位置沿法线推回刚体表面,并阻尼其法向相对速度。
+    /// 软体质点(或任意点质量)与流体的双向耦合:浮力 + 阻力 + 动量交换。
+///
+/// 对每个位于流体盒内的点:
+/// 1. 用均匀网格采样邻域平均流体速度 `v_f`;
+/// 2. 浮力 `f_b = -ρf·vol·g`(阿基米德,`vol = mass / soft_density`);
+/// 3. 线性阻力 `f_d = drag·mass·(v_f - v)`(趋向局部流速);
+/// 合力写入 `pt.force`。同时把等大反向冲量 `-(f_b+f_d)·dt` 分配到邻域流体粒子
+/// (按质量比例),实现 soft→fluid 的动量交换(流体被软体推开)。
+///
+/// 点位于盒外时不耦合(`force` 保持零)。`soft_density` 为软体质点的等效密度,
+/// 用于把质量换算成排开体积;取 0 时退化为无浮力(仅阻力)。
+pub fn couple_points(
+    &mut self,
+    pts: &mut [CouplePoint<T>],
+    dt: T,
+    drag: T,
+    soft_density: T,
+) {
+    if pts.is_empty() || self.particles.is_empty() {
+        return;
+    }
+    let rho_f = self.params.rest_density;
+    let g = self.params.gravity;
+    let lo = self.params.bounds_min;
+    let hi = self.params.bounds_max;
+    // 重建邻居网格(耦合在 step 之后调用,粒子位置已变,需刷新)。
+    self.grid.build(&self.particles);
+
+    for pt in pts.iter_mut() {
+        // 仅在流体盒内耦合。
+        if pt.pos.x < lo.x
+            || pt.pos.x > hi.x
+            || pt.pos.y < lo.y
+            || pt.pos.y > hi.y
+            || pt.pos.z < lo.z
+            || pt.pos.z > hi.z
+        {
+            continue;
+        }
+        // 采样邻域平均流体速度(含自身单元 3x3x3)。
+        let mut v_sum = Vec3::zeros();
+        let mut w_sum = T::zero();
+        self.grid.for_each_neighbor(&pt.pos, |j| {
+            let w = self.particles[j].mass;
+            v_sum += self.particles[j].vel * w;
+            w_sum += w;
+        });
+        let v_f = if w_sum > T::zero() {
+            v_sum / w_sum
+        } else {
+            Vec3::zeros()
+        };
+        // 浮力:排开体积 = 质量 / 软体密度。
+        let vol = if soft_density > T::zero() {
+            pt.mass / soft_density
+        } else {
+            T::zero()
+        };
+        let f_b = -g * (rho_f * vol);
+        // 阻力:趋向局部流速。
+        let f_d = (v_f - pt.vel) * (drag * pt.mass);
+        let f = f_b + f_d;
+        pt.force = f;
+        // soft→fluid 反向动量:把 -f·dt 按质量比例分配到邻域流体粒子。
+        let mut m_sum = T::zero();
+        let mut idxs: Vec<usize> = Vec::new();
+        self.grid.for_each_neighbor(&pt.pos, |j| {
+            m_sum += self.particles[j].mass;
+            idxs.push(j);
+        });
+        if m_sum > T::zero() {
+            let reaction = -f * dt;
+            for &j in idxs.iter() {
+                let frac = self.particles[j].mass / m_sum;
+                self.particles[j].vel += reaction * frac;
+            }
+        }
+    }
+}
+
+/// 把穿透粒子的位置沿法线推回刚体表面,并阻尼其法向相对速度。
     fn push_out(pt: &mut Particle<T>, body: &Body<T>, _friction: T) {
         let local = body.to_local(&pt.pos);
         // 用"指向表面点的方向"推回;若恰好在中心则取 +Y。
@@ -629,6 +737,37 @@ mod tests {
             body.vel.y > v0,
             "轻球应因浮力获得向上的速度,实际 vy={}",
             body.vel.y
+        );
+    }
+
+    #[test]
+    fn couple_points_buoyancy_upward() {
+        // 静止流体中淹没的点应收到向上的浮力(force.y > 0),且流体获得反向动量。
+        let mut p = test_params();
+        p.gravity = Vec3::new(0.0, -9.81, 0.0);
+        let mut w = FluidWorld::new(p);
+        w.fill_box(
+            Vec3::new(-0.5, -0.5, -0.5),
+            Vec3::new(0.5, 0.5, 0.5),
+            0.1,
+            0.05,
+        );
+        for _ in 0..15 {
+            w.step(0.0025);
+        }
+        // 软体密度 ~ 同流体,质量 0.02(=单粒子质量),应受净浮力(因流体静止,无下拽)。
+        let mut pt = CouplePoint::new(Vec3::new(0.0, 0.0, 0.0), Vec3::zeros(), 0.02);
+        // 记录流体总动量(用于验证反向交换)。
+        let p_before: Vec3<f64> = w.particles.iter().map(|x| x.vel * x.mass).sum();
+        w.couple_points(std::slice::from_mut(&mut pt), 0.0025, 1.0, w.params.rest_density);
+        assert!(pt.force.y > 0.0, "淹没点应受向上浮力, got {}", pt.force.y);
+        let p_after: Vec3<f64> = w.particles.iter().map(|x| x.vel * x.mass).sum();
+        // 流体因承受能力应获得向下的动量(总动量守恒:点 + 流体 ≈ 0 变化前的系统静止)。
+        let dp_fluid = p_after - p_before;
+        assert!(
+            dp_fluid.y < 0.0,
+            "流体应获得向下的反向动量, got {}",
+            dp_fluid.y
         );
     }
 }

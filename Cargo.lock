@@ -1178,6 +1178,7 @@ version = "0.1.0"
 dependencies = [
  "num-traits",
  "phy-core",
+ "phy-fluid",
  "phy-math",
  "phy-rigid",
 ]

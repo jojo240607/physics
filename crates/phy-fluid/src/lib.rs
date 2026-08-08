@@ -13,5 +13,5 @@ mod subsystem;
 
 pub use kernels::{dist, Kernels};
 pub use particle::Particle;
-pub use sph::{FluidWorld, SphParams};
+pub use sph::{CouplePoint, FluidWorld, SphParams};
 pub use subsystem::FluidSubsystem;
