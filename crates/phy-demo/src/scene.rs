@@ -1185,4 +1185,87 @@ mod tests {
         let dist = (rsub.world.bodies[1].pos - rsub.world.bodies[0].pos).norm();
         assert!((dist - 1.5).abs() < 0.05, "关节杆长应收敛到 1.5, 实际 {}", dist);
     }
+
+    /// M20 集成:射线投射车辆(raycast vehicle)经 `World` 驱动生效 —— 车身被悬挂托在
+    /// 地面上方,引擎驱动使其前进。复用刚体子系统(`RigidSubsystem`),每帧先 `vehicle.update`
+    /// 注入悬挂/轮胎力,再 `world.step`。
+    #[test]
+    fn world_drives_raycast_vehicle() {
+        let mut w = World::<f64>::new();
+        let mut rworld = RigidWorld::new();
+        rworld.gravity = Vec3::new(0.0, -9.81, 0.0);
+        // 静态大地面(1500 半宽,足够长不会驶出边缘)。
+        rworld.add_body(Body {
+            shape: Shape::Box {
+                half: Vec3::new(1500.0, 0.5, 1500.0),
+            },
+            pos: Vec3::new(0.0, -0.5, 0.0),
+            rot: na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 0.0,
+        });
+        // 车身(500 kg 盒),悬空在地面上方。
+        let cid = rworld.add_body(Body {
+            shape: Shape::Box {
+                half: Vec3::new(1.0, 0.25, 0.5),
+            },
+            pos: Vec3::new(0.0, 1.0, 0.0),
+            rot: na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 1.0 / 500.0,
+        });
+        // 四轮:四角,悬挂自然长度 0.6、刚度 8000、阻尼 800、轮半径 0.3。
+        let rest = 0.6;
+        let k = 8000.0;
+        let c = 800.0;
+        let r = 0.3;
+        let wheels = vec![
+            phy_rigid::Wheel::new(Vec3::new(-0.9, -0.25, 0.4), rest, k, c, r, 1.0, 1.0),
+            phy_rigid::Wheel::new(Vec3::new(0.9, -0.25, 0.4), rest, k, c, r, 1.0, 1.0),
+            phy_rigid::Wheel::new(Vec3::new(-0.9, -0.25, -0.4), rest, k, c, r, 1.0, 1.0),
+            phy_rigid::Wheel::new(Vec3::new(0.9, -0.25, -0.4), rest, k, c, r, 1.0, 1.0),
+        ];
+        let mut veh = phy_rigid::Vehicle::new(cid, wheels);
+        veh.set_engine(3000.0);
+
+        let mut rsub = RigidSubsystem::new(rworld);
+        w.add_subsystem(Box::new(rsub));
+
+        let dt = 1.0 / 120.0;
+        let ridx = (0..w.subsystem_count())
+            .find(|&i| w.get(i).unwrap().as_any().downcast_ref::<RigidSubsystem<f64>>().is_some())
+            .unwrap();
+
+        // 先让车辆着地稳定。
+        for _ in 0..200 {
+            {
+                let rs = w.get_mut(ridx).unwrap().as_any_mut().downcast_mut::<RigidSubsystem<f64>>().unwrap();
+                veh.update(&mut rs.world, dt);
+            }
+            w.step(dt);
+        }
+        let y_grounded = {
+            let rs = w.get(ridx).unwrap().as_any().downcast_ref::<RigidSubsystem<f64>>().unwrap();
+            rs.world.bodies[cid].pos.y
+        };
+        assert!(y_grounded > 0.3 && y_grounded < 1.5, "车身应被悬挂托在地面上方, y={}", y_grounded);
+
+        let x0 = {
+            let rs = w.get(ridx).unwrap().as_any().downcast_ref::<RigidSubsystem<f64>>().unwrap();
+            rs.world.bodies[cid].pos.x
+        };
+        // 引擎驱动前进。
+        for _ in 0..200 {
+            {
+                let rs = w.get_mut(ridx).unwrap().as_any_mut().downcast_mut::<RigidSubsystem<f64>>().unwrap();
+                veh.update(&mut rs.world, dt);
+            }
+            w.step(dt);
+        }
+        let x1 = {
+            let rs = w.get(ridx).unwrap().as_any().downcast_ref::<RigidSubsystem<f64>>().unwrap();
+            rs.world.bodies[cid].pos.x
+        };
+        assert!(x1 > x0, "引擎应驱动车身前进, dx={}", x1 - x0);
+    }
 }
