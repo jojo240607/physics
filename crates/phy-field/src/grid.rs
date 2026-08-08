@@ -9,7 +9,7 @@
 //! - 波动/电磁标量:∂²u/∂t² = c² ∇²u  (leapfrog 显式,条件 c·dt/dx ≤ 1/√3)。
 
 use num_traits::FromPrimitive;
-use phy_math::RealField;
+use phy_math::{RealField, Vec3};
 
 /// 边界条件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,10 +40,13 @@ pub struct ScalarField<T: RealField + Copy> {
     pub bc_val: T,
     /// 当前时间。
     pub t: T,
+    /// 网格原点(最小角)的世界坐标;默认 (0,0,0)。
+    /// 用于把网格索引映射到世界坐标,支持耦合(流体/软体位置 → 网格)。
+    pub origin: Vec3<T>,
 }
 
 impl<T: RealField + Copy> ScalarField<T> {
-    /// 构造(nx×ny×nz),全部初始化为 `val`。
+    /// 构造(nx×ny×nz),全部初始化为 `val`,原点默认 (0,0,0)。
     pub fn new(nx: usize, ny: usize, nz: usize, dx: T, val: T, bc: Bc) -> Self {
         let n = nx * ny * nz;
         Self {
@@ -57,7 +60,14 @@ impl<T: RealField + Copy> ScalarField<T> {
             bc,
             bc_val: val,
             t: T::zero(),
+            origin: Vec3::zeros(),
         }
+    }
+
+    /// 设置网格原点(世界坐标最小角)并返回 `self`,链式构造。
+    pub fn with_origin(mut self, origin: Vec3<T>) -> Self {
+        self.origin = origin;
+        self
     }
 
     #[inline]

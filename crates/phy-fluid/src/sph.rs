@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use phy_field::HeatFieldLike;
 use phy_math::{RealField, Vec3};
 use phy_rigid::shape::{Body, Shape};
 
@@ -465,6 +466,105 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidWorld<T> {
         }
     }
 
+    /// 流体↔热场(温度场)双向耦合。
+    ///
+    /// 两个物理效应:
+    /// 1. **热浮力(thermal buoyancy)**:流体密度随温度升高而降低
+    ///    (ρ(T) = ρ0 / (1 + β·(T - T_ref))),于是浮力修正为
+    ///    `f_b = -g · ρ(T) · vol`(比常温处更轻、上浮更强)。
+    ///    温度 `T` 由热场在粒子位置三线性插值得到。
+    /// 2. **对流热源(advective heating)**:流体粒子的动能耗散/速度被注入为热源,
+    ///    即把每个粒子的速度幅值(运动强度)累加到热场同格 `src` 上,
+    ///    使流动区域升温(对流换热近似)。`heat_gain` 控制注入强度。
+    ///
+    /// `heat` 为热场的可变引用(由调用方从 `World` 取出);`t_ref` 为参考温度
+    /// (通常取热场初值,对应无浮力修正)。`dt` 仅用于对流热源分配(若 heat_gain=0 可忽略)。
+    pub fn couple_heat(
+        &mut self,
+        heat: &mut dyn HeatFieldLike<T>,
+        dt: T,
+        t_ref: T,
+        beta: T,
+        heat_gain: T,
+    ) where
+        T: num_traits::ToPrimitive,
+    {
+        if self.particles.is_empty() {
+            return;
+        }
+        let rho_f = self.params.rest_density;
+        let g = self.params.gravity;
+        let lo = self.params.bounds_min;
+        let hi = self.params.bounds_max;
+        let dims = heat.dims();
+        let hmin = heat.origin();
+        let dx = heat.cell_size();
+        let nx_m1 = T::from_usize(dims.0.saturating_sub(1)).unwrap_or(T::zero());
+        let ny_m1 = T::from_usize(dims.1.saturating_sub(1)).unwrap_or(T::zero());
+        let nz_m1 = T::from_usize(dims.2.saturating_sub(1)).unwrap_or(T::zero());
+        let to_idx = |x: T, y: T, z: T| -> Option<(usize, usize, usize, T, T, T)> {
+            if x < hmin.x || x > hmin.x + dx * nx_m1
+                || y < hmin.y || y > hmin.y + dx * ny_m1
+                || z < hmin.z || z > hmin.z + dx * nz_m1
+            {
+                return None;
+            }
+            let fx = ((x - hmin.x) / dx).floor();
+            let fy = ((y - hmin.y) / dx).floor();
+            let fz = ((z - hmin.z) / dx).floor();
+            let cx = fx.to_usize().unwrap_or(0);
+            let cy = fy.to_usize().unwrap_or(0);
+            let cz = fz.to_usize().unwrap_or(0);
+            let tx = (x - hmin.x) / dx - fx;
+            let ty = (y - hmin.y) / dx - fy;
+            let tz = (z - hmin.z) / dx - fz;
+            Some((cx, cy, cz, tx, ty, tz))
+        };
+        for pt in self.particles.iter_mut() {
+            // 仅对流体盒内的粒子做热浮力(盒外无温度场)。
+            if pt.pos.x < lo.x || pt.pos.x > hi.x
+                || pt.pos.y < lo.y || pt.pos.y > hi.y
+                || pt.pos.z < lo.z || pt.pos.z > hi.z
+            {
+                continue;
+            }
+            // 三线性插值温度。
+            let temp = if let Some((cx, cy, cz, tx, ty, tz)) = to_idx(pt.pos.x, pt.pos.y, pt.pos.z) {
+                heat.sample_trilinear(
+                    cx,
+                    cy,
+                    cz,
+                    tx.to_f64().unwrap_or(0.0),
+                    ty.to_f64().unwrap_or(0.0),
+                    tz.to_f64().unwrap_or(0.0),
+                )
+            } else {
+                t_ref
+            };
+            // 密度随温度变化:ρ(T) = ρ0 / (1 + β·(T - T_ref))。
+            let denom = T::one() + beta * (temp - t_ref);
+            let rho_t = if denom > T::zero() {
+                rho_f / denom
+            } else {
+                rho_f
+            };
+            // 热浮力修正粒子加速度:等效为在重力反方向叠加一个上浮加速度。
+            // 浮力加速度 = -g · (ρ_f - ρ_t)/ρ_f(热区 ρ_t<ρ_f ⇒ 额外上举)。
+            // 注意 g 为加速度向量(此处为 (0,-9.81,0),向下),加“-g”才是向上。
+            let buoy_corr = -g * (rho_f - rho_t) / rho_f;
+            pt.acc += buoy_corr;
+            // 对流热源:把速度幅值注入热场(运动区域升温)。
+            if heat_gain > T::zero() {
+                let speed = pt.vel.norm();
+                if let Some((cx, cy, cz, _tx, _ty, _tz)) =
+                    to_idx(pt.pos.x, pt.pos.y, pt.pos.z)
+                {
+                    heat.add_source(cx, cy, cz, heat_gain * speed * dt);
+                }
+            }
+        }
+    }
+
     /// 软体质点(或任意点质量)与流体的双向耦合:浮力 + 阻力 + 动量交换。
 ///
 /// 对每个位于流体盒内的点:
@@ -768,6 +868,78 @@ mod tests {
             dp_fluid.y < 0.0,
             "流体应获得向下的反向动量, got {}",
             dp_fluid.y
+        );
+    }
+
+    #[test]
+    fn couple_heat_warmer_fluid_rises() {
+        // 温度场下半热、上半冷:温升处流体密度下降 → 粒子获得向上的额外加速度。
+        use phy_field::{Bc, HeatField, ScalarField};
+        let mut p = test_params();
+        p.gravity = Vec3::new(0.0, -9.81, 0.0);
+        let mut w = FluidWorld::new(p);
+        // 单个粒子放在略偏上方的“热”区。
+        w.particles.clear();
+        let mut pt = Particle::new(Vec3::new(0.0, 1.0, 0.0), 0.05);
+        pt.acc = Vec3::zeros();
+        w.particles.push(pt);
+
+        // 温度场:下半温 0,上半温 1(在 y>0 处热)。
+        let nx = 16usize;
+        let dx = 1.0_f64;
+        let mut f = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
+        for iy in 0..nx {
+            let y = (iy as f64) * dx - (nx as f64) * dx / 2.0;
+            let t = if y > 0.0 { 1.0 } else { 0.0 };
+            for ix in 0..nx {
+                for iz in 0..nx {
+                    let idx = f.idx(ix, iy, iz);
+                    f.u[idx] = t;
+                }
+            }
+        }
+        let mut heat = HeatField::new(f, 0.1);
+        let t_ref = 0.0_f64;
+        let beta = 0.5_f64; // ρ(T)=ρ0/(1+0.5·T)
+        // 调用(通过 HeatFieldLike trait 对象)。
+        w.couple_heat(&mut heat, 0.01, t_ref, beta, 0.0);
+
+        // 热区:ρ_t < ρ_f ⇒ buoy_corr > 0 ⇒ acc.y 应 > -9.81(比纯重力上举更强)。
+        let acc = w.particles[0].acc;
+        assert!(
+            acc.y > -9.81,
+            "热区粒子应获得向上热浮力修正(acc.y > -g), got {}",
+            acc.y
+        );
+    }
+
+    #[test]
+    fn couple_heat_injects_source_into_moving_region() {
+        // 运动粒子应向热场注入热源(对流换热):运动区域格点升温。
+        use phy_field::{Bc, HeatField, ScalarField};
+        let mut p = test_params();
+        p.gravity = Vec3::zeros();
+        let mut w = FluidWorld::new(p);
+        w.particles.clear();
+        // 放在中心、带速度。
+        let mut pt = Particle::new(Vec3::new(0.0, 0.0, 0.0), 0.05);
+        pt.vel = Vec3::new(2.0, 0.0, 0.0);
+        w.particles.push(pt);
+
+        let nx = 16usize;
+        let dx = 1.0_f64;
+        let f = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
+        let mut heat = HeatField::new(f, 0.1);
+        let before = heat.field.sample(0, 0, 0);
+        w.couple_heat(&mut heat, 0.01, 0.0, 0.0, 0.1);
+        // couple_heat 把热源累加到 src;推进一帧扩散把 src 合入 u。
+        heat.field.step_diffusion(0.1, 0.01);
+        let after = heat.field.sample(0, 0, 0);
+        assert!(
+            after > before,
+            "运动区域热场应升温, before={}, after={}",
+            before,
+            after
         );
     }
 }

@@ -92,6 +92,16 @@ impl<T: RealField> World<T> {
         self.subsystems.get_mut(i)
     }
 
+    /// 临时取出第 `i` 个子系统(用于耦合阶段避免别名冲突;调用方需负责 `insert` 回原位)。
+    pub fn remove(&mut self, i: usize) -> Box<dyn Subsystem<T>> {
+        self.subsystems.remove(i)
+    }
+
+    /// 把取出的子系统放回第 `i` 个位置。
+    pub fn insert(&mut self, i: usize, s: Box<dyn Subsystem<T>>) {
+        self.subsystems.insert(i, s);
+    }
+
     /// 推进一个时间步 `dt`:先 step 后 couple,最后累加时间。
     ///
     /// 耦合阶段对第 `i` 个子系统临时 `remove` 出 `subsystems`,以 `&mut World`

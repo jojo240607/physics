@@ -7,7 +7,7 @@ use std::any::Any;
 
 use phy_core::World;
 use phy_field::{HeatField, ScalarField, Bc};
-use phy_fluid::{FluidSubsystem, FluidWorld};
+use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
 use phy_math::{na, RealField, Vec3};
 use phy_rigid::{Body, RigidSubsystem, RigidWorld, Shape};
 use phy_soft::{SoftBody, SoftSubsystem};
@@ -363,3 +363,152 @@ fn render_body(fb: &mut Framebuffer, cam: &Camera, body: &Body<f64>) {
 
 // 确保 Subsystem trait 仍是 Any(供 downcast)。
 fn _assert_any<T: RealField>(_: &dyn Any) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_fluid_heat_world(warm_top: bool) -> World<f64> {
+        let mut w = World::<f64>::new();
+        // 流体:小盒、重力开启。
+        let mut fp = SphParams::defaults();
+        fp.bounds_min = Vec3::new(-3.0, -3.0, -3.0);
+        fp.bounds_max = Vec3::new(3.0, 3.0, 3.0);
+        fp.gravity = Vec3::new(0.0, -9.81, 0.0);
+        let mut fluid = FluidWorld::new(fp);
+        fluid.fill_box(
+            Vec3::new(-1.0, -1.0, -1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            0.3,
+            0.05,
+        );
+        let mut fsub = FluidSubsystem::new(fluid);
+        fsub.thermal_expansion = 0.5; // 开启热浮力
+        fsub.heat_gain = 0.1; // 开启对流热源
+        w.add_subsystem(Box::new(fsub));
+
+        // 热场:下半冷、上半热(与流体盒对齐)。
+        let nx = 16usize;
+        let dx = 6.0 / (nx as f64 - 1.0); // 覆盖 [-3,3]
+        let mut f = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann)
+            .with_origin(Vec3::new(-3.0, -3.0, -3.0));
+        for iy in 0..nx {
+            let y = -3.0 + (iy as f64) * dx;
+            let t = if warm_top && y > 0.0 { 50.0 } else { 0.0 };
+            for ix in 0..nx {
+                for iz in 0..nx {
+                    let idx = f.idx(ix, iy, iz);
+                    f.u[idx] = t;
+                }
+            }
+        }
+        let heat = HeatField::new(f, 0.1);
+        w.add_subsystem(Box::new(heat));
+        w
+    }
+
+    #[test]
+    fn world_couples_fluid_heat_thermal_buoyancy() {
+        // 上热下冷 → 上方流体粒子获得向上浮力修正(acc.y > -g)。
+        let mut w = build_fluid_heat_world(true);
+        w.step(1.0 / 60.0);
+        // 动态查找流体子系统索引(不依赖注册顺序)。
+        let mut fidx = None;
+        for i in 0..w.subsystem_count() {
+            if let Some(s) = w.get(i) {
+                if s.as_any().downcast_ref::<FluidSubsystem<f64>>().is_some() {
+                    fidx = Some(i);
+                    break;
+                }
+            }
+        }
+        let fidx = fidx.expect("流体子系统应已注册");
+        let fsub = w
+            .get(fidx)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<FluidSubsystem<f64>>()
+            .unwrap();
+        // 取一个位于 y>0(热区)的粒子,验证其竖直加速度被上举修正。
+        let mut found = false;
+        for p in &fsub.world.particles {
+            if p.pos.y > 0.0 {
+                assert!(
+                    p.acc.y > -9.81,
+                    "热区粒子应获向上热浮力修正, acc.y={}",
+                    p.acc.y
+                );
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "应存在位于热区的流体粒子");
+    }
+
+    #[test]
+    fn world_couples_fluid_heat_source_injection() {
+        // 流体运动 → 热场运动区域升温(对流换热)。均匀场初始 0,注入后中心升温。
+        let mut w = build_fluid_heat_world(false);
+        // 动态查找热场索引。
+        let mut hidx = None;
+        for i in 0..w.subsystem_count() {
+            if let Some(s) = w.get(i) {
+                if s.as_any().downcast_ref::<HeatField<f64>>().is_some() {
+                    hidx = Some(i);
+                    break;
+                }
+            }
+        }
+        let hidx = hidx.expect("热场子系统应已注册");
+        // 给流体粒子一个初始速度,确保有运动强度可注入热源。
+        let mut fidx2 = None;
+        for i in 0..w.subsystem_count() {
+            if let Some(s) = w.get(i) {
+                if s.as_any().downcast_ref::<FluidSubsystem<f64>>().is_some() {
+                    fidx2 = Some(i);
+                    break;
+                }
+            }
+        }
+        if let Some(fi) = fidx2 {
+            if let Some(fs) = w.get_mut(fi) {
+                if let Some(fs) = fs.as_any_mut().downcast_mut::<FluidSubsystem<f64>>() {
+                    for p in fs.world.particles.iter_mut() {
+                        p.vel = Vec3::new(1.5, 0.0, 0.0);
+                    }
+                }
+            }
+        }
+        let center = {
+            let heat = w
+                .get(hidx)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<HeatField<f64>>()
+                .unwrap();
+            heat.field.sample(nx_center(), nx_center(), nx_center())
+        };
+        for _ in 0..20 {
+            w.step(1.0 / 60.0);
+        }
+        let heat = w
+            .get(hidx)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<HeatField<f64>>()
+            .unwrap();
+        let after = heat.field.sample(nx_center(), nx_center(), nx_center());
+        assert!(
+            after > center,
+            "运动区热场中心应因注入升温, before={}, after={}",
+            center,
+            after
+        );
+        // 全部有限。
+        assert!(heat.field.max_abs().is_finite());
+    }
+
+    fn nx_center() -> usize {
+        8
+    }
+}

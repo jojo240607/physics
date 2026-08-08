@@ -13,6 +13,93 @@ pub use grid::{Bc, ScalarField};
 
 use phy_core::Subsystem;
 use phy_math::RealField;
+use phy_math::Vec3;
+
+/// 可被流体/软体耦合访问的“温度场”抽象。
+///
+/// 由 `HeatField` 实现;`phy-fluid` 仅依赖此 trait(而非 `phy-field` 的具体类型)
+/// 以避免循环依赖。暴露耦合所需的最小接口:网格几何、三线性温度采样、热源注入。
+pub trait HeatFieldLike<T: RealField + Copy>: std::any::Any {
+    /// 网格维度 (nx, ny, nz)。
+    fn dims(&self) -> (usize, usize, usize);
+    /// 网格原点(最小角)世界坐标。
+    fn origin(&self) -> Vec3<T>;
+    /// 单元尺寸 dx(立方网格)。
+    fn cell_size(&self) -> T;
+    /// 三线性插值温度,给定最近格点索引 (cx,cy,cz) 和 [0,1] 单元内偏移 (tx,ty,tz)。
+    fn sample_trilinear(
+        &self,
+        cx: usize,
+        cy: usize,
+        cz: usize,
+        tx: f64,
+        ty: f64,
+        tz: f64,
+    ) -> T
+    where
+        T: num_traits::ToPrimitive;
+    /// 向网格单元 (cx,cy,cz) 累加一个热源项。用于对流换热(流动区域升温)。
+    fn add_source(&mut self, cx: usize, cy: usize, cz: usize, q: T);
+}
+
+impl<T: RealField + Copy> HeatFieldLike<T> for HeatField<T> {
+    fn dims(&self) -> (usize, usize, usize) {
+        (self.field.nx, self.field.ny, self.field.nz)
+    }
+    fn origin(&self) -> Vec3<T> {
+        self.field.origin
+    }
+    fn cell_size(&self) -> T {
+        self.field.dx
+    }
+    fn sample_trilinear(
+        &self,
+        cx: usize,
+        cy: usize,
+        cz: usize,
+        tx: f64,
+        ty: f64,
+        tz: f64,
+    ) -> T
+    where
+        T: num_traits::ToPrimitive,
+    {
+        let fx = T::from_f64(tx).unwrap_or(T::zero());
+        let fy = T::from_f64(ty).unwrap_or(T::zero());
+        let fz = T::from_f64(tz).unwrap_or(T::zero());
+        let c000 = self.field.sample(cx, cy, cz);
+        let c100 = self.field.sample((cx + 1).min(self.field.nx - 1), cy, cz);
+        let c010 = self.field.sample(cx, (cy + 1).min(self.field.ny - 1), cz);
+        let c110 = self.field.sample(
+            (cx + 1).min(self.field.nx - 1),
+            (cy + 1).min(self.field.ny - 1),
+            cz,
+        );
+        let c001 = self.field.sample(cx, cy, (cz + 1).min(self.field.nz - 1));
+        let c101 = self
+            .field
+            .sample((cx + 1).min(self.field.nx - 1), cy, (cz + 1).min(self.field.nz - 1));
+        let c011 = self
+            .field
+            .sample(cx, (cy + 1).min(self.field.ny - 1), (cz + 1).min(self.field.nz - 1));
+        let c111 = self.field.sample(
+            (cx + 1).min(self.field.nx - 1),
+            (cy + 1).min(self.field.ny - 1),
+            (cz + 1).min(self.field.nz - 1),
+        );
+        let x00 = c000 + (c100 - c000) * fx;
+        let x10 = c010 + (c110 - c010) * fx;
+        let x01 = c001 + (c101 - c001) * fx;
+        let x11 = c011 + (c111 - c011) * fx;
+        let y0 = x00 + (x10 - x00) * fy;
+        let y1 = x01 + (x11 - x01) * fy;
+        y0 + (y1 - y0) * fz
+    }
+    fn add_source(&mut self, cx: usize, cy: usize, cz: usize, q: T) {
+        // 累加到同格 u(隐式 Neumann 边界会保持守恒)。
+        self.field.add_source(cx, cy, cz, q);
+    }
+}
 
 /// 热扩散子系统。
 pub struct HeatField<T: RealField + Copy> {
