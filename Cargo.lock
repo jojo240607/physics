@@ -1106,6 +1106,7 @@ dependencies = [
  "phy-math",
  "phy-optics",
  "phy-rigid",
+ "phy-soft",
  "softbuffer",
  "winit",
 ]
@@ -1169,6 +1170,15 @@ dependencies = [
  "phy-core",
  "phy-math",
  "serde",
+]
+
+[[package]]
+name = "phy-soft"
+version = "0.1.0"
+dependencies = [
+ "num-traits",
+ "phy-core",
+ "phy-math",
 ]
 
 [[package]]

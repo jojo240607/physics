@@ -10,6 +10,7 @@ use phy_field::{HeatField, ScalarField, Bc};
 use phy_fluid::{FluidSubsystem, FluidWorld};
 use phy_math::{na, RealField, Vec3};
 use phy_rigid::{Body, RigidSubsystem, RigidWorld, Shape};
+use phy_soft::{SoftBody, SoftSubsystem};
 
 use crate::camera::Camera;
 use crate::raster::Framebuffer;
@@ -23,6 +24,8 @@ pub enum DemoMode {
     Fluid,
     /// 连续标量场(热扩散)切片。
     Heat,
+    /// 软体(质点-弹簧,M4)。
+    Soft,
     /// 光学(玻璃球 + 地面,Whitted/Approx 离线/实时)。
     Optics,
 }
@@ -33,7 +36,8 @@ impl DemoMode {
         match self {
             DemoMode::Rigid => DemoMode::Fluid,
             DemoMode::Fluid => DemoMode::Heat,
-            DemoMode::Heat => DemoMode::Optics,
+            DemoMode::Heat => DemoMode::Soft,
+            DemoMode::Soft => DemoMode::Optics,
             DemoMode::Optics => DemoMode::Rigid,
         }
     }
@@ -44,6 +48,7 @@ impl DemoMode {
             DemoMode::Rigid => "Rigid",
             DemoMode::Fluid => "Fluid(SPH)",
             DemoMode::Heat => "Heat Field",
+            DemoMode::Soft => "Soft Body",
             DemoMode::Optics => "Optics",
         }
     }
@@ -53,6 +58,7 @@ impl DemoMode {
 const IDX_RIGID: usize = 0;
 const IDX_FLUID: usize = 1;
 const IDX_HEAT: usize = 2;
+const IDX_SOFT: usize = 3;
 
 /// Demo 场景:持有统一世界。
 pub struct Scene {
@@ -120,10 +126,18 @@ impl Scene {
         }
         let heat = HeatField::<f64>::new(field, 0.1);
 
+        // --- 软体(M4) ---
+        // 悬挂的 6x6x6 晶格软块(顶部层钉扎),落在地面上方自由晃动。
+        let soft = SoftBody::<f64>::from_lattice(6, 6, 6, 0.6, Vec3::new(0.0, 2.0, 0.0));
+        // 地面高度与刚体地面一致(y=-0.5 是地面盒顶)。
+        let mut soft = soft;
+        soft.ground_y = -0.5;
+
         // 注册到统一世界(顺序即 step 顺序)。
         world.add_subsystem(Box::new(RigidSubsystem::new(rigid)));
         world.add_subsystem(Box::new(FluidSubsystem::new(fluid)));
         world.add_subsystem(Box::new(heat));
+        world.add_subsystem(Box::new(SoftSubsystem::new(soft)));
 
         Self {
             world,
@@ -173,6 +187,7 @@ impl Scene {
             DemoMode::Rigid => self.render_rigid(fb, cam),
             DemoMode::Fluid => self.render_fluid(fb, cam),
             DemoMode::Heat => self.render_heat(fb, cam),
+            DemoMode::Soft => self.render_soft(fb, cam),
             DemoMode::Optics => { /* 光学由 App 独立渲染,这里不处理 */ }
         }
     }
@@ -231,9 +246,43 @@ impl Scene {
             }
         }
     }
-}
 
-/// 把世界点投影到屏幕像素,返回 (sx, sy, depth) 其中 depth=1/w(越小越近)。
+    fn render_soft(&self, fb: &mut Framebuffer, cam: &Camera) {
+        let sub = self
+            .world
+            .get(IDX_SOFT)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<SoftSubsystem<f64>>()
+            .unwrap();
+        let body = &sub.body;
+        // 弹簧(线段,灰白)。
+        for s in &body.springs {
+            let pa = body.particles[s.a].pos;
+            let pb = body.particles[s.b].pos;
+            if let (Some((ax, ay, da)), Some((bx, by, db))) =
+                (project_point(cam, fb, pa), project_point(cam, fb, pb))
+            {
+                let depth = ((da + db) * 0.5) as f32;
+                fb.draw_line(ax, ay, bx, by, depth, [180u8, 180u8, 200u8]);
+            }
+        }
+        // 质点(蓝绿,按速度上色)。
+        for p in &body.particles {
+            if let Some((sx, sy, depth)) = project_point(cam, fb, p.pos) {
+                let speed = p.vel.norm();
+                // 静止=青,快=洋红。
+                let t = (speed / 6.0).clamp(0.0, 1.0);
+                let col = [
+                    (t * 255.0) as u8,
+                    (220.0 - t * 160.0) as u8,
+                    (200.0 - t * 40.0) as u8,
+                ];
+                fb.fill_circle(sx, sy, 3, depth as f32, col);
+            }
+        }
+    }
+}
 /// 复用 `Camera::view_proj`(f32 矩阵)。
 fn project_point(cam: &Camera, fb: &Framebuffer, world: Vec3<f64>) -> Option<(i32, i32, f64)> {
     let aspect = fb.width as f32 / fb.height as f32;

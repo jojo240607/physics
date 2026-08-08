@@ -9,6 +9,7 @@ phy-rigid = { path = "../phy-rigid" }
 phy-optics = { path = "../phy-optics" }
 phy-fluid = { path = "../phy-fluid" }
 phy-field = { path = "../phy-field" }
+phy-soft = { path = "../phy-soft" }
 phy-core = { path = "../phy-core" }
 nalgebra = { workspace = true }
 winit = "0.30"

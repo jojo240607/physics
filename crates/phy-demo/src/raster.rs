@@ -80,6 +80,43 @@ impl Framebuffer {
         );
         self.put(x, y, depth, c);
     }
+
+    /// 画一条线段(屏幕坐标,带深度测试,深度取两端平均)。
+    pub fn draw_line(
+        &mut self,
+        mut x0: i32,
+        mut y0: i32,
+        mut x1: i32,
+        mut y1: i32,
+        depth: f32,
+        color: [u8; 3],
+    ) {
+        let c = pack(
+            color[0] as f32 / 255.0,
+            color[1] as f32 / 255.0,
+            color[2] as f32 / 255.0,
+        );
+        let dx = (x1 - x0).abs();
+        let dy = -(y1 - y0).abs();
+        let sx = if x0 < x1 { 1 } else { -1 };
+        let sy = if y0 < y1 { 1 } else { -1 };
+        let mut err = dx + dy;
+        loop {
+            self.put(x0, y0, depth, c);
+            if x0 == x1 && y0 == y1 {
+                break;
+            }
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x0 += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y0 += sy;
+            }
+        }
+    }
 }
 
 /// 打包 f32 RGB(0..1) 为 0xAARRGGBB。

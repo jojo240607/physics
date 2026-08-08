@@ -1,0 +1,11 @@
+[package]
+name = "phy-soft"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+phy-math = { path = "../phy-math" }
+phy-core = { path = "../phy-core" }
+num-traits = "0.2"
+
+[dev-dependencies]

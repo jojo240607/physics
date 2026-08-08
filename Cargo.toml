@@ -5,6 +5,7 @@ members = [
     "crates/phy-math",
     "crates/phy-rigid",
     "crates/phy-fluid",
+    "crates/phy-soft",
     "crates/phy-optics",
     "crates/phy-field",
     "crates/phy-io",
