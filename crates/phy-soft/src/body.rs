@@ -1,6 +1,7 @@
 //! 软体质点-弹簧模型核心。
 
 use phy_math::{gravity, RealField, Vec3};
+use phy_rigid::Body;
 
 use crate::{DEFAULT_DAMPING, DEFAULT_STIFFNESS, DEFAULT_VERLET_DAMP};
 
@@ -59,6 +60,10 @@ pub struct SoftBody<T: RealField + Copy> {
     pub vel_damp: T,
     /// 地面恢复系数(碰撞后法向速度保留比例)。
     pub restitution: T,
+    /// 与刚体碰撞时的恢复系数。
+    pub body_restitution: T,
+    /// 与刚体碰撞时对刚体施加冲量的比例(0 = 仅软体被挡,1 = 完全双向)。
+    pub body_coupling: T,
 }
 
 impl<T: RealField + Copy> SoftBody<T> {
@@ -71,6 +76,8 @@ impl<T: RealField + Copy> SoftBody<T> {
             ground_y,
             vel_damp: T::from_f64(DEFAULT_VERLET_DAMP).unwrap(),
             restitution: T::from_f64(0.2).unwrap(),
+            body_restitution: T::from_f64(0.2).unwrap(),
+            body_coupling: T::from_f64(1.0).unwrap(),
         }
     }
 
@@ -262,4 +269,104 @@ impl<T: RealField + Copy> SoftBody<T> {
             }
         }
     }
+
+    /// 与单个刚体 `body` 做碰撞(单向推出软体 + 法向反弹 + 可选双向冲量)。
+    ///
+    /// 对每个可动点:若其世界坐标在刚体形状内部(`Body::contains_local`),
+    /// 用最近表面点估计法线,把质点推出到表面外,并沿法向反弹速度;
+    /// 若刚体可动(`inv_mass>0`),按 `body_coupling` 比例累计应对刚体施加的冲量。
+    ///
+    /// 只借用 `body: &Body`(不可变),返回需施加到刚体的净冲量(世界系),
+    /// 由调用方在释放软体可变借用后再施加,以规避同一世界内双可变借用。
+    pub fn collide_body(&mut self, body: &Body<T>) -> Vec3<T> {
+        let rest = self.body_restitution;
+        let mut impulse = Vec3::zeros();
+        for p in self.particles.iter_mut() {
+            if p.inv_mass <= T::zero() {
+                continue;
+            }
+            // 世界 -> 局部,判断是否在形状内。
+            let pl = body.to_local(&p.pos);
+            if !body.shape.contains_local(&pl) {
+                continue;
+            }
+            // 估算法线:从内部点沿局部各轴找最近表面方向。
+            let n_local = surface_normal_local(&body.shape, &pl);
+            let n_world = body.rot * n_local;
+            if n_world.norm() <= T::from_f64(1e-9).unwrap() {
+                continue;
+            }
+            let n = n_world.normalize();
+            // 穿透深度:把点沿法线推到表面外。
+            let depth = penetration_depth(&body.shape, &pl, &n_local);
+            // 推出(世界方向)。
+            p.pos += n * depth;
+            // 法向速度分量。
+            let vn = p.vel.dot(&n);
+            if vn < T::zero() {
+                p.vel -= n * (vn * (T::one() + rest));
+            }
+            // 双向耦合:累计应对刚体施加的反向冲量。
+            if body.inv_mass > T::zero() && self.body_coupling > T::zero() {
+                // 软体质点质量 = 1/inv_mass;冲量按相对速度法向分量。
+                let mn = T::one() / p.inv_mass;
+                let j = (-vn) * mn * self.body_coupling;
+                // 刚体获得 +n 方向冲量(软体被反弹,刚体被推)。
+                impulse += n * j;
+            }
+        }
+        impulse
+    }
+}
+
+/// 估计局部表面法线(指向形状内部最近表面外侧的单位方向)。
+///
+/// 做法:从内部点 `pl` 沿局部各轴试探支撑方向,取穿透最浅的方向作为法线近似。
+/// 对球/盒/凸体均给出合理的"指向外侧"方向。
+fn surface_normal_local<T: RealField + Copy>(shape: &phy_rigid::Shape<T>, pl: &Vec3<T>) -> Vec3<T> {
+    // 用 6 个主轴方向求支撑,选使 (pl - support)·dir 最小(穿透最浅)者。
+    let dirs = [
+        Vec3::new(T::one(), T::zero(), T::zero()),
+        Vec3::new(-T::one(), T::zero(), T::zero()),
+        Vec3::new(T::zero(), T::one(), T::zero()),
+        Vec3::new(T::zero(), -T::one(), T::zero()),
+        Vec3::new(T::zero(), T::zero(), T::one()),
+        Vec3::new(T::zero(), T::zero(), -T::one()),
+    ];
+    let mut best_dir = dirs[0];
+    let mut best_pen = T::from_f64(1e18).unwrap();
+    for d in dirs.iter() {
+        let s = shape.support_local(d); // 该方向最远点(局部)。
+        // pl 沿 d 方向相对支撑的穿透:若 s 在 pl 的 d 正向更远处,穿透浅。
+        let pen = (s - *pl).dot(d);
+        if pen < best_pen {
+            best_pen = pen;
+            best_dir = *d;
+        }
+    }
+    best_dir
+}
+
+/// 估计局部空间下从内部点 `pl` 沿法线 `n_local` 到表面的穿透深度(近似)。
+///
+/// 沿局部法线外推,用二分在 [0, 2*bounding_r] 内找 `contains_local` 为假的边界。
+fn penetration_depth<T: RealField + Copy>(
+    shape: &phy_rigid::Shape<T>,
+    pl: &Vec3<T>,
+    n_local: &Vec3<T>,
+) -> T {
+    let br = shape.bounding_sphere_r() * T::from_f64(2.0).unwrap();
+    let mut lo = T::zero();
+    let mut hi = br.max(T::from_f64(1e-6).unwrap());
+    for _ in 0..20 {
+        let mid = (lo + hi) * T::from_f64(0.5).unwrap();
+        let probe = *pl + *n_local * mid;
+        if shape.contains_local(&probe) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    // 返回到表面的距离(略加 epsilon 防止残留穿透)。
+    (lo + hi) * T::from_f64(0.5).unwrap() + T::from_f64(1e-4).unwrap()
 }

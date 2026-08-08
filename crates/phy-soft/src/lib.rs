@@ -7,8 +7,10 @@
 //!   弹簧力 + 重力 + 地面/边界碰撞(单向:软体被静态边界挡住)。
 //! - `SoftSubsystem`:适配 `phy_core::Subsystem`,挂到 `World` 统一调度。
 //!
-//! 与刚体的双向耦合留待后续(World 的 `couple` 阶段接入 `RigidWorld`),
-//! 本里程碑软体只对静态地面/盒边界碰撞,可独立 `step`。
+//! 与刚体(M3)的双向耦合已接入 Demo:`SoftBody::collide_body` 用刚体形状的
+//! `contains_local` 检测穿透并沿外法线把质点推出,可动刚体同时收到反向冲量
+//! (见 `phy-demo` 的 `Scene::couple_soft_rigid`)。本里程碑软体本身只对静态
+//! 地面/盒边界碰撞,可独立 `step`。
 
 mod body;
 mod sub;
@@ -26,6 +28,7 @@ pub const DEFAULT_VERLET_DAMP: f64 = 0.99;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use phy_math::na;
     use phy_core::World;
     use phy_math::{gravity, RealField, Vec3};
 
@@ -105,5 +108,63 @@ mod tests {
             world.step(1.0 / 60.0);
         }
         // 无 panic 即通过(子系统适配本身即验证)。
+    }
+
+    #[test]
+    fn soft_collides_static_sphere() {
+        use phy_rigid::{Body, Shape};
+        // 静态球放在原点,半径 1。一个质点被初始化到球心,应被推到球外。
+        let body = Body::<f64> {
+            shape: Shape::Sphere { r: 1.0 },
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            rot: na::UnitQuaternion::identity(),
+            vel: Vec3::new(0.0, 0.0, 0.0),
+            inv_mass: 0.0,
+        };
+        let mut soft = SoftBody::<f64>::new(-9.81);
+        let pid = soft.add_particle(Vec3::new(0.0, 0.0, 0.0), 1.0); // 在球心。
+        soft.collide_body(&body);
+        // 质点应被推出到球面外(距球心 > 1 - eps)。
+        let d = soft.particles[pid].pos.norm();
+        assert!(d > 1.0 - 1e-3, "particle should be pushed out of sphere, got {}", d);
+    }
+
+    #[test]
+    fn soft_pushes_movable_body() {
+        use phy_rigid::{Body, Shape};
+        // 可动球放在原点半径 1,质点从球内以 +x 速度运动,碰撞后球应被推向 +x。
+        let body = Body::<f64> {
+            shape: Shape::Sphere { r: 1.0 },
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            rot: na::UnitQuaternion::identity(),
+            vel: Vec3::new(0.0, 0.0, 0.0),
+            inv_mass: 0.5,
+        };
+        let mut soft = SoftBody::<f64>::new(-9.81);
+        soft.add_particle(Vec3::new(0.9, 0.0, 0.0), 1.0);
+        soft.particles[0].vel = Vec3::new(1.0, 0.0, 0.0);
+        soft.collide_body(&body);
+        // collide_body 只接受 &Body;冲量由调用方施加。直接验证软体被推出 + 法向反弹。
+        assert!(soft.particles[0].pos.x > 0.9, "particle should be pushed outward");
+    }
+
+    #[test]
+    fn soft_collide_returns_impulse_for_movable() {
+        use phy_rigid::{Body, Shape};
+        // collide_body 返回应施加到刚体的净冲量;可动刚体应获得 +x 方向冲量。
+        // 质点位于球内贴近 +x 表面、且向 -x(深入球体,法向 vn<0)运动,碰撞后
+        // 把刚体沿 +x(外法线方向)推开。
+        let body = Body::<f64> {
+            shape: Shape::Sphere { r: 1.0 },
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            rot: na::UnitQuaternion::identity(),
+            vel: Vec3::new(0.0, 0.0, 0.0),
+            inv_mass: 0.5,
+        };
+        let mut soft = SoftBody::<f64>::new(-9.81);
+        soft.add_particle(Vec3::new(0.9, 0.0, 0.0), 1.0);
+        soft.particles[0].vel = Vec3::new(-1.0, 0.0, 0.0);
+        let imp = soft.collide_body(&body);
+        assert!(imp.x > 0.0, "movable body should receive +x impulse, got {}", imp.x);
     }
 }

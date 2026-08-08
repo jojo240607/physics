@@ -29,6 +29,10 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> Subsystem<T> for FluidSubsys
         self
     }
 
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn step(&mut self, dt: &T) {
         self.world.step(*dt);
     }

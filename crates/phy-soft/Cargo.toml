@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 phy-math = { path = "../phy-math" }
 phy-core = { path = "../phy-core" }
+phy-rigid = { path = "../phy-rigid" }
 num-traits = "0.2"
 
 [dev-dependencies]

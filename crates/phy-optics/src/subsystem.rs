@@ -96,6 +96,10 @@ impl<T: RealField + Copy> Subsystem<T> for OpticSubsystem<T> {
         self
     }
 
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn step(&mut self, _dt: &T) {
         // 光场稳态:不随时间演进。
     }

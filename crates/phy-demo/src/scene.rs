@@ -150,7 +150,54 @@ impl Scene {
     pub fn step(&mut self) {
         let dt = 1.0 / 60.0;
         self.world.step(dt);
+        // 软体↔刚体双向耦合:软体质点穿透刚体时被推回,并可把可动刚体推开。
+        self.couple_soft_rigid(dt);
         self.steps += 1;
+    }
+
+    /// 软体(M4)与刚体(M3)碰撞耦合。
+    ///
+    /// 对每个刚体:用不可变借用取刚体 + 可变借用取软体,计算碰撞并把软体推出,
+    /// 同时累计应施加到刚体的冲量;随后释放软体借用,用可变借用把冲量应用到
+    /// 刚体。两阶段分离以规避同一世界内同时双可变借用。刚体在 `world.step`
+    /// 内已按冲量更新速度,下一帧统一积分。
+    fn couple_soft_rigid(&mut self, _dt: f64) {
+        let count = self
+            .world
+            .get(IDX_RIGID)
+            .and_then(|s| s.as_any().downcast_ref::<phy_rigid::RigidSubsystem<f64>>())
+            .map(|r| r.world.bodies.len())
+            .unwrap_or(0);
+        for i in 0..count {
+            // 取出刚体快照(clone,释放对 world 的不可变借用),后续可变借用互不冲突。
+            let body = match self
+                .world
+                .get(IDX_RIGID)
+                .and_then(|s| s.as_any().downcast_ref::<phy_rigid::RigidSubsystem<f64>>())
+            {
+                Some(r) => r.world.bodies[i].clone(),
+                None => return,
+            };
+            // 阶段一:可变软体 + 刚体快照 -> 软体被推出,得到刚体应受冲量。
+            let impulse = {
+                let Some(soft) = self
+                    .world
+                    .get_mut(IDX_SOFT)
+                    .and_then(|s| s.as_any_mut().downcast_mut::<SoftSubsystem<f64>>())
+                else {
+                    return;
+                };
+                soft.body.collide_body(&body)
+            };
+            // 阶段二:可变刚体施加冲量。
+            if let Some(rigid) = self
+                .world
+                .get_mut(IDX_RIGID)
+                .and_then(|s| s.as_any_mut().downcast_mut::<phy_rigid::RigidSubsystem<f64>>())
+            {
+                rigid.world.bodies[i].apply_impulse(impulse);
+            }
+        }
     }
 
     /// 切换模式。

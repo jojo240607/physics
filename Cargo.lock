@@ -1179,6 +1179,7 @@ dependencies = [
  "num-traits",
  "phy-core",
  "phy-math",
+ "phy-rigid",
 ]
 
 [[package]]

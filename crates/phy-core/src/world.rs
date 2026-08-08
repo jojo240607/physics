@@ -23,6 +23,10 @@ pub trait Subsystem<T: RealField>: Any {
     /// 每个实现需提供 `fn as_any(&self) -> &dyn Any { self }`。
     fn as_any(&self) -> &dyn Any;
 
+    /// 把 `&mut self` 转成 `&mut dyn Any`,供耦合阶段可变 downcast(如软体↔刚体)。
+    /// 每个实现需提供 `fn as_any_mut(&mut self) -> &mut dyn Any { self }`。
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
     /// 推进自身一个时间步 `dt`(以引用传入,避免泛型 move)。
     fn step(&mut self, dt: &T);
 

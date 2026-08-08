@@ -28,6 +28,10 @@ impl<T: RealField + Copy> Subsystem<T> for RigidSubsystem<T> {
         self
     }
 
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn step(&mut self, dt: &T) {
         self.world.step(*dt);
     }
