@@ -1091,6 +1091,7 @@ name = "phy-core"
 version = "0.1.0"
 dependencies = [
  "nalgebra",
+ "num-traits",
  "phy-math",
  "thiserror 1.0.69",
 ]
@@ -1138,8 +1139,11 @@ name = "phy-io"
 version = "0.1.0"
 dependencies = [
  "nalgebra",
+ "num-traits",
  "phy-core",
+ "phy-field",
  "phy-math",
+ "phy-rigid",
  "serde",
 ]
 

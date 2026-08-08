@@ -9,6 +9,7 @@ use phy_core::World;
 use phy_field::{EmField, GravField, HeatField, ScalarField, Bc};
 use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
 use phy_math::{na, RealField, Vec3};
+use phy_optics::{OpticBody, OpticScene, OpticSubsystem, Precision, Surface};
 use phy_rigid::{Body, RigidSubsystem, RigidWorld, Shape};
 use phy_soft::{SoftBody, SoftSubsystem};
 
@@ -197,6 +198,42 @@ impl Scene {
         world.add_subsystem(Box::new(soft_sub));
         world.add_subsystem(Box::new(em)); // 电磁场(M12)
         world.add_subsystem(Box::new(grav)); // 引力场(M13)
+
+        // --- 光学(M16):光学↔世界(刚体)耦合演示 ---
+        // 把刚体世界中的地面 + 三个掉落小球镜像为光学体,并标记 source_rigid_idx,
+        // 让 OpticSubsystem::couple 每步把刚体最新位姿搬入光学场景(运动玻璃球被光正确折射)。
+        let mut optic_scene = OpticScene::<f64>::new();
+        // 地面:不透明灰盒(静态,source=None)。
+        optic_scene.add(OpticBody::new(
+            Body {
+                shape: Shape::Box {
+                    half: Vec3::new(20.0, 0.5, 20.0),
+                },
+                pos: Vec3::new(0.0, -0.5, 0.0),
+                rot: na::UnitQuaternion::identity(),
+                vel: Vec3::zeros(),
+                inv_mass: 0.0,
+            },
+            Surface::diffuse(Vec3::new(0.4, 0.4, 0.45)),
+        ));
+        // 三个掉落小球:玻璃质感,分别映射到刚体索引 1/2/3(随刚体运动)。
+        for i in 0..3usize {
+            let r = 1.0 + 0.3 * (i as f64);
+            optic_scene.add(OpticBody::from_rigid(
+                Body {
+                    shape: Shape::Sphere { r },
+                    pos: Vec3::new(-6.0 + i as f64 * 6.0, 8.0 + i as f64 * 2.0, 0.0),
+                    rot: na::UnitQuaternion::identity(),
+                    vel: Vec3::zeros(),
+                    inv_mass: 1.0 / 2.0,
+                },
+                Surface::glass(1.5, Vec3::new(0.8, 0.9, 1.0)),
+                i + 1, // 刚体索引:地面=0,故小球为 1/2/3
+            ));
+        }
+        let mut optic_sub = OpticSubsystem::new(optic_scene, Precision::Offline);
+        optic_sub.optic_coupling = 1.0; // 启用光学↔刚体同步
+        world.add_subsystem(Box::new(optic_sub));
 
         Self {
             world,
@@ -713,6 +750,78 @@ mod tests {
             }
         }
         assert!(found, "应存在位于热区的流体粒子");
+    }
+
+    #[test]
+    fn world_couples_optic_rigid() {
+        // 光学↔刚体耦合(M16):步进后,标记为 source_rigid_idx 的光学体应与对应刚体位置一致,
+        // 且刚体因重力下落时光学体随之移动。
+        let mut scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        // 找到光学子系统索引。
+        let mut oidx = None;
+        for i in 0..scene.world.subsystem_count() {
+            if let Some(s) = scene.world.get(i) {
+                if s.as_any().downcast_ref::<OpticSubsystem<f64>>().is_some() {
+                    oidx = Some(i);
+                    break;
+                }
+            }
+        }
+        let oidx = oidx.expect("光学子系统应已注册");
+        // 取第 2 个光学体(对应刚体索引 1 的第一个掉落小球)初始位置。
+        let before = {
+            let s = scene
+                .world
+                .get(oidx)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<OpticSubsystem<f64>>()
+                .unwrap();
+            s.scene.bodies[1].body.pos
+        };
+        for _ in 0..30 {
+            scene.world.step(dt);
+        }
+        let after = {
+            let s = scene
+                .world
+                .get(oidx)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<OpticSubsystem<f64>>()
+                .unwrap();
+            s.scene.bodies[1].body.pos
+        };
+        // 光学体随刚体下落(y 减小)。注意:演示场景中央有一个引力井,会把小球向 x=0 横向
+        // 吸引,故 x 也可能变化 —— 这里只验证竖直下落趋势,以及"光学体位置 == 刚体位置"。
+        assert!(after.y < before.y, "掉落小球光学体应随刚体下移: {} -> {}", before.y, after.y);
+        // 光学体位置必须与对应刚体位置完全一致(同一步 couple 同步)。
+        let rigid_pos = {
+            let mut ridx = None;
+            for i in 0..scene.world.subsystem_count() {
+                if let Some(s) = scene.world.get(i) {
+                    if s.as_any().downcast_ref::<RigidSubsystem<f64>>().is_some() {
+                        ridx = Some(i);
+                        break;
+                    }
+                }
+            }
+            let rs = scene
+                .world
+                .get(ridx.unwrap())
+                .unwrap()
+                .as_any()
+                .downcast_ref::<RigidSubsystem<f64>>()
+                .unwrap();
+            rs.world.bodies[1].pos
+        };
+        assert!(
+            (after.x - rigid_pos.x).abs() < 1e-12
+                && (after.y - rigid_pos.y).abs() < 1e-12
+                && (after.z - rigid_pos.z).abs() < 1e-12,
+            "光学体位置必须与刚体完全一致"
+        );
     }
 
     #[test]

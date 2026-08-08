@@ -7,6 +7,7 @@
 
 use std::any::Any;
 
+use crate::events::{EventBus, EventKind, WorldEvent};
 use phy_math::RealField;
 
 /// 物理子系统接口:任何可挂在 World 上的物理规则。
@@ -50,6 +51,10 @@ pub struct World<T: RealField> {
     subsystems: Vec<Box<dyn Subsystem<T>>>,
     /// 当前仿真时间。
     t: T,
+    /// 世界级事件总线(M14):子系统可在 couple 阶段发布事件,外部监听者统一消费。
+    pub bus: EventBus<T>,
+    /// 是否已发出 `SimStart`(首次 step 前)。
+    started: bool,
 }
 
 impl<T: RealField> Default for World<T> {
@@ -64,12 +69,22 @@ impl<T: RealField> World<T> {
         Self {
             subsystems: Vec::new(),
             t: T::zero(),
+            bus: EventBus::new(),
+            started: false,
         }
     }
 
     /// 注册一个子系统。
     pub fn add_subsystem(&mut self, s: Box<dyn Subsystem<T>>) {
         self.subsystems.push(s);
+    }
+
+    /// 注册一个事件订阅者(见 [`EventBus::subscribe`])。
+    pub fn subscribe<F>(&mut self, f: F) -> usize
+    where
+        F: FnMut(EventKind, &dyn Any) + 'static,
+    {
+        self.bus.subscribe(f)
     }
 
     /// 当前仿真时间。
@@ -102,12 +117,20 @@ impl<T: RealField> World<T> {
         self.subsystems.insert(i, s);
     }
 
-    /// 推进一个时间步 `dt`:先 step 后 couple,最后累加时间。
+    /// 推进一个时间步 `dt`:先 step 后 couple,再发 Step 事件并 flush,最后累加时间。
     ///
     /// 耦合阶段对第 `i` 个子系统临时 `remove` 出 `subsystems`,以 `&mut World`
     /// (不含自身)为参数调用其 `couple`,结束再 `insert` 回原位。这样 `couple`
     /// 内部可经 `world.get_mut(j)` 安全可变访问其他子系统,而无别名冲突。
+    ///
+    /// 事件序列(每个 step):首次 step 前发 `SimStart` → 各 subsystem `step` →
+    /// 各 subsystem `couple`(子系统可在其中经 `world.bus` 发布自定义事件)→
+    /// 发 `Step{t,dt}` → `bus.flush()` 把本步累积的事件统一分发给订阅者。
     pub fn step(&mut self, dt: T) {
+        if !self.started {
+            self.started = true;
+            self.bus.publish_world(WorldEvent::SimStart);
+        }
         for s in self.subsystems.iter_mut() {
             s.step(&dt);
         }
@@ -117,6 +140,78 @@ impl<T: RealField> World<T> {
             me.couple(self, &dt);
             self.subsystems.insert(i, me);
         }
-        self.t += dt;
+        self.t += dt.clone();
+        self.bus.publish_world(WorldEvent::Step { t: self.t.clone(), dt });
+        self.bus.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct DummySub {
+        steps: usize,
+    }
+    impl Subsystem<f64> for DummySub {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+        fn step(&mut self, _dt: &f64) {
+            self.steps += 1;
+        }
+    }
+
+    #[test]
+    fn step_emits_simstart_then_steps() {
+        use std::rc::Rc;
+        use std::cell::RefCell;
+        let mut w: World<f64> = World::new();
+        w.add_subsystem(Box::new(DummySub { steps: 0 }));
+        let events: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let ev = events.clone();
+        w.subscribe(move |kind, payload| {
+            if kind == EventKind::World {
+                if let Some(e) = payload.downcast_ref::<WorldEvent<f64>>() {
+                    match e {
+                        WorldEvent::SimStart => ev.borrow_mut().push("start".into()),
+                        WorldEvent::Step { t, .. } => ev.borrow_mut().push(format!("step@{}", t)),
+                        _ => {}
+                    }
+                }
+            }
+        });
+        w.step(0.1);
+        w.step(0.1);
+        assert_eq!(*events.borrow(), vec!["start", "step@0.1", "step@0.2"]);
+        // 子系统确实被推进了两次。
+        let d = w.get(0).unwrap().as_any().downcast_ref::<DummySub>().unwrap();
+        assert_eq!(d.steps, 2);
+    }
+
+    #[test]
+    fn custom_event_roundtrips_through_bus() {
+        use std::rc::Rc;
+        use std::cell::RefCell;
+        let mut w: World<f64> = World::new();
+        #[derive(Debug)]
+        struct MyEvent {
+            tag: u32,
+        }
+        let seen: Rc<RefCell<u32>> = Rc::new(RefCell::new(0));
+        let seen_c = seen.clone();
+        w.subscribe(move |kind, payload| {
+            if kind == EventKind::Custom {
+                if let Some(e) = payload.downcast_ref::<MyEvent>() {
+                    *seen_c.borrow_mut() = e.tag;
+                }
+            }
+        });
+        w.bus.publish_custom(MyEvent { tag: 42 });
+        w.bus.flush();
+        assert_eq!(*seen.borrow(), 42);
     }
 }

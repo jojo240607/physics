@@ -19,6 +19,9 @@ mod math;
 mod renderer;
 mod scene;
 mod subsystem;
+mod caustics;
+
+pub use caustics::Caustics;
 
 pub use math::{f0_of, fresnel, normalize, reflect, refract};
 pub use renderer::{Approx, Renderer, Whitted};
@@ -129,6 +132,45 @@ mod tests {
             "透射中心亮度应高于背景: center={}, corner={}",
             lum(&center),
             lum(&corner)
+        );
+    }
+
+    #[test]
+    fn caustics_concentrates_light_under_glass() {
+        // 焦散(M17):一束平行光自上而下穿过玻璃球,应在球体正下方地面形成亮斑,
+        // 即网格中既有非零单元(被照到),峰值又显著高于平均值。
+        let mut scene = OpticScene::<f64>::new();
+        scene.add(OpticBody::new(
+            body_sphere(1.0),
+            Surface::glass(1.5, Vec3::new(1.0, 1.0, 1.0)),
+        ));
+        // 接收面:球下方的水平不透明地面(焦散落点)。
+        scene.add(OpticBody::new(
+            Body {
+                shape: Shape::Box {
+                    half: Vec3::new(20.0, 0.5, 20.0),
+                },
+                pos: Vec3::new(0.0, -3.0, 0.0),
+                rot: na::UnitQuaternion::identity(),
+                vel: Vec3::zeros(),
+                inv_mass: 0.0,
+            },
+            Surface::diffuse(Vec3::new(0.9, 0.9, 0.9)),
+        ));
+        let caustics = Caustics;
+        let light_dir = Vec3::new(0.0, 1.0, 0.0); // 光源在正上方
+        let (grid, max_val) = caustics.accumulate(&scene, &light_dir, -3.0, 4.0, 64);
+        let n = grid.len() * grid[0].len();
+        let sum: f64 = grid.iter().flatten().map(|v| v).sum();
+        let mean = sum / n as f64;
+        // 存在被照亮的单元。
+        assert!(max_val > 0.0, "应存在焦散亮度峰值");
+        // 峰值明显高于均值(光线被聚拢成亮斑,而非均匀铺满)。
+        assert!(
+            max_val > mean * 1.5,
+            "焦散应聚拢: max={}, mean={}",
+            max_val,
+            mean
         );
     }
 }

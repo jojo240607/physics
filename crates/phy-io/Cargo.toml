@@ -7,5 +7,8 @@ license.workspace = true
 [dependencies]
 phy-core = { path = "../phy-core" }
 phy-math = { path = "../phy-math" }
+phy-rigid = { path = "../phy-rigid" }
+phy-field = { path = "../phy-field" }
 nalgebra.workspace = true
 serde.workspace = true
+num-traits.workspace = true

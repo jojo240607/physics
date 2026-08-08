@@ -48,12 +48,39 @@ pub struct OpticBody<T: RealField + Copy> {
     pub body: Body<T>,
     /// 表面材质。
     pub surface: Surface<T>,
+    /// 若该光学体是从某个刚体同步而来,记录其刚体索引,供 `OpticSubsystem::couple`
+    /// 每步把刚体最新位姿/形状搬入(光学↔世界耦合)。`None` 表示纯光学体(固定)。
+    pub source_rigid_idx: Option<usize>,
 }
 
 impl<T: RealField + Copy> OpticBody<T> {
-    /// 由刚体 + 表面材质构造。
+    /// 由刚体 + 表面材质构造;`source_rigid_idx` 默认 `None`。
     pub fn new(body: Body<T>, surface: Surface<T>) -> Self {
-        Self { body, surface }
+        Self {
+            body,
+            surface,
+            source_rigid_idx: None,
+        }
+    }
+
+    /// 构造并标记为来自第 `rigid_idx` 个刚体(参与耦合同步)。
+    pub fn from_rigid(body: Body<T>, surface: Surface<T>, rigid_idx: usize) -> Self {
+        Self {
+            body,
+            surface,
+            source_rigid_idx: Some(rigid_idx),
+        }
+    }
+
+    /// 若本光学体由刚体同步而来,把该刚体的最新位姿/形状搬入自身。
+    /// 返回是否执行了同步。
+    pub fn sync_from_rigid(&mut self, rigid: &Body<T>) -> bool {
+        if self.source_rigid_idx.is_some() {
+            self.body = rigid.clone();
+            true
+        } else {
+            false
+        }
     }
 
     /// 把世界射线变换到局部空间求交,返回(局部 t, 局部法线)或 None。

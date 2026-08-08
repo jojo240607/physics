@@ -8,6 +8,12 @@
 pub mod world;
 pub use world::{Subsystem, World};
 
+pub mod events;
+pub use events::{EventBus, EventKind, WorldEvent};
+
+pub mod spatial;
+pub use spatial::SpatialGrid;
+
 /// 引擎错误类型。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -8,3 +8,4 @@ license.workspace = true
 phy-math = { path = "../phy-math" }
 nalgebra.workspace = true
 thiserror.workspace = true
+num-traits.workspace = true
