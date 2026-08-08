@@ -5,6 +5,8 @@
 //! - 每个 `Subsystem` 在 `step` 中推进自身,并可借 `couple` 与其他子系统交互。
 //! - `World::step` 顺序:先所有子系统 `step`,再所有子系统 `couple`(保证单向数据依赖稳定)。
 
+use std::any::Any;
+
 use phy_math::RealField;
 
 /// 物理子系统接口:任何可挂在 World 上的物理规则。
@@ -13,7 +15,14 @@ use phy_math::RealField;
 /// World 仅负责统一推进与时间累加。
 /// M5 起将引入共享状态存储(组件池)以支持跨子系统双向耦合,
 /// 彼时 `step`/`couple` 可改为接收 `&World`/`&mut World`。
-pub trait Subsystem<T: RealField> {
+///
+/// 要求 `Any` supertrait,使 `World` 可按索引取出具体子系统做渲染/调试
+/// (通过 `as_any().downcast_ref::<T>()`)。
+pub trait Subsystem<T: RealField>: Any {
+    /// 把 `&self` 转成 `&dyn Any`,供 `World::get(i)` 后 downcast 取回具体类型渲染。
+    /// 每个实现需提供 `fn as_any(&self) -> &dyn Any { self }`。
+    fn as_any(&self) -> &dyn Any;
+
     /// 推进自身一个时间步 `dt`(以引用传入,避免泛型 move)。
     fn step(&mut self, dt: &T);
 
@@ -63,6 +72,16 @@ impl<T: RealField> World<T> {
     /// 已注册子系统数量。
     pub fn subsystem_count(&self) -> usize {
         self.subsystems.len()
+    }
+
+    /// 不可变访问第 `i` 个子系统(用于渲染/调试 downcast)。
+    pub fn get(&self, i: usize) -> Option<&Box<dyn Subsystem<T>>> {
+        self.subsystems.get(i)
+    }
+
+    /// 可变访问第 `i` 个子系统。
+    pub fn get_mut(&mut self, i: usize) -> Option<&mut Box<dyn Subsystem<T>>> {
+        self.subsystems.get_mut(i)
     }
 
     /// 推进一个时间步 `dt`:先 step 后 couple,最后累加时间。

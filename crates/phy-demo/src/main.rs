@@ -1,15 +1,18 @@
-//! phy-demo: M3 软件光栅化 3D 可玩 Demo。
+//! phy-demo: 多物理场软件光栅化 Demo(M3/M5/M7 集成)。
 //!
-//! 用纯 Rust 的软件光栅化器实时渲染 `RigidWorld` 下落/堆叠的刚体场景
-//! (不依赖 GPU 后端,保证在任意 MinGW 工具链下可编译运行)。
+//! 用纯 Rust 的软件光栅化器实时渲染统一 `World` 中的多物理场场景:
+//! - 刚体(M3)下落/堆叠
+//! - 流体 SPH(M5)粒子云
+//! - 连续标量场(M7)热扩散切片
+//! - 光学(M6)玻璃球折射(离线/实时)
+//!
 //! 操作:
 //! - 鼠标拖拽:旋转视角(轨道)
 //! - 滚轮:缩放
-//! - P:暂停/继续  R:重置场景  G:再撒一批盒子  B:再撒一批球
+//! - P:暂停/继续  R:重置场景  O:循环模式(F/H 直接定位)
 //! - I:打印统计  关闭窗口:退出
 
 mod camera;
-mod mesh;
 mod raster;
 mod scene;
 
@@ -17,18 +20,17 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use camera::Camera;
-use raster::{draw_mesh, Framebuffer};
-use scene::Scene;
+use raster::Framebuffer;
+use scene::{DemoMode, Scene};
 use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
-use phy_math::na::{Matrix4, Vector3};
 use phy_math::Vec3 as V3;
-use phy_optics::{OpticScene, OpticBody, OpticSubsystem, Precision, to_rgba8};
-use phy_rigid::{Body, Shape};
+use phy_optics::{OpticScene, OpticBody, OpticSubsystem, Precision, Surface as OSurface, to_rgba8};
+use phy_rigid::Body;
 
 /// 后台初始化完成事件。
 enum DemoEvent {
@@ -44,10 +46,7 @@ struct App {
     scene: Scene,
     cam: Camera,
     fb: Framebuffer,
-    cube: Vec<raster::Tri>,
-    sphere: Vec<raster::Tri>,
     paused: bool,
-    optics_mode: bool,
     dragging: bool,
     last_x: f64,
     last_y: f64,
@@ -66,10 +65,7 @@ impl App {
             scene: Scene::new(),
             cam: Camera::default(),
             fb: Framebuffer::new(1, 1),
-            cube: mesh::cube_tris(),
-            sphere: mesh::sphere_tris(16, 12),
             paused: false,
-            optics_mode: false,
             dragging: false,
             last_x: 0.0,
             last_y: 0.0,
@@ -82,26 +78,14 @@ impl App {
     /// 物理步进 + 渲染一帧到帧缓冲,并呈现到窗口。
     fn render_frame(&mut self) {
         if !self.paused {
-            self.scene.step(1.0 / 60.0);
+            self.scene.step();
         }
-        let aspect = self.fb.width as f32 / self.fb.height as f32;
-        let vp = self.cam.view_proj(aspect);
-        let light = Vector3::new(0.5, 1.0, 0.3).normalize();
-
         self.fb.clear();
-        let (boxes, spheres) = self.scene.gather();
 
-        if self.optics_mode {
+        if self.scene.mode == DemoMode::Optics {
             self.render_optics();
         } else {
-            for inst in &boxes {
-                let m = instance_model(inst);
-                draw_mesh(&mut self.fb, &vp, &m, &self.cube, inst.color, &light);
-            }
-            for inst in &spheres {
-                let m = instance_model(inst);
-                draw_mesh(&mut self.fb, &vp, &m, &self.sphere, inst.color, &light);
-            }
+            self.scene.render(&mut self.fb, &self.cam);
         }
 
         // 呈现
@@ -123,8 +107,9 @@ impl App {
         self.fps_timer += 1.0 / 60.0;
         if self.fps_timer >= 1.0 {
             println!(
-                "[demo] fps≈{} bodies={} {}",
+                "[demo] fps≈{} mode={} bodies={} {}",
                 self.frames,
+                self.scene.mode.name(),
                 self.scene.body_count(),
                 if self.paused { "(paused)" } else { "" }
             );
@@ -132,89 +117,63 @@ impl App {
             self.fps_timer = 0.0;
         }
     }
-}
 
-/// 由 Instance 的 4 个列向量还原模型矩阵(mat4,列主序 f64)。
-fn instance_model(inst: &scene::Instance) -> Matrix4<f64> {
-    Matrix4::from_column_slice(&[
-        inst.m0[0] as f64,
-        inst.m0[1] as f64,
-        inst.m0[2] as f64,
-        inst.m0[3] as f64,
-        inst.m1[0] as f64,
-        inst.m1[1] as f64,
-        inst.m1[2] as f64,
-        inst.m1[3] as f64,
-        inst.m2[0] as f64,
-        inst.m2[1] as f64,
-        inst.m2[2] as f64,
-        inst.m2[3] as f64,
-        inst.m3[0] as f64,
-        inst.m3[1] as f64,
-        inst.m3[2] as f64,
-        inst.m3[3] as f64,
-    ])
-}
-
-/// 光学演示:用 phy-optics 的实时近似后端渲染一个玻璃球 + 地面,
-/// 复用当前相机位姿直接写入帧缓冲像素。
-impl App {
+    /// 光学演示:用 phy-optics 的实时近似后端渲染一个玻璃球 + 地面,
+    /// 复用当前相机位姿直接写入帧缓冲像素。
     fn render_optics(&mut self) {
-    let (w, h) = (self.fb.width as usize, self.fb.height as usize);
-    // 由相机 yaw/pitch/distance 推导 eye 与 target。
-    let yaw = self.cam.yaw as f64;
-    let pitch = self.cam.pitch as f64;
-    let dist = self.cam.distance as f64;
-    let target = V3::new(0.0, 0.0, 0.0);
-    let eye = V3::new(
-        dist * (pitch.cos()) * (yaw.sin()),
-        dist * pitch.sin(),
-        dist * (pitch.cos()) * (yaw.cos()),
-    ) + target;
-    let up = V3::new(0.0, 1.0, 0.0);
-    let fov = std::f64::consts::FRAC_PI_4;
+        let (w, h) = (self.fb.width as usize, self.fb.height as usize);
+        let yaw = self.cam.yaw as f64;
+        let pitch = self.cam.pitch as f64;
+        let dist = self.cam.distance as f64;
+        let target = V3::new(0.0, 0.0, 0.0);
+        let eye = V3::new(
+            dist * (pitch.cos()) * (yaw.sin()),
+            dist * pitch.sin(),
+            dist * (pitch.cos()) * (yaw.cos()),
+        ) + target;
+        let up = V3::new(0.0, 1.0, 0.0);
+        let fov = std::f64::consts::FRAC_PI_4;
 
-    // 构建光学场景:地面(不透明)+ 玻璃球(透明,折射率 1.5)+ 一个小蓝玻璃球。
-    let mut scene = OpticScene::<f64>::new();
-    scene.add(OpticBody::new(
-        Body {
-            shape: Shape::Box {
-                half: V3::new(4.0, 0.1, 4.0),
+        let mut scene = OpticScene::<f64>::new();
+        scene.add(OpticBody::new(
+            Body {
+                shape: phy_rigid::Shape::Box {
+                    half: V3::new(4.0, 0.1, 4.0),
+                },
+                pos: V3::new(0.0, -1.5, 0.0),
+                rot: phy_math::na::UnitQuaternion::identity(),
+                vel: V3::zeros(),
+                inv_mass: 0.0,
             },
-            pos: V3::new(0.0, -1.5, 0.0),
-            rot: phy_math::na::UnitQuaternion::identity(),
-            vel: V3::zeros(),
-            inv_mass: 0.0,
-        },
-        phy_optics::Surface::diffuse(V3::new(0.5, 0.5, 0.5)),
-    ));
-    scene.add(OpticBody::new(
-        Body {
-            shape: Shape::Sphere { r: 1.0 },
-            pos: V3::new(0.0, 0.0, 0.0),
-            rot: phy_math::na::UnitQuaternion::identity(),
-            vel: V3::zeros(),
-            inv_mass: 0.0,
-        },
-        phy_optics::Surface::glass(1.5, V3::new(0.9, 0.95, 1.0)),
-    ));
-    scene.add(OpticBody::new(
-        Body {
-            shape: Shape::Sphere { r: 0.5 },
-            pos: V3::new(1.8, -0.5, 0.5),
-            rot: phy_math::na::UnitQuaternion::identity(),
-            vel: V3::zeros(),
-            inv_mass: 0.0,
-        },
-        phy_optics::Surface::glass(1.33, V3::new(0.4, 0.6, 1.0)),
-    ));
+            OSurface::diffuse(V3::new(0.5, 0.5, 0.5)),
+        ));
+        scene.add(OpticBody::new(
+            Body {
+                shape: phy_rigid::Shape::Sphere { r: 1.0 },
+                pos: V3::new(0.0, 0.0, 0.0),
+                rot: phy_math::na::UnitQuaternion::identity(),
+                vel: V3::zeros(),
+                inv_mass: 0.0,
+            },
+            OSurface::glass(1.5, V3::new(0.9, 0.95, 1.0)),
+        ));
+        scene.add(OpticBody::new(
+            Body {
+                shape: phy_rigid::Shape::Sphere { r: 0.5 },
+                pos: V3::new(1.8, -0.5, 0.5),
+                rot: phy_math::na::UnitQuaternion::identity(),
+                vel: V3::zeros(),
+                inv_mass: 0.0,
+            },
+            OSurface::glass(1.33, V3::new(0.4, 0.6, 1.0)),
+        ));
 
-    let sub = OpticSubsystem::new(scene, Precision::Realtime);
-    let mut buf = vec![V3::new(0.0, 0.0, 0.0); w * h];
-    sub.render_camera(&mut buf, w, h, &eye, &target, &up, fov);
-    for (i, c) in buf.iter().enumerate() {
-        self.fb.pixels[i] = to_rgba8(c);
-    }
+        let sub = OpticSubsystem::new(scene, Precision::Realtime);
+        let mut buf = vec![V3::new(0.0, 0.0, 0.0); w * h];
+        sub.render_camera(&mut buf, w, h, &eye, &target, &up, fov);
+        for i in 0..buf.len() {
+            self.fb.pixels[i] = to_rgba8(&buf[i]);
+        }
     }
 }
 
@@ -226,7 +185,7 @@ impl ApplicationHandler<DemoEvent> for App {
         self.started = true;
 
         let attributes = Window::default_attributes()
-            .with_title("phy-rigid · 3D demo (software)")
+            .with_title("phy-demo · multi-physics (software)")
             .with_inner_size(winit::dpi::PhysicalSize::new(1280, 720));
         let window = Rc::new(
             event_loop
@@ -293,14 +252,16 @@ impl ApplicationHandler<DemoEvent> for App {
                     if let winit::keyboard::Key::Character(c) = &event.logical_key {
                         match c.as_str() {
                             "p" => self.paused = !self.paused,
-                            "o" => self.optics_mode = !self.optics_mode,
+                            "o" => self.scene.toggle_mode(),
+                            "f" => self.scene.set_mode(DemoMode::Fluid),
+                            "h" => self.scene.set_mode(DemoMode::Heat),
                             "r" => self.scene.reset(),
-                            "g" => self.scene.add_boxes(8),
-                            "b" => self.scene.add_spheres(6),
                             "i" => {
                                 println!(
-                                    "[demo] bodies={} paused={}",
+                                    "[demo] mode={} bodies={} steps={} paused={}",
+                                    self.scene.mode.name(),
                                     self.scene.body_count(),
+                                    self.scene.steps,
                                     self.paused
                                 )
                             }
@@ -321,8 +282,8 @@ impl ApplicationHandler<DemoEvent> for App {
 }
 
 fn main() {
-    println!("phy-rigid · 3D demo (software rasterizer)");
-    println!("拖拽旋转 · 滚轮缩放 · P 暂停 · O 光学模式 · R 重置 · G 加盒 · B 加球 · I 统计 · 关闭窗口退出");
+    println!("phy-demo · multi-physics (software rasterizer)");
+    println!("拖拽旋转 · 滚轮缩放 · P 暂停 · O 循环模式 · F 流体 · H 热场 · R 重置 · I 统计 · 关闭窗口退出");
 
     let event_loop = EventLoop::<DemoEvent>::with_user_event().build().unwrap();
     let mut app = App::new(&event_loop);

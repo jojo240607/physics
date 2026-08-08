@@ -13,6 +13,7 @@ pub mod contact;
 pub mod broadphase;
 pub mod narrowphase;
 pub mod solver;
+pub mod subsystem;
 pub mod world;
 
 pub use shape::{Body, Shape};
@@ -20,6 +21,7 @@ pub use contact::Contact;
 pub use broadphase::broadphase;
 pub use narrowphase::collide;
 pub use solver::{SolverParams, solve_position, solve_velocity};
+pub use subsystem::RigidSubsystem;
 pub use world::RigidWorld;
 
 #[cfg(test)]

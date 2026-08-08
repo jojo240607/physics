@@ -35,6 +35,10 @@ impl<T: RealField + Copy> HeatField<T> {
 }
 
 impl<T: RealField + Copy> Subsystem<T> for HeatField<T> {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn step(&mut self, dt: &T) {
         self.last_r = self.field.step_diffusion(self.alpha, *dt);
     }
@@ -58,6 +62,10 @@ impl<T: RealField + Copy> WaveField<T> {
 }
 
 impl<T: RealField + Copy> Subsystem<T> for WaveField<T> {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn step(&mut self, dt: &T) {
         self.field.step_wave(self.c2, *dt);
     }

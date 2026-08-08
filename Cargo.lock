@@ -1100,6 +1100,9 @@ name = "phy-demo"
 version = "0.1.0"
 dependencies = [
  "nalgebra",
+ "phy-core",
+ "phy-field",
+ "phy-fluid",
  "phy-math",
  "phy-optics",
  "phy-rigid",

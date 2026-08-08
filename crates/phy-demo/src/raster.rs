@@ -48,6 +48,38 @@ impl Framebuffer {
             self.pixels[idx] = color;
         }
     }
+
+    /// 填充一个实心圆(屏幕坐标,带深度测试)。
+    pub fn fill_circle(&mut self, cx: i32, cy: i32, r: i32, depth: f32, color: [u8; 3]) {
+        if r <= 0 {
+            return;
+        }
+        let c = pack(
+            color[0] as f32 / 255.0,
+            color[1] as f32 / 255.0,
+            color[2] as f32 / 255.0,
+        );
+        let r2 = r * r;
+        for y in cy - r..=cy + r {
+            for x in cx - r..=cx + r {
+                let dx = x - cx;
+                let dy = y - cy;
+                if dx * dx + dy * dy <= r2 {
+                    self.put(x, y, depth, c);
+                }
+            }
+        }
+    }
+
+    /// 直接按深度写一个像素(盒体填充用)。
+    pub fn set_depth(&mut self, x: i32, y: i32, depth: f32, color: [u8; 3]) {
+        let c = pack(
+            color[0] as f32 / 255.0,
+            color[1] as f32 / 255.0,
+            color[2] as f32 / 255.0,
+        );
+        self.put(x, y, depth, c);
+    }
 }
 
 /// 打包 f32 RGB(0..1) 为 0xAARRGGBB。

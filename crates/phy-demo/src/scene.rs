@@ -1,243 +1,313 @@
-//! 演示场景:把 `RigidWorld` 包装成可渲染场景。
+//! Demo 场景:多物理场世界。
 //!
-//! - 一个静态地面(大扁盒)。
-//! - 一批动态盒与球,从空中落下并相互堆叠/碰撞。
-//! - 每个 body 配一个颜色(与 `bodies` 索引对齐),用于实例化渲染。
+//! 用 `phy_core::World` 统一调度刚体(M3)、流体 SPH(M5)、连续标量场(M7)。
+//! 各子系统独立演化(本里程碑不做跨场耦合),由 `mode` 决定 Demo 当前可视化哪一个。
 
-use phy_math::na::{Matrix4, Quaternion, UnitQuaternion, Vector3};
-use phy_math::na as nalgebra;
-use phy_math::Vec3;
-use phy_rigid::{Body, RigidWorld, Shape};
+use std::any::Any;
 
-/// 每个实例的数据:4x4 模型矩阵(4 个列向量)+ 颜色。
-/// 列主序 mat4 的四个列。
-pub struct Instance {
-    pub m0: [f32; 4],
-    pub m1: [f32; 4],
-    pub m2: [f32; 4],
-    pub m3: [f32; 4],
-    pub color: [f32; 4],
+use phy_core::World;
+use phy_field::{HeatField, ScalarField, Bc};
+use phy_fluid::{FluidSubsystem, FluidWorld};
+use phy_math::{na, RealField, Vec3};
+use phy_rigid::{Body, RigidSubsystem, RigidWorld, Shape};
+
+use crate::camera::Camera;
+use crate::raster::Framebuffer;
+
+/// 演示模式(决定当前可视化哪个子系统)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DemoMode {
+    /// 刚体(默认)。
+    Rigid,
+    /// 流体 SPH 粒子云。
+    Fluid,
+    /// 连续标量场(热扩散)切片。
+    Heat,
+    /// 光学(玻璃球 + 地面,Whitted/Approx 离线/实时)。
+    Optics,
 }
 
-/// 可渲染场景 = 物理世界 + 每体颜色。
+impl DemoMode {
+    /// 循环到下一个模式。
+    pub fn next(self) -> Self {
+        match self {
+            DemoMode::Rigid => DemoMode::Fluid,
+            DemoMode::Fluid => DemoMode::Heat,
+            DemoMode::Heat => DemoMode::Optics,
+            DemoMode::Optics => DemoMode::Rigid,
+        }
+    }
+
+    /// 模式名(用于 HUD)。
+    pub fn name(self) -> &'static str {
+        match self {
+            DemoMode::Rigid => "Rigid",
+            DemoMode::Fluid => "Fluid(SPH)",
+            DemoMode::Heat => "Heat Field",
+            DemoMode::Optics => "Optics",
+        }
+    }
+}
+
+/// 子系统在 World 中的固定索引(用于 downcast 渲染)。
+const IDX_RIGID: usize = 0;
+const IDX_FLUID: usize = 1;
+const IDX_HEAT: usize = 2;
+
+/// Demo 场景:持有统一世界。
 pub struct Scene {
-    world: RigidWorld<f64>,
-    colors: Vec<[f32; 4]>,
-    rng_state: u64,
+    /// 统一调度世界(刚体 + 流体 + 热场)。
+    pub world: World<f64>,
+    /// 当前可视化模式。
+    pub mode: DemoMode,
+    /// 累计步数。
+    pub steps: u64,
 }
 
 impl Scene {
+    /// 构造默认场景:地面 + 掉落刚体 + 流体块 + 热斑。
     pub fn new() -> Self {
-        let mut s = Self {
-            world: RigidWorld::new(),
-            colors: Vec::new(),
-            rng_state: 0x9E37_79B9_7F4A_7C15,
-        };
-        s.reset();
-        s
-    }
+        let mut world: World<f64> = World::default();
 
-    /// 重置场景:重新放置地面与初始物体。
-    pub fn reset(&mut self) {
-        self.world = RigidWorld::new();
-        self.colors.clear();
-
-        // 静态地面(大扁盒)
-        let ground = Body {
+        // --- 刚体(M3) ---
+        let mut rigid = RigidWorld::<f64>::new();
+        // 地面(静止大质量盒)。
+        rigid.add_body(Body {
             shape: Shape::Box {
-                half: Vec3::new(50.0, 0.5, 50.0),
+                half: Vec3::new(20.0, 0.5, 20.0),
             },
             pos: Vec3::new(0.0, -0.5, 0.0),
-            rot: UnitQuaternion::identity(),
+            rot: na::UnitQuaternion::identity(),
             vel: Vec3::zeros(),
             inv_mass: 0.0,
-        };
-        self.world.add_body(ground);
-        self.colors.push([0.20, 0.45, 0.30, 1.0]);
-
-        // 初始一簇下落物体
-        self.add_boxes(14);
-        self.add_spheres(6);
-    }
-
-    /// 追加 n 个随机动态盒。
-    pub fn add_boxes(&mut self, n: usize) {
-        for _ in 0..n {
-            let s = 0.4 + self.rng() * 0.8;
-            let body = Body {
-                shape: Shape::Box {
-                    half: Vec3::new(s, s, s),
-                },
-                pos: Vec3::new(
-                    (self.rng() - 0.5) * 12.0,
-                    4.0 + self.rng() * 10.0,
-                    (self.rng() - 0.5) * 12.0,
-                ),
-                rot: random_quat(&mut self.rng_state),
-                vel: Vec3::zeros(),
-                inv_mass: 1.0,
-            };
-            self.world.add_body(body);
-            self.colors.push(random_color(&mut self.rng_state));
-        }
-    }
-
-    /// 追加 n 个随机动态球。
-    pub fn add_spheres(&mut self, n: usize) {
-        for _ in 0..n {
-            let r = 0.4 + self.rng() * 0.6;
-            let body = Body {
+        });
+        // 掉落小球。
+        for i in 0..3 {
+            let r = 1.0 + 0.3 * (i as f64);
+            rigid.add_body(Body {
                 shape: Shape::Sphere { r },
-                pos: Vec3::new(
-                    (self.rng() - 0.5) * 12.0,
-                    4.0 + self.rng() * 10.0,
-                    (self.rng() - 0.5) * 12.0,
-                ),
-                rot: UnitQuaternion::identity(),
+                pos: Vec3::new(-6.0 + i as f64 * 6.0, 8.0 + i as f64 * 2.0, 0.0),
+                rot: na::UnitQuaternion::identity(),
                 vel: Vec3::zeros(),
-                inv_mass: 1.0,
-            };
-            self.world.add_body(body);
-            self.colors.push(random_color(&mut self.rng_state));
+                inv_mass: 1.0 / 2.0,
+            });
         }
-    }
 
-    /// 推进物理一个时间步。
-    pub fn step(&mut self, dt: f64) {
-        self.world.step(dt);
-    }
+        // --- 流体(M5) ---
+        let params = phy_fluid::SphParams::<f64>::defaults();
+        let mut fluid = FluidWorld::<f64>::new(params);
+        fluid.fill_box(
+            Vec3::new(-2.0, 1.0, -2.0), // 盒最小角
+            Vec3::new(2.0, 5.0, 2.0),   // 盒最大角
+            0.3,                        // 粒子间距
+            0.1,                        // 内壁内缩
+        );
 
-    /// 收集渲染实例:返回 (盒实例, 球实例)。
-    pub fn gather(&self) -> (Vec<Instance>, Vec<Instance>) {
-        let mut boxes = Vec::new();
-        let mut spheres = Vec::new();
-        for (i, b) in self.world.bodies.iter().enumerate() {
-            let color = self.colors.get(i).copied().unwrap_or([0.8, 0.8, 0.8, 1.0]);
-            let inst = body_instance(b, color);
-            match b.shape {
-                Shape::Box { .. } => boxes.push(inst),
-                Shape::Sphere { .. } => spheres.push(inst),
-                Shape::Convex { .. } => boxes.push(inst),
+        // --- 热场(M7) ---
+        // 32x1x32 薄切片(2D 热扩散),dx=0.5,中心热斑。
+        let mut field = ScalarField::<f64>::new(32, 1, 32, 0.5, 0.0, Bc::Neumann);
+        let cx = 16;
+        let cz = 16;
+        for dz in -2..=2 {
+            for dx in -2..=2 {
+                let x = (cx as isize + dx) as usize;
+                let z = (cz as isize + dz) as usize;
+                if x < field.nx && z < field.nz {
+                    let i = field.idx(x, 0, z);
+                    field.u[i] = 1.0;
+                }
             }
         }
-        (boxes, spheres)
+        let heat = HeatField::<f64>::new(field, 0.1);
+
+        // 注册到统一世界(顺序即 step 顺序)。
+        world.add_subsystem(Box::new(RigidSubsystem::new(rigid)));
+        world.add_subsystem(Box::new(FluidSubsystem::new(fluid)));
+        world.add_subsystem(Box::new(heat));
+
+        Self {
+            world,
+            mode: DemoMode::Rigid,
+            steps: 0,
+        }
     }
 
+    /// 推进一帧(固定子步)。
+    pub fn step(&mut self) {
+        let dt = 1.0 / 60.0;
+        self.world.step(dt);
+        self.steps += 1;
+    }
+
+    /// 切换模式。
+    pub fn toggle_mode(&mut self) {
+        self.mode = self.mode.next();
+    }
+
+    /// 直接设置模式。
+    pub fn set_mode(&mut self, mode: DemoMode) {
+        self.mode = mode;
+    }
+
+    /// 重置场景为新构造状态。
+    pub fn reset(&mut self) {
+        *self = Scene::new();
+    }
+
+    /// 当前刚体数量(用于 HUD)。
     pub fn body_count(&self) -> usize {
-        self.world.bodies.len()
+        self.world
+            .get(IDX_RIGID)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<RigidSubsystem<f64>>()
+            .unwrap()
+            .world
+            .bodies
+            .len()
+    }
+
+    /// 渲染当前模式。
+    pub fn render(&self, fb: &mut Framebuffer, cam: &Camera) {
+        match self.mode {
+            DemoMode::Rigid => self.render_rigid(fb, cam),
+            DemoMode::Fluid => self.render_fluid(fb, cam),
+            DemoMode::Heat => self.render_heat(fb, cam),
+            DemoMode::Optics => { /* 光学由 App 独立渲染,这里不处理 */ }
+        }
+    }
+
+    fn render_rigid(&self, fb: &mut Framebuffer, cam: &Camera) {
+        let sub = self
+            .world
+            .get(IDX_RIGID)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<RigidSubsystem<f64>>()
+            .unwrap();
+        for body in &sub.world.bodies {
+            render_body(fb, cam, body);
+        }
+    }
+
+    fn render_fluid(&self, fb: &mut Framebuffer, cam: &Camera) {
+        let sub = self
+            .world
+            .get(IDX_FLUID)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<FluidSubsystem<f64>>()
+            .unwrap();
+        for p in &sub.world.particles {
+            if let Some((sx, sy, depth)) = project_point(cam, fb, p.pos) {
+                let r = (2.0 * depth).clamp(1.0, 8.0) as i32;
+                fb.fill_circle(sx, sy, r, depth as f32, [40u8, 120u8, 255u8]);
+            }
+        }
+    }
+
+    fn render_heat(&self, fb: &mut Framebuffer, cam: &Camera) {
+        let sub = self
+            .world
+            .get(IDX_HEAT)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<HeatField<f64>>()
+            .unwrap();
+        let f = &sub.field;
+        let nx = f.nx;
+        let nz = f.nz;
+        for ix in 0..nx {
+            for iz in 0..nz {
+                let v = f.u[f.idx(ix, 0, iz)];
+                let wx = (ix as f64 - nx as f64 / 2.0) * f.dx;
+                let wz = (iz as f64 - nz as f64 / 2.0) * f.dx;
+                let wp = Vec3::new(wx, 0.6, wz);
+                if let Some((sx, sy, depth)) = project_point(cam, fb, wp) {
+                    let t = v.clamp(0.0, 1.0);
+                    let col = [(t * 255.0) as u8, 40u8, ((1.0 - t) * 255.0) as u8];
+                    fb.fill_circle(sx, sy, 3, depth as f32, col);
+                }
+            }
+        }
     }
 }
 
-/// 由 body 的位姿/形状构造一个实例化数据(模型矩阵 + 颜色)。
-fn body_instance(b: &Body<f64>, color: [f32; 4]) -> Instance {
-    // 旋转:把 f64 四元数转成 f32。
-    let q = &b.rot;
-    let qf = Quaternion::new(
-        q.w as f32,
-        q.i as f32,
-        q.j as f32,
-        q.k as f32,
-    );
-    let rot: Matrix4<f32> = Matrix4::from(UnitQuaternion::from_quaternion(qf));
+/// 把世界点投影到屏幕像素,返回 (sx, sy, depth) 其中 depth=1/w(越小越近)。
+/// 复用 `Camera::view_proj`(f32 矩阵)。
+fn project_point(cam: &Camera, fb: &Framebuffer, world: Vec3<f64>) -> Option<(i32, i32, f64)> {
+    let aspect = fb.width as f32 / fb.height as f32;
+    let vp = cam.view_proj(aspect);
+    let clip = vp
+        * na::Vector4::new(world.x as f32, world.y as f32, world.z as f32, 1.0);
+    if clip.w <= 1e-5 {
+        return None;
+    }
+    let inv = 1.0 / clip.w;
+    let ndc_x = clip.x * inv;
+    let ndc_y = clip.y * inv;
+    let sx = ((ndc_x * 0.5 + 0.5) * fb.width as f32) as i32;
+    let sy = ((1.0 - (ndc_y * 0.5 + 0.5)) * fb.height as f32) as i32;
+    let depth = inv as f64; // 1/w
+    Some((sx, sy, depth))
+}
 
-    let t = b.pos;
-    let trans = Matrix4::new_translation(&Vector3::new(
-        t.x as f32,
-        t.y as f32,
-        t.z as f32,
-    ));
-
-    let scale = match b.shape {
-        Shape::Box { ref half } => Matrix4::new_nonuniform_scaling(&Vector3::new(
-            half.x as f32 * 2.0,
-            half.y as f32 * 2.0,
-            half.z as f32 * 2.0,
-        )),
-        Shape::Sphere { r } => Matrix4::new_scaling(r as f32),
-        Shape::Convex { .. } => Matrix4::identity(),
-    };
-
-    let model = trans * rot * scale;
-    let s = model.as_slice();
-    let col = |a: usize| [s[a], s[a + 1], s[a + 2], s[a + 3]];
-    Instance {
-        m0: col(0),
-        m1: col(4),
-        m2: col(8),
-        m3: col(12),
-        color,
+/// 渲染单个刚体(地面 + 球体/盒)。
+fn render_body(fb: &mut Framebuffer, cam: &Camera, body: &Body<f64>) {
+    match &body.shape {
+        Shape::Sphere { r } => {
+            if let Some((sx, sy, depth)) = project_point(cam, fb, body.pos) {
+                let r_screen = (*r * depth) as i32;
+                let col = if body.inv_mass < 1e-9 {
+                    [90u8, 90u8, 90u8]
+                } else {
+                    [220u8, 60u8, 60u8]
+                };
+                fb.fill_circle(sx, sy, r_screen.max(1), depth as f32, col);
+            }
+        }
+        Shape::Box { half } => {
+            let corners = [
+                Vec3::new(body.pos.x - half.x, body.pos.y - half.y, body.pos.z - half.z),
+                Vec3::new(body.pos.x + half.x, body.pos.y - half.y, body.pos.z - half.z),
+                Vec3::new(body.pos.x + half.x, body.pos.y + half.y, body.pos.z - half.z),
+                Vec3::new(body.pos.x - half.x, body.pos.y + half.y, body.pos.z - half.z),
+                Vec3::new(body.pos.x - half.x, body.pos.y - half.y, body.pos.z + half.z),
+                Vec3::new(body.pos.x + half.x, body.pos.y - half.y, body.pos.z + half.z),
+                Vec3::new(body.pos.x + half.x, body.pos.y + half.y, body.pos.z + half.z),
+                Vec3::new(body.pos.x - half.x, body.pos.y + half.y, body.pos.z + half.z),
+            ];
+            let mut minx = i32::MAX;
+            let mut maxx = i32::MIN;
+            let mut miny = i32::MAX;
+            let mut maxy = i32::MIN;
+            let mut depth = f64::INFINITY;
+            for v in &corners {
+                if let Some((sx, sy, d)) = project_point(cam, fb, *v) {
+                    depth = depth.min(d);
+                    minx = minx.min(sx);
+                    maxx = maxx.max(sx);
+                    miny = miny.min(sy);
+                    maxy = maxy.max(sy);
+                }
+            }
+            if minx > maxx || miny > maxy {
+                return;
+            }
+            let col = if body.inv_mass < 1e-9 {
+                [90u8, 90u8, 90u8]
+            } else {
+                [220u8, 60u8, 60u8]
+            };
+            for y in miny..=maxy {
+                for x in minx..=maxx {
+                    fb.set_depth(x, y, depth as f32, col);
+                }
+            }
+        }
+        Shape::Convex { .. } => { /* 凸体简略不渲染 */ }
     }
 }
 
-/// 简易确定性 RNG(xorshift64*)。
-impl Scene {
-    fn rng(&mut self) -> f64 {
-        let mut x = self.rng_state;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        x = x.wrapping_mul(0x2545F4914F6CDD1D);
-        self.rng_state = x;
-        // 映射到 [0,1)
-        ((x >> 11) as f64) / (1u64 << 53) as f64
-    }
-}
-
-fn random_quat(state: &mut u64) -> UnitQuaternion<f64> {
-    let r = |s: &mut u64| -> f64 {
-        let mut x = *s;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        x = x.wrapping_mul(0x2545F4914F6CDD1D);
-        *s = x;
-        ((x >> 11) as f64) / (1u64 << 53) as f64
-    };
-    let u1 = r(state);
-    let u2 = r(state);
-    let u3 = r(state);
-    let q = Quaternion::new(
-        (1.0 - u1).sqrt(),
-        (u1).sqrt() * (2.0 * std::f64::consts::PI * u2).sin(),
-        (u1).sqrt() * (2.0 * std::f64::consts::PI * u2).cos(),
-        (u3 * 2.0 * std::f64::consts::PI).sin(),
-    );
-    UnitQuaternion::from_quaternion(q)
-}
-
-fn random_color(state: &mut u64) -> [f32; 4] {
-    let r = |s: &mut u64| -> f64 {
-        let mut x = *s;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        x = x.wrapping_mul(0x2545F4914F6CDD1D);
-        *s = x;
-        ((x >> 11) as f64) / (1u64 << 53) as f64
-    };
-    // HSV -> RGB,固定高饱和、明亮
-    let h = r(state);
-    let (r, g, b) = hsv_to_rgb(h, 0.7, 0.95);
-    [r, g, b, 1.0]
-}
-
-fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (f32, f32, f32) {
-    let i = (h * 6.0).floor();
-    let f = h * 6.0 - i;
-    let p = v * (1.0 - s);
-    let q = v * (1.0 - f * s);
-    let t = v * (1.0 - (1.0 - f) * s);
-    let (r, g, b) = match (i as i32) % 6 {
-        0 => (v, t, p),
-        1 => (q, v, p),
-        2 => (p, v, t),
-        3 => (p, q, v),
-        4 => (t, p, v),
-        _ => (v, p, q),
-    };
-    (r as f32, g as f32, b as f32)
-}
-
-// 避免 nalgebra 重导出未使用告警(用于类型约束)。
-#[allow(dead_code)]
-type _Na = nalgebra::Matrix4<f64>;
+// 确保 Subsystem trait 仍是 Any(供 downcast)。
+fn _assert_any<T: RealField>(_: &dyn Any) {}

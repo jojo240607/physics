@@ -1,5 +1,7 @@
 //! 把 `FluidWorld` 适配为 `phy_core::Subsystem`,以便挂入统一的 `World<T>` 多物理场驱动。
 
+use std::any::Any;
+
 use phy_core::Subsystem;
 use phy_math::RealField;
 
@@ -23,6 +25,10 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidSubsystem<T> {
 }
 
 impl<T: RealField + Copy + num_traits::ToPrimitive> Subsystem<T> for FluidSubsystem<T> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn step(&mut self, dt: &T) {
         self.world.step(*dt);
     }
