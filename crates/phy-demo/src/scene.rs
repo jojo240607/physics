@@ -28,6 +28,8 @@ pub enum DemoMode {
     Soft,
     /// 光学(玻璃球 + 地面,Whitted/Approx 离线/实时)。
     Optics,
+    /// 流体 + 热场联合耦合(M4e 流体↔热双向耦合,M9 接入 Demo)。
+    FluidHeat,
 }
 
 impl DemoMode {
@@ -38,7 +40,8 @@ impl DemoMode {
             DemoMode::Fluid => DemoMode::Heat,
             DemoMode::Heat => DemoMode::Soft,
             DemoMode::Soft => DemoMode::Optics,
-            DemoMode::Optics => DemoMode::Rigid,
+            DemoMode::Optics => DemoMode::FluidHeat,
+            DemoMode::FluidHeat => DemoMode::Rigid,
         }
     }
 
@@ -50,6 +53,7 @@ impl DemoMode {
             DemoMode::Heat => "Heat Field",
             DemoMode::Soft => "Soft Body",
             DemoMode::Optics => "Optics",
+            DemoMode::FluidHeat => "Fluid+Heat (M4e)",
         }
     }
 }
@@ -133,15 +137,70 @@ impl Scene {
         let mut soft = soft;
         soft.ground_y = -0.5;
 
+        // --- 默认场景启用 M4e 流体↔热双向耦合 ---
+        // 让流体子系统感知热场:热浮力 + 对流换热(默认场景即演示自然对流)。
+        let mut fluid_sub = FluidSubsystem::new(fluid);
+        fluid_sub.thermal_expansion = 0.5; // β:热浮力温度膨胀系数
+        fluid_sub.heat_gain = 0.1; // 运动区域对流注入热源
+
         // 注册到统一世界(顺序即 step 顺序)。
         world.add_subsystem(Box::new(RigidSubsystem::new(rigid)));
-        world.add_subsystem(Box::new(FluidSubsystem::new(fluid)));
+        world.add_subsystem(Box::new(fluid_sub));
         world.add_subsystem(Box::new(heat));
         world.add_subsystem(Box::new(SoftSubsystem::new(soft)));
 
         Self {
             world,
             mode: DemoMode::Rigid,
+            steps: 0,
+        }
+    }
+
+    /// 构造纯流体↔热场耦合演示场景(M4e 验证)。
+    ///
+    /// 流体盒填充 [-1,1]³、热场覆盖 [-3,3]³ 网格,暖顶冷底配置触发自然对流。
+    /// 用于 `DemoMode::FluidHeat` 模式,可单独观察热浮力与对流换热。
+    pub fn fluid_heat(warm_top: bool) -> Self {
+        let mut world: World<f64> = World::default();
+
+        // --- 流体(M5) ---
+        let mut fp = SphParams::defaults();
+        fp.bounds_min = Vec3::new(-3.0, -3.0, -3.0);
+        fp.bounds_max = Vec3::new(3.0, 3.0, 3.0);
+        fp.gravity = Vec3::new(0.0, -9.81, 0.0);
+        let mut fluid = FluidWorld::new(fp);
+        fluid.fill_box(
+            Vec3::new(-1.0, -1.0, -1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            0.3,
+            0.05,
+        );
+        let mut fluid_sub = FluidSubsystem::new(fluid);
+        fluid_sub.thermal_expansion = 0.5;
+        fluid_sub.heat_gain = 0.1;
+        world.add_subsystem(Box::new(fluid_sub));
+
+        // --- 热场(M7):下半冷、上半热(暖顶冷底),与流体盒对齐 ---
+        let nx = 16usize;
+        let dx = 6.0 / (nx as f64 - 1.0); // 覆盖 [-3,3]
+        let mut f = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann)
+            .with_origin(Vec3::new(-3.0, -3.0, -3.0));
+        for iy in 0..nx {
+            let y = -3.0 + (iy as f64) * dx;
+            let t = if warm_top && y > 0.0 { 50.0 } else { 0.0 };
+            for ix in 0..nx {
+                for iz in 0..nx {
+                    let idx = f.idx(ix, iy, iz);
+                    f.u[idx] = t;
+                }
+            }
+        }
+        let heat = HeatField::new(f, 0.1);
+        world.add_subsystem(Box::new(heat));
+
+        Self {
+            world,
+            mode: DemoMode::FluidHeat,
             steps: 0,
         }
     }
@@ -163,12 +222,24 @@ impl Scene {
 
     /// 直接设置模式。
     pub fn set_mode(&mut self, mode: DemoMode) {
+        // 切到/离开流体热场模式时重建场景(专注对流演示)。
+        if mode == DemoMode::FluidHeat || self.mode == DemoMode::FluidHeat {
+            if mode == DemoMode::FluidHeat {
+                *self = Scene::fluid_heat(true);
+            } else {
+                *self = Scene::new();
+            }
+            return;
+        }
         self.mode = mode;
     }
 
     /// 重置场景为新构造状态。
     pub fn reset(&mut self) {
-        *self = Scene::new();
+        *self = match self.mode {
+            DemoMode::FluidHeat => Scene::fluid_heat(true),
+            _ => Scene::new(),
+        };
     }
 
     /// 当前刚体数量(用于 HUD)。
@@ -192,6 +263,7 @@ impl Scene {
             DemoMode::Heat => self.render_heat(fb, cam),
             DemoMode::Soft => self.render_soft(fb, cam),
             DemoMode::Optics => { /* 光学由 App 独立渲染,这里不处理 */ }
+            DemoMode::FluidHeat => self.render_fluid_heat(fb, cam),
         }
     }
 
@@ -282,6 +354,63 @@ impl Scene {
                     (200.0 - t * 40.0) as u8,
                 ];
                 fb.fill_circle(sx, sy, 3, depth as f32, col);
+            }
+        }
+    }
+
+    /// 流体 + 热场联合渲染(M4e 耦合可视化)。
+    ///
+    /// 先画热场切片(蓝→红温度色阶),再叠加热流体粒子(蓝点),
+    /// 让用户直观看到热浮力导致的对流(暖区粒子上浮、运动区加热场)。
+    fn render_fluid_heat(&self, fb: &mut Framebuffer, cam: &Camera) {
+        // 动态查找流体/热场子系统索引(不依赖注册顺序)。
+        let mut fidx = None;
+        let mut hidx = None;
+        for i in 0..self.world.subsystem_count() {
+            if let Some(s) = self.world.get(i) {
+                if s.as_any().downcast_ref::<FluidSubsystem<f64>>().is_some() {
+                    fidx = Some(i);
+                }
+                if s.as_any().downcast_ref::<HeatField<f64>>().is_some() {
+                    hidx = Some(i);
+                }
+            }
+        }
+
+        // 1) 热场切片(背景)。
+        if let Some(hi) = hidx {
+            if let Some(h) = self.world.get(hi).unwrap().as_any().downcast_ref::<HeatField<f64>>() {
+                let f = &h.field;
+                let nx = f.nx;
+                let ny = f.ny;
+                let nz = f.nz;
+                let iy = ny / 2; // 中间层切片。
+                let tmax = f.max_abs().max(1e-6);
+                for ix in 0..nx {
+                    for iz in 0..nz {
+                        let v = f.u[f.idx(ix, iy, iz)];
+                        let wx = f.origin.x + (ix as f64) * f.dx;
+                        let wy = f.origin.y + (iy as f64) * f.dx;
+                        let wz = f.origin.z + (iz as f64) * f.dx;
+                        if let Some((sx, sy, depth)) = project_point(cam, fb, Vec3::new(wx, wy + 0.05, wz)) {
+                            let t = (v / tmax).clamp(0.0, 1.0);
+                            let col = [(t * 255.0) as u8, 40u8, ((1.0 - t) * 255.0) as u8];
+                            fb.fill_circle(sx, sy, 3, depth as f32, col);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2) 流体粒子(前景,蓝点)。
+        if let Some(fi) = fidx {
+            if let Some(fs) = self.world.get(fi).unwrap().as_any().downcast_ref::<FluidSubsystem<f64>>() {
+                for p in &fs.world.particles {
+                    if let Some((sx, sy, depth)) = project_point(cam, fb, p.pos) {
+                        let r = (2.0 * depth).clamp(1.0, 8.0) as i32;
+                        fb.fill_circle(sx, sy, r, depth as f32, [40u8, 120u8, 255u8]);
+                    }
+                }
             }
         }
     }

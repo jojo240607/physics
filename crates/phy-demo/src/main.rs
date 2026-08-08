@@ -257,6 +257,7 @@ impl ApplicationHandler<DemoEvent> for App {
                             "h" => self.scene.set_mode(DemoMode::Heat),
                             "s" => self.scene.set_mode(DemoMode::Soft),
                             "r" => self.scene.reset(),
+                            "q" => self.scene.set_mode(DemoMode::FluidHeat),
                             "i" => {
                                 println!(
                                     "[demo] mode={} bodies={} steps={} paused={}",
