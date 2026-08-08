@@ -1135,6 +1135,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "phy-granular"
+version = "0.1.0"
+dependencies = [
+ "nalgebra",
+ "num-traits",
+ "phy-core",
+ "phy-math",
+ "serde",
+]
+
+[[package]]
 name = "phy-io"
 version = "0.1.0"
 dependencies = [
