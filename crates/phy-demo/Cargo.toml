@@ -13,5 +13,6 @@ phy-soft = { path = "../phy-soft" }
 phy-core = { path = "../phy-core" }
 phy-io = { path = "../phy-io" }
 nalgebra = { workspace = true }
+rayon = { workspace = true }
 winit = "0.30"
 softbuffer = "0.4"

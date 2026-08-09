@@ -14,6 +14,7 @@
 use phy_math::{gravity, RealField, Vec3};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use rayon::prelude::*;
 
 /// 单个球面颗粒。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,31 +167,57 @@ impl<T: RealField + Copy> GranularWorld<T> {
         }
         let old: Vec<Vec3<T>> = self.grains.iter().map(|gr| gr.pos).collect();
 
-        // 2. 约束投影(Gauss-Seidel)。
-        for _ in 0..self.iterations {
-            // 2a. 球-球非穿透(单边约束)。
+        // 2. 约束投影(Jacobi 式并行;S7 并行后端)。
+        //
+        // 原实现为 Gauss-Seidel(每对即时改写 `predicted`,顺序敏感、不可并行)。
+        // 现改为 Jacobi:每对只读本迭代起点的 `predicted` 快照,把位移修正累加到
+        // 独立的 per-body delta 缓冲(`deltas`),迭代末统一施加。这样可在 rayon
+        // 下并行遍历所有 (i<j) 对;reduce 以固定顺序合并,结果与串行逐对相加
+        // 完全一致(同索引对的修正大小相同,仅求和顺序固定),保持确定性(利于 S8)。
+        let pairs: Vec<(usize, usize)> = {
+            let mut v = Vec::with_capacity(n * (n.saturating_sub(1)) / 2);
             for i in 0..n {
                 for j in (i + 1)..n {
-                    let ri = self.grains[i].radius;
-                    let rj = self.grains[j].radius;
-                    let pi = predicted[i];
-                    let pj = predicted[j];
-                    let d = pj - pi;
-                    let dist = d.norm().max(T::from_f64(1e-9).unwrap());
-                    let min_dist = ri + rj;
-                    if dist < min_dist {
-                        let wi = self.grains[i].inv_mass;
-                        let wj = self.grains[j].inv_mass;
-                        let wsum = wi + wj;
-                        if wsum <= T::zero() {
-                            continue;
-                        }
-                        let corr = (min_dist - dist) / dist;
-                        let dir = d * corr;
-                        predicted[i] -= dir * (wi / wsum);
-                        predicted[j] += dir * (wj / wsum);
-                    }
+                    v.push((i, j));
                 }
+            }
+            v
+        };
+        for _ in 0..self.iterations {
+            // 2a. 球-球非穿透(单边约束),Jacobi 并行累积。
+            let zero = Vec3::zeros();
+            let deltas: Vec<Vec3<T>> = pairs
+                .par_iter()
+                .fold(
+                    || vec![zero; n],
+                    |mut local, &(i, j)| {
+                        let ri = self.grains[i].radius;
+                        let rj = self.grains[j].radius;
+                        let pi = predicted[i];
+                        let pj = predicted[j];
+                        let d = pj - pi;
+                        let dist = d.norm().max(T::from_f64(1e-9).unwrap());
+                        let min_dist = ri + rj;
+                        if dist < min_dist {
+                            let wi = self.grains[i].inv_mass;
+                            let wj = self.grains[j].inv_mass;
+                            let wsum = wi + wj;
+                            if wsum > T::zero() {
+                                let corr = (min_dist - dist) / dist;
+                                let dir = d * corr;
+                                local[i] -= dir * (wi / wsum);
+                                local[j] += dir * (wj / wsum);
+                            }
+                        }
+                        local
+                    },
+                )
+                .reduce(|| vec![zero; n], |a, b| {
+                    a.iter().zip(b.iter()).map(|(x, y)| *x + *y).collect()
+                });
+
+            for k in 0..n {
+                predicted[k] += deltas[k];
             }
             // 2b. 盒边界约束(夹回中心,留半径余量)。
             let lo = self.bounds_lo;

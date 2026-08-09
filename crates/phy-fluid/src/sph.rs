@@ -341,101 +341,141 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidWorld<T> {
     }
 
     /// 密度与压力:ρ_i = Σ m_j W(i,j); p_i = max(0, k (ρ_i - ρ0))。
+    ///
+    /// S7 并行后端:每粒子只读全局 `pos`/`mass`(经网格邻居查询),把 `rho`/`p`
+    /// 累加到独立并行缓冲,最后一次性写回。计算与遍历顺序无关,故 rayon 并行
+    /// 结果与串行逐一对应、完全确定。
     fn compute_density_pressure(&mut self) {
         let h = self.params.h;
-        for i in 0..self.particles.len() {
-            let p_i = self.particles[i].pos;
-            let mut rho = T::zero();
-            let k = &self.kernels;
-            self.grid.for_each_neighbor(&p_i, |j| {
-                let r = na_distance(&p_i, &self.particles[j].pos);
-                if r < h {
-                    rho += self.particles[j].mass * k.poly6(r);
-                }
-            });
-            self.particles[i].rho = rho;
-            // 状态方程(理想气体型),压力非负以防聚团吸力。
-            let over = rho - self.params.rest_density;
-            self.particles[i].p = if over > T::zero() {
-                self.params.stiffness * over
-            } else {
-                T::zero()
-            };
+        let n = self.particles.len();
+        if n == 0 {
+            return;
+        }
+        let k = &self.kernels;
+        let rest = self.params.rest_density;
+        let stiff = self.params.stiffness;
+
+        // 快照只读量(位置/质量),供并行闭包借用,避免写回/读取竞争。
+        let pos: Vec<Vec3<T>> = self.particles.iter().map(|p| p.pos).collect();
+        let mass: Vec<T> = self.particles.iter().map(|p| p.mass).collect();
+        let grid = &self.grid;
+
+        use rayon::prelude::*;
+        let (rho_out, p_out): (Vec<T>, Vec<T>) = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let p_i = pos[i];
+                let mut rho = T::zero();
+                grid.for_each_neighbor(&p_i, |j| {
+                    let r = na_distance(&p_i, &pos[j]);
+                    if r < h {
+                        rho += mass[j] * k.poly6(r);
+                    }
+                });
+                // 状态方程(理想气体型),压力非负以防聚团吸力。
+                let over = rho - rest;
+                let p = if over > T::zero() {
+                    stiff * over
+                } else {
+                    T::zero()
+                };
+                (rho, p)
+            })
+            .unzip();
+
+        for (i, part) in self.particles.iter_mut().enumerate() {
+            part.rho = rho_out[i];
+            part.p = p_out[i];
         }
     }
 
     /// 受力:对称压力力 + 粘性力(非牛顿幂律有效粘度) + 重力,汇聚成加速度。
+    ///
+    /// S7 并行后端:每粒子只读本步 `pos`/`vel`/`rho`/`p`/`mass`/`material`,把
+    /// `acc`/`mu_eff` 累加到独立并行缓冲后写回。各粒子结果互不影响,并行安全。
     fn compute_forces(&mut self) {
+        let n = self.particles.len();
+        if n == 0 {
+            return;
+        }
         let k = &self.kernels;
         let h = self.params.h;
         let r_eps = <T as num_traits::FromPrimitive>::from_f64(1e-4).unwrap();
-        for i in 0..self.particles.len() {
-            let p_i = self.particles[i].pos;
-            let v_i = self.particles[i].vel;
-            let rho_i = self.particles[i].rho;
-            let p_i_p = self.particles[i].p;
-            let m_i = self.particles[i].mass;
-            let mat = self.particles[i].material;
+        let visc_k = self.params.visc_k.clone();
+        let visc_n = self.params.visc_n.clone();
+        let shear_min = self.params.shear_min;
 
-            let mut f_press = Vec3::zeros();
-            // 粘性累加(尚未乘有效粘度 μ)
-            let mut f_visc_raw = Vec3::zeros();
-            // 局部应变率代理 = Σ |v_j - v_i| / (r+ε) · (m_j/ρ_j)
-            let mut shear = T::zero();
+        // 快照只读量(位置/速度/密度/压力/质量/材质),供并行闭包借用。
+        let pos: Vec<Vec3<T>> = self.particles.iter().map(|p| p.pos).collect();
+        let vel: Vec<Vec3<T>> = self.particles.iter().map(|p| p.vel).collect();
+        let rho: Vec<T> = self.particles.iter().map(|p| p.rho).collect();
+        let pr: Vec<T> = self.particles.iter().map(|p| p.p).collect();
+        let mass: Vec<T> = self.particles.iter().map(|p| p.mass).collect();
+        let mat: Vec<usize> = self.particles.iter().map(|p| p.material).collect();
+        let grid = &self.grid;
 
-            self.grid.for_each_neighbor(&p_i, |j| {
-                if j == i {
-                    return;
-                }
-                let d = self.particles[j].pos - p_i;
-                let r = d.norm();
-                if r >= h || r <= T::zero() {
-                    return;
-                }
-                let rho_j = self.particles[j].rho;
-                let p_j = self.particles[j].p;
-                // 对称压力力: -m_i m_j (p_i/ρ_i² + p_j/ρ_j²) ∇W
-                let grad = k.spiky_grad_mag(r); // 含负系数
-                let dir = d / r; // 由 j 指向 i
-                let coef =
-                    m_i * self.particles[j].mass * (p_i_p / (rho_i * rho_i) + p_j / (rho_j * rho_j));
-                f_press += dir * (coef * grad);
-                // 粘性力(原始项,μ 在外层乘): μ m_i m_j (v_j - v_i)/ρ_j ∇²W
-                let lap = k.visc_lap(r);
-                f_visc_raw += (self.particles[j].vel - v_i)
-                    * (m_i * self.particles[j].mass / rho_j * lap);
-                // 应变率代理累加
-                let dv = (self.particles[j].vel - v_i).norm();
-                shear += dv / (r + r_eps) * (self.particles[j].mass / rho_j);
-            });
+        use rayon::prelude::*;
+        let (acc_out, mu_out): (Vec<Vec3<T>>, Vec<T>) = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let p_i = pos[i];
+                let v_i = vel[i];
+                let rho_i = rho[i];
+                let p_i_p = pr[i];
+                let m_i = mass[i];
 
-            // 非牛顿幂律有效粘度:μ_eff = k·max(剪切率, ε)^(n-1)
-            // (n=1 退化为牛顿流体;n<1 剪切变稀;n>1 剪切变稠)
-            let m_idx = if mat < self.params.visc_k.len() {
-                mat
-            } else {
-                0
-            };
-            let kc = self.params.visc_k[m_idx];
-            let nn = self.params.visc_n[m_idx];
-            let sreg = if shear > self.params.shear_min {
-                shear
-            } else {
-                self.params.shear_min
-            };
-            let mu_eff = kc * sreg.powf(nn - T::one());
-            self.particles[i].mu_eff = mu_eff;
+                let mut f_press = Vec3::zeros();
+                // 粘性累加(尚未乘有效粘度 μ)
+                let mut f_visc_raw = Vec3::zeros();
+                // 局部应变率代理 = Σ |v_j - v_i| / (r+ε) · (m_j/ρ_j)
+                let mut shear = T::zero();
 
-            let f_visc = f_visc_raw * mu_eff;
+                grid.for_each_neighbor(&p_i, |j| {
+                    if j == i {
+                        return;
+                    }
+                    let d = pos[j] - p_i;
+                    let r = d.norm();
+                    if r >= h || r <= T::zero() {
+                        return;
+                    }
+                    let rho_j = rho[j];
+                    let p_j = pr[j];
+                    // 对称压力力: -m_i m_j (p_i/ρ_i² + p_j/ρ_j²) ∇W
+                    let grad = k.spiky_grad_mag(r); // 含负系数
+                    let dir = d / r; // 由 j 指向 i
+                    let coef = m_i * mass[j] * (p_i_p / (rho_i * rho_i) + p_j / (rho_j * rho_j));
+                    f_press += dir * (coef * grad);
+                    // 粘性力(原始项,μ 在外层乘): μ m_i m_j (v_j - v_i)/ρ_j ∇²W
+                    let lap = k.visc_lap(r);
+                    f_visc_raw += (vel[j] - v_i) * (m_i * mass[j] / rho_j * lap);
+                    // 应变率代理累加
+                    let dv = (vel[j] - v_i).norm();
+                    shear += dv / (r + r_eps) * (mass[j] / rho_j);
+                });
 
-            // SPH 近邻加速度(压力+粘性),不含体力;重力/浮力在 integrate 经 body_acc 叠加,
-            // 这样 `couple_heat`/`couple_points` 在 step→couple 阶段写入的浮力不会被此处覆盖。
-            let acc = if rho_i > T::zero() {
-                (f_press + f_visc) / rho_i
-            } else {
-                Vec3::zeros()
-            };
-            self.particles[i].acc = acc;
+                // 非牛顿幂律有效粘度:μ_eff = k·max(剪切率, ε)^(n-1)
+                let m_idx = if mat[i] < visc_k.len() { mat[i] } else { 0 };
+                let kc = visc_k[m_idx];
+                let nn = visc_n[m_idx];
+                let sreg = if shear > shear_min { shear } else { shear_min };
+                let mu_eff = kc * sreg.powf(nn - T::one());
+
+                let f_visc = f_visc_raw * mu_eff;
+
+                // SPH 近邻加速度(压力+粘性),不含体力;重力/浮力在 integrate 经 body_acc 叠加。
+                let acc = if rho_i > T::zero() {
+                    (f_press + f_visc) / rho_i
+                } else {
+                    Vec3::zeros()
+                };
+                (acc, mu_eff)
+            })
+            .unzip();
+
+        for (i, part) in self.particles.iter_mut().enumerate() {
+            part.acc = acc_out[i];
+            part.mu_eff = mu_out[i];
         }
     }
 

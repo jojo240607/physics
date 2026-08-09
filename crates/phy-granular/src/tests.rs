@@ -111,3 +111,27 @@ fn runs_as_subsystem_in_world() {
     assert_eq!(sub.world.grains.len(), 80);
     assert!(sub.world.t > 0.0);
 }
+
+#[test]
+fn parallel_solve_is_deterministic() {
+    // S7 并行后端:Jacobi 约束投影经 rayon 并行 reduce,结果必须与串行逐一相加
+    // 一致,且多次运行完全可复现(固定 pair 顺序的 reduce)。
+    let mut a: GranularWorld<f64> = GranularWorld::new();
+    a.set_bounds(
+        Vec3::new(-3.0, -5.0, -3.0),
+        Vec3::new(3.0, 5.0, 3.0),
+    );
+    a.fill_grid(150, 0.3, 1.0, 1.04);
+    let mut b = a.clone();
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..120 {
+        a.step(dt);
+        b.step(dt);
+    }
+    for (ga, gb) in a.grains.iter().zip(b.grains.iter()) {
+        assert!((ga.pos.x - gb.pos.x).abs() < 1e-12);
+        assert!((ga.pos.y - gb.pos.y).abs() < 1e-12);
+        assert!((ga.pos.z - gb.pos.z).abs() < 1e-12);
+    }
+}

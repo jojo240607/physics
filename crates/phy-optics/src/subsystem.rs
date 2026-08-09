@@ -5,6 +5,7 @@ use phy_math::{na, RealField, Vec3};
 use phy_rigid::RigidSubsystem;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use rayon::prelude::*;
 
 use crate::renderer::{Approx, Renderer, Whitted};
 use crate::scene::OpticScene;
@@ -50,6 +51,10 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> OpticSubsystem<T> {
 
     /// 用相机参数渲染一帧到 `buf`(宽×高 RGB f64,行优先)。
     /// 简单针孔相机:`eye` 看向 `target`,`fov` 为垂直视场(弧度)。
+    ///
+    /// S7 并行后端:每个像素的 `trace` 相互独立(只读 `scene`/`eye`/方向),
+    /// 故用 rayon 并行遍历全部像素,结果写入并行色缓冲后回填 `buf`。
+    /// 像素结果仅由 (x,y) 决定,与遍历顺序无关,并行渲染与串行逐像素完全一致。
     pub fn render_camera(
         &self,
         buf: &mut [Vec3<T>],
@@ -60,10 +65,33 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> OpticSubsystem<T> {
         up: &Vec3<T>,
         fov: T,
     ) {
-        let renderer: &dyn Renderer<T> = match self.precision {
-            Precision::Offline => &Whitted,
-            Precision::Realtime => &Approx,
-        };
+        // S7 并行后端:每个像素的追踪相互独立,故按精度等级分发到具体的
+        // `Whitted`/`Approx`(二者均为零字段单元结构体,天然 `Sync`),再在 rayon
+        // 并行闭包中传入 `&R: Renderer<T> + Sync`,避开 `dyn Renderer` 不可跨线程
+        // 共享的限制。像素结果仅由坐标决定,并行渲染与串行逐像素完全一致。
+        match self.precision {
+            Precision::Offline => self.render_parallel::<Whitted>(
+                &Whitted, buf, width, height, eye, target, up, fov,
+            ),
+            Precision::Realtime => self.render_parallel::<Approx>(
+                &Approx, buf, width, height, eye, target, up, fov,
+            ),
+        }
+    }
+
+    /// 泛型并行渲染核心:`R` 为具体渲染后端(`Whitted`/`Approx`),`Sync` 以便
+    /// 在 rayon 闭包中按 `&R` 共享。
+    fn render_parallel<R: Renderer<T> + Sync>(
+        &self,
+        renderer: &R,
+        buf: &mut [Vec3<T>],
+        width: usize,
+        height: usize,
+        eye: &Vec3<T>,
+        target: &Vec3<T>,
+        up: &Vec3<T>,
+        fov: T,
+    ) {
         // 相机基向量(右手)。
         let fwd = (*target - *eye);
         let fwd_len = fwd.norm();
@@ -83,8 +111,12 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> OpticSubsystem<T> {
         let tan_h = (fov * T::from_f64(0.5).unwrap()).tan();
         let tan_w = tan_h * T::from_f64(aspect).unwrap();
 
-        for y in 0..height {
-            for x in 0..width {
+        // 并行逐像素追踪(每像素仅依赖其坐标,无共享可变状态)。
+        let colors: Vec<Vec3<T>> = (0..width * height)
+            .into_par_iter()
+            .map(|idx| {
+                let x = idx % width;
+                let y = idx / width;
                 // NDC [-1,1],y 向下。
                 let u = (T::from_f64(2.0 * (x as f64) / (width as f64 - 1.0) - 1.0).unwrap())
                     * tan_w;
@@ -96,10 +128,10 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> OpticSubsystem<T> {
                 } else {
                     fwd
                 };
-                let c = renderer.trace(&self.scene, eye, &dir);
-                buf[y * width + x] = c;
-            }
-        }
+                renderer.trace(&self.scene, eye, &dir)
+            })
+            .collect();
+        buf.copy_from_slice(&colors);
     }
 }
 

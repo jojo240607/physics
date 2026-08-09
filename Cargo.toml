@@ -26,6 +26,7 @@ nalgebra = { version = "0.33", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
 num-traits = "0.2"
+rayon = "1"
 
 [profile.release]
 opt-level = 3
