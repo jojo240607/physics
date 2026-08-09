@@ -6,7 +6,7 @@
 use std::any::Any;
 
 use phy_core::World;
-use phy_field::{EmField, GravField, HeatField, ScalarField, Bc};
+use phy_field::{AcousticField, EmField, GravField, HeatField, ScalarField, WaveField, Bc};
 use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
 use phy_math::{na, RealField, Vec3};
 use phy_optics::{OpticBody, OpticScene, OpticSubsystem, Precision, Surface};
@@ -33,6 +33,14 @@ pub enum DemoMode {
     FluidHeat,
     /// 全耦合综合场景(M10):刚/流/软/热四子系统共存于同一 World,渲染全部。
     All,
+    /// 电磁场(M12):电荷密度切片 + 电场矢量箭头。
+    Em,
+    /// 引力场(M13):质量密度切片 + 引力矢量箭头。
+    Grav,
+    /// 波动场(M22):标量压强/位移切片。
+    Wave,
+    /// 声场(M22):标量声压切片。
+    Acoustic,
 }
 
 impl DemoMode {
@@ -45,7 +53,11 @@ impl DemoMode {
             DemoMode::Soft => DemoMode::Optics,
             DemoMode::Optics => DemoMode::FluidHeat,
             DemoMode::FluidHeat => DemoMode::All,
-            DemoMode::All => DemoMode::Rigid,
+            DemoMode::All => DemoMode::Em,
+            DemoMode::Em => DemoMode::Grav,
+            DemoMode::Grav => DemoMode::Wave,
+            DemoMode::Wave => DemoMode::Acoustic,
+            DemoMode::Acoustic => DemoMode::Rigid,
         }
     }
 
@@ -59,6 +71,10 @@ impl DemoMode {
             DemoMode::Optics => "Optics",
             DemoMode::FluidHeat => "Fluid+Heat (M4e)",
             DemoMode::All => "All (M10)",
+            DemoMode::Em => "EM Field (M12)",
+            DemoMode::Grav => "Grav Field (M13)",
+            DemoMode::Wave => "Wave Field (M22)",
+            DemoMode::Acoustic => "Acoustic Field (M22)",
         }
     }
 }
@@ -291,6 +307,102 @@ impl Scene {
         }
     }
 
+    // ---- 单场演示场景(场类可视化 M26) ----
+    // 这些模式各只挂一个场子系统,聚焦展示该场的几何与矢量(激光/引力井/波前)。
+
+    /// 电磁场演示(M12):均匀电荷密度网格 + 中心一对等量异号点电荷,
+    /// 渲染电荷密度切片 + 电场矢量箭头。
+    pub fn em() -> Self {
+        let mut world: World<f64> = World::default();
+        let n = 32usize;
+        let span = 16.0;
+        let dx = span / (n as f64 - 1.0);
+        let mut rho = ScalarField::<f64>::new(n, n, n, dx, 0.0, Bc::Neumann)
+            .with_origin(Vec3::new(-span / 2.0, -span / 2.0, -span / 2.0));
+        // 中心偏上放一个正电荷,偏下放一个负电荷(对称,演示偶极子场)。
+        // 直接写入 u(EmField::step 解泊松时读 rho.u;子系统 step 不刷 src→u)。
+        let cx = n / 2;
+        let cy_pos = n * 3 / 4;
+        let cy_neg = n / 4;
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dxk in -1..=1 {
+                    let ip = rho.idx((cx as isize + dxk) as usize, (cy_pos as isize + dy) as usize, (cx as isize + dz) as usize);
+                    rho.u[ip] = 10.0;
+                    let ineg = rho.idx((cx as isize + dxk) as usize, (cy_neg as isize + dy) as usize, (cx as isize + dz) as usize);
+                    rho.u[ineg] = -10.0;
+                }
+            }
+        }
+        let mut em = EmField::<f64>::build(rho, 1.0);
+        em.b_ext = Vec3::new(0.0, 0.0, 0.2);
+        world.add_subsystem(Box::new(em));
+        Self { world, mode: DemoMode::Em, steps: 0 }
+    }
+
+    /// 引力场演示(M13):均匀质量密度网格 + 中心一个大质量天体,
+    /// 渲染质量密度切片 + 引力矢量箭头(指向天体)。
+    pub fn grav() -> Self {
+        let mut world: World<f64> = World::default();
+        let n = 32usize;
+        let span = 16.0;
+        let dx = span / (n as f64 - 1.0);
+        let mut rho = ScalarField::<f64>::new(n, n, n, dx, 0.0, Bc::Neumann)
+            .with_origin(Vec3::new(-span / 2.0, -span / 2.0, -span / 2.0));
+        let c = n / 2;
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dxk in -1..=1 {
+                    let i = rho.idx((c as isize + dxk) as usize, (c as isize + dy) as usize, (c as isize + dz) as usize);
+                    rho.u[i] = 50.0;
+                }
+            }
+        }
+        let grav = GravField::<f64>::build(rho, 1.0);
+        world.add_subsystem(Box::new(grav));
+        Self { world, mode: DemoMode::Grav, steps: 0 }
+    }
+
+    /// 波动场演示(M22):中心脉冲初始位移,渲染标量位移切片。
+    pub fn wave() -> Self {
+        let mut world: World<f64> = World::default();
+        let n = 48usize;
+        let span = 16.0;
+        let dx = span / (n as f64 - 1.0);
+        let mut f = ScalarField::<f64>::new(n, n, n, dx, 0.0, Bc::Neumann)
+            .with_origin(Vec3::new(-span / 2.0, -span / 2.0, -span / 2.0));
+        let c = n / 2;
+        for dz in -2..=2 {
+            for dxk in -2..=2 {
+                let i = f.idx((c as isize + dxk) as usize, c, (c as isize + dz) as usize);
+                f.u[i] = 1.0;
+            }
+        }
+        let wave = WaveField::<f64>::new(f, 30.0 * 30.0);
+        world.add_subsystem(Box::new(wave));
+        Self { world, mode: DemoMode::Wave, steps: 0 }
+    }
+
+    /// 声场演示(M22):中心声源脉冲,渲染标量声压切片。
+    pub fn acoustic() -> Self {
+        let mut world: World<f64> = World::default();
+        let n = 48usize;
+        let span = 16.0;
+        let dx = span / (n as f64 - 1.0);
+        let mut f = ScalarField::<f64>::new(n, n, n, dx, 0.0, Bc::Neumann)
+            .with_origin(Vec3::new(-span / 2.0, -span / 2.0, -span / 2.0));
+        let c = n / 2;
+        for dz in -2..=2 {
+            for dxk in -2..=2 {
+                let i = f.idx((c as isize + dxk) as usize, c, (c as isize + dz) as usize);
+                f.u[i] = 1.0;
+            }
+        }
+        let ac = AcousticField::<f64>::new(f, 343.0 * 343.0, 0.01);
+        world.add_subsystem(Box::new(ac));
+        Self { world, mode: DemoMode::Acoustic, steps: 0 }
+    }
+
     /// 推进一帧(固定子步)。
     ///
     /// `World::step` 内部已按 `step` → `couple` 顺序驱动所有子系统,
@@ -312,9 +424,28 @@ impl Scene {
         if mode == DemoMode::FluidHeat || self.mode == DemoMode::FluidHeat {
             if mode == DemoMode::FluidHeat {
                 *self = Scene::fluid_heat(true);
-            } else {
-                *self = Scene::new();
+                return;
             }
+            *self = Scene::new();
+            return;
+        }
+        // 切到/离开单场模式(Em/Grav/Wave/Acoustic)时重建为对应的独立场场景。
+        let single_field = matches!(
+            mode,
+            DemoMode::Em | DemoMode::Grav | DemoMode::Wave | DemoMode::Acoustic
+        );
+        let leaving_single_field = matches!(
+            self.mode,
+            DemoMode::Em | DemoMode::Grav | DemoMode::Wave | DemoMode::Acoustic
+        );
+        if single_field || leaving_single_field {
+            *self = match mode {
+                DemoMode::Em => Scene::em(),
+                DemoMode::Grav => Scene::grav(),
+                DemoMode::Wave => Scene::wave(),
+                DemoMode::Acoustic => Scene::acoustic(),
+                _ => Scene::new(),
+            };
             return;
         }
         self.mode = mode;
@@ -324,6 +455,10 @@ impl Scene {
     pub fn reset(&mut self) {
         *self = match self.mode {
             DemoMode::FluidHeat => Scene::fluid_heat(true),
+            DemoMode::Em => Scene::em(),
+            DemoMode::Grav => Scene::grav(),
+            DemoMode::Wave => Scene::wave(),
+            DemoMode::Acoustic => Scene::acoustic(),
             _ => Scene::new(),
         };
     }
@@ -351,6 +486,10 @@ impl Scene {
             DemoMode::Optics => { /* 光学由 App 独立渲染,这里不处理 */ }
             DemoMode::FluidHeat => self.render_fluid_heat(fb, cam),
             DemoMode::All => self.render_all(fb, cam),
+            DemoMode::Em => self.render_em(fb, cam),
+            DemoMode::Grav => self.render_grav(fb, cam),
+            DemoMode::Wave => self.render_wave(fb, cam),
+            DemoMode::Acoustic => self.render_acoustic(fb, cam),
         }
     }
 
@@ -407,6 +546,135 @@ impl Scene {
                 }
             }
         }
+    }
+
+    // --- 场类可视化渲染(M26):标量切片 + 矢量箭头 ---
+
+    /// 渲染一个标量场的中心切片(背景色块)。
+    fn render_scalar_slice(
+        &self,
+        fb: &mut Framebuffer,
+        cam: &Camera,
+        field: &ScalarField<f64>,
+        lo: [u8; 3],
+        hi: [u8; 3],
+    ) {
+        let nx = field.nx;
+        let nz = field.nz;
+        let tmax = field.max_abs().max(1e-6);
+        for ix in 0..nx {
+            for iz in 0..nz {
+                let v = field.u[field.idx(ix, field.ny / 2, iz)];
+                let wx = field.origin.x + (ix as f64) * field.dx;
+                let wy = field.origin.y + (field.ny as f64 / 2.0) * field.dx;
+                let wz = field.origin.z + (iz as f64) * field.dx;
+                if let Some((sx, sy, depth)) = project_point(cam, fb, Vec3::new(wx, wy + 0.05, wz)) {
+                    let t = (v / tmax).clamp(-1.0, 1.0);
+                    let (a, b) = if t >= 0.0 { (lo, hi) } else { (hi, lo) };
+                    let u = t.abs();
+                    let col = [
+                        ((a[0] as f64 * (1.0 - u) + b[0] as f64 * u)) as u8,
+                        ((a[1] as f64 * (1.0 - u) + b[1] as f64 * u)) as u8,
+                        ((a[2] as f64 * (1.0 - u) + b[2] as f64 * u)) as u8,
+                    ];
+                    fb.fill_circle(sx, sy, 3, depth as f32, col);
+                }
+            }
+        }
+    }
+
+    /// 渲染一个矢量场(以箭头表示),在中心切片上按 stride 采样。
+    fn render_vector_arrows(
+        &self,
+        fb: &mut Framebuffer,
+        cam: &Camera,
+        field: &ScalarField<f64>,
+        vec: &[Vec3<f64>],
+        scale: f64,
+    ) {
+        let nx = field.nx;
+        let ny = field.ny;
+        let nz = field.nz;
+        let stride = 4usize; // 抽稀,避免箭头过密
+        let maxn = vec.len().max(1) as f64;
+        let vmax = (0..vec.len())
+            .map(|i| vec[i].norm())
+            .fold(0.0_f64, f64::max)
+            .max(1e-6);
+        for ix in (0..nx).step_by(stride) {
+            for iz in (0..nz).step_by(stride) {
+                let iy = ny / 2;
+                let i = field.idx(ix, iy, iz);
+                let v = vec[i % vec.len()];
+                let wx = field.origin.x + (ix as f64) * field.dx;
+                let wy = field.origin.y + (iy as f64) * field.dx;
+                let wz = field.origin.z + (iz as f64) * field.dx;
+                let base = Vec3::new(wx, wy, wz);
+                let tip = base + v * (scale / vmax);
+                if let (Some((ax, ay, da)), Some((bx, by, db))) =
+                    (project_point(cam, fb, base), project_point(cam, fb, tip))
+                {
+                    let depth = ((da + db) * 0.5) as f32;
+                    // 按强度上色:弱=黄,强=红。
+                    let t = (v.norm() / vmax).clamp(0.0, 1.0);
+                    let col = [(200.0 + t * 55.0) as u8, (220.0 - t * 200.0) as u8, 40u8];
+                    fb.draw_line(ax, ay, bx, by, depth, col);
+                    fb.fill_circle(bx, by, 2, depth, col);
+                }
+                // 标记索引上限防越界(实际网格与 vec 同形)。
+                let _ = maxn;
+            }
+        }
+    }
+
+    fn render_em(&self, fb: &mut Framebuffer, cam: &Camera) {
+        let sub = self
+            .world
+            .get(0)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<EmField<f64>>()
+            .unwrap();
+        // 电荷密度切片(蓝=负,红=正)。
+        self.render_scalar_slice(fb, cam, &sub.rho, [40u8, 80u8, 255u8], [255u8, 60u8, 60u8]);
+        // 电场矢量箭头。
+        self.render_vector_arrows(fb, cam, &sub.rho, &sub.e, 4.0);
+    }
+
+    fn render_grav(&self, fb: &mut Framebuffer, cam: &Camera) {
+        let sub = self
+            .world
+            .get(0)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<GravField<f64>>()
+            .unwrap();
+        // 质量密度切片(灰白)。
+        self.render_scalar_slice(fb, cam, &sub.rho, [20u8, 20u8, 20u8], [220u8, 220u8, 220u8]);
+        // 引力矢量箭头(指向天体)。
+        self.render_vector_arrows(fb, cam, &sub.rho, &sub.g, 4.0);
+    }
+
+    fn render_wave(&self, fb: &mut Framebuffer, cam: &Camera) {
+        let sub = self
+            .world
+            .get(0)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<WaveField<f64>>()
+            .unwrap();
+        self.render_scalar_slice(fb, cam, &sub.field, [20u8, 40u8, 200u8], [200u8, 200u8, 60u8]);
+    }
+
+    fn render_acoustic(&self, fb: &mut Framebuffer, cam: &Camera) {
+        let sub = self
+            .world
+            .get(0)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<AcousticField<f64>>()
+            .unwrap();
+        self.render_scalar_slice(fb, cam, &sub.field, [20u8, 120u8, 60u8], [200u8, 60u8, 200u8]);
     }
 
     fn render_soft(&self, fb: &mut Framebuffer, cam: &Camera) {
@@ -1143,6 +1411,73 @@ mod tests {
         let deposited: f64 = grav.rho.src.iter().sum();
         assert!(deposited > 0.0, "运动刚体应把质量沉积进引力场网格");
     }
+
+    /// M26 演示扩展:四种单场模式场景能正常构造并步进(不 panic、数值有限)。
+    #[test]
+    fn demo_single_field_scenes_build_and_step() {
+        let dt = 1.0 / 60.0;
+        // 电磁场模式:电荷密度 + 电场矢量在步进后有限且非全零。
+        {
+            let mut s = Scene::em();
+            s.world.step(dt);
+            let sub = s
+                .world
+                .get(0)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<EmField<f64>>()
+                .unwrap();
+            let e_norm: f64 = sub.e.iter().map(|v| v.norm()).sum();
+            assert!(sub.rho.max_abs().is_finite());
+            assert!(e_norm.is_finite() && e_norm > 0.0, "电场矢量应已由电荷分布解出");
+        }
+        // 引力场模式:质量密度 + 引力矢量有限。
+        {
+            let mut s = Scene::grav();
+            s.world.step(dt);
+            let sub = s
+                .world
+                .get(0)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<GravField<f64>>()
+                .unwrap();
+            let g_norm: f64 = sub.g.iter().map(|v| v.norm()).sum();
+            assert!(sub.rho.max_abs().is_finite());
+            assert!(g_norm.is_finite() && g_norm > 0.0, "引力矢量应已由质量分布解出");
+        }
+        // 波动场模式:标量场有限。
+        {
+            let mut s = Scene::wave();
+            for _ in 0..5 {
+                s.world.step(dt);
+            }
+            let sub = s
+                .world
+                .get(0)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<WaveField<f64>>()
+                .unwrap();
+            assert!(sub.field.max_abs().is_finite());
+        }
+        // 声场模式:标量场有限。
+        {
+            let mut s = Scene::acoustic();
+            for _ in 0..5 {
+                s.world.step(dt);
+            }
+            let sub = s
+                .world
+                .get(0)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<AcousticField<f64>>()
+                .unwrap();
+            assert!(sub.field.max_abs().is_finite());
+        }
+    }
+
 
     /// M18 集成:刚体关节(Distance)经 `World` 驱动生效 —— 两体间距收敛到杆长。
     ///

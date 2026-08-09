@@ -1110,6 +1110,7 @@ dependencies = [
  "phy-core",
  "phy-field",
  "phy-fluid",
+ "phy-io",
  "phy-math",
  "phy-optics",
  "phy-rigid",

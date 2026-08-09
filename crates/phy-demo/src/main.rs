@@ -31,6 +31,10 @@ use winit::window::{Window, WindowId};
 use phy_math::Vec3 as V3;
 use phy_optics::{OpticScene, OpticBody, OpticSubsystem, Precision, Surface as OSurface, to_rgba8};
 use phy_rigid::Body;
+use phy_io::{load_world, save_world};
+
+/// 默认存档路径(M26 存档/读档演示用,JSON 文本)。
+const SAVE_PATH: &str = "world_save.json";
 
 /// 后台初始化完成事件。
 enum DemoEvent {
@@ -249,8 +253,8 @@ impl ApplicationHandler<DemoEvent> for App {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
-                    if let winit::keyboard::Key::Character(c) = &event.logical_key {
-                        match c.as_str() {
+                    match &event.logical_key {
+                        winit::keyboard::Key::Character(c) => match c.as_str() {
                             "p" => self.paused = !self.paused,
                             "o" => self.scene.toggle_mode(),
                             "f" => self.scene.set_mode(DemoMode::Fluid),
@@ -259,6 +263,10 @@ impl ApplicationHandler<DemoEvent> for App {
                             "a" => self.scene.set_mode(DemoMode::All),
                             "r" => self.scene.reset(),
                             "q" => self.scene.set_mode(DemoMode::FluidHeat),
+                            "7" => self.scene.set_mode(DemoMode::Em),
+                            "8" => self.scene.set_mode(DemoMode::Grav),
+                            "9" => self.scene.set_mode(DemoMode::Wave),
+                            "0" => self.scene.set_mode(DemoMode::Acoustic),
                             "i" => {
                                 println!(
                                     "[demo] mode={} bodies={} steps={} paused={}",
@@ -269,7 +277,22 @@ impl ApplicationHandler<DemoEvent> for App {
                                 )
                             }
                             _ => {}
-                        }
+                        },
+                        winit::keyboard::Key::Named(n) => match n {
+                            winit::keyboard::NamedKey::F5 => {
+                                match save_world(&self.scene.world, std::path::Path::new(SAVE_PATH)) {
+                                    Ok(_) => println!("[demo] 已存档 -> {} (mode={}, steps={})", SAVE_PATH, self.scene.mode.name(), self.scene.steps),
+                                    Err(e) => println!("[demo] 存档失败: {}", e),
+                                }
+                            }
+                            winit::keyboard::NamedKey::F9 => {
+                                let w = load_world(std::path::Path::new(SAVE_PATH));
+                                self.scene.world = w;
+                                println!("[demo] 已读档 <- {} (子系统数={})", SAVE_PATH, self.scene.world.subsystem_count());
+                            }
+                            _ => {}
+                        },
+                        _ => {}
                     }
                 }
             }
@@ -286,7 +309,9 @@ impl ApplicationHandler<DemoEvent> for App {
 
 fn main() {
     println!("phy-demo · multi-physics (software rasterizer)");
-    println!("拖拽旋转 · 滚轮缩放 · P 暂停 · O 循环模式 · F 流体 · H 热场 · S 软体 · Q 流体+热 · A 全耦合 · R 重置 · I 统计 · 关闭窗口退出");
+    println!("拖拽旋转 · 滚轮缩放 · P 暂停 · O 循环模式");
+    println!("物理模式: 1 刚体 · 2 流体 · 3 热场 · 4 软体 · 5 光学 · 6 流体+热 · 7 电磁场 · 8 引力场 · 9 波动 · 0 声场 · A 全耦合");
+    println!("F5 存档(world_save.json) · F9 读档 · R 重置 · I 统计 · 关闭窗口退出");
 
     let event_loop = EventLoop::<DemoEvent>::with_user_event().build().unwrap();
     let mut app = App::new(&event_loop);
