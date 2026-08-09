@@ -14,6 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::broadphase::broadphase;
+use crate::ccd;
 use crate::contact::Contact;
 use crate::fracture::fracture_body;
 use crate::joint::{solve_joints_position, solve_joints_velocity, Joint, JointConstraint};
@@ -37,13 +38,13 @@ pub struct RigidWorld<T: RealField + Copy> {
     pub params: SolverParams<T>,
 }
 
-impl<T: RealField + Copy> Default for RigidWorld<T> {
+impl<T: RealField + Copy + num_traits::ToPrimitive> Default for RigidWorld<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: RealField + Copy> RigidWorld<T> {
+impl<T: RealField + Copy + num_traits::ToPrimitive> RigidWorld<T> {
     pub fn new() -> Self {
         Self {
             bodies: Vec::new(),
@@ -78,52 +79,50 @@ impl<T: RealField + Copy> RigidWorld<T> {
 
     /// 推进一步。返回本步检测到的接触(供调试/渲染)。
     ///
-    /// 标准半隐式欧拉 + 顺序冲量流程:
-    /// 1. 积分速度(重力) + 姿态(角速度) 2. detect(当前位置) 3. 求解速度冲量(含角冲量)
-    /// 4. 积分位置(用求解后速度) 5. 位置投影(清残余穿透,含角伪速度)
+    /// 标准半隐式欧拉 + 顺序冲量流程,带连续碰撞检测(CCD):
+    /// 1. 积分速度(重力) 2. CCD 子步推进:粗筛→扫掠求最早接触时间(TOI)→把位置/姿态积分
+    ///    截断到 TOI(避免高速隧穿)→在该处检测接触并求解速度冲量(含角冲量)→余下时间继续
+    ///    3. 位置投影(清残余穿透,含角伪速度)。低速/无接近时 TOI 落在步外,子步退化为整步推进,
+    ///    与离散碰撞检测完全等价。
     pub fn step(&mut self, dt: T) -> Vec<Contact<T>> {
-        // 1. 积分速度(重力) + 姿态(角速度)
+        let max_sub = self.params.ccd_max_substeps;
+
+        // 1. 积分速度(重力) —— 姿态积分与位置积分合并到子步的 advance 中。
         for b in self.bodies.iter_mut() {
             if b.inv_mass > T::zero() {
                 b.vel += self.gravity * dt;
             }
-            if b.inv_inertia_local.iter().any(|x| *x != T::zero()) {
-                // q += 0.5 * (0,ω)⊗q * dt,再归一化。
-                let wbar = b.ang_vel;
-                let q = *b.rot.quaternion();
-                let dq = Quat::new(T::zero(), wbar.x, wbar.y, wbar.z) * q;
-                let nq = Quat::new(
-                    q.w + dq.w * (dt * T::from_f64(0.5).unwrap()),
-                    q.i + dq.i * (dt * T::from_f64(0.5).unwrap()),
-                    q.j + dq.j * (dt * T::from_f64(0.5).unwrap()),
-                    q.k + dq.k * (dt * T::from_f64(0.5).unwrap()),
-                );
-                b.rot = na::UnitQuaternion::new_normalize(nq);
-            }
         }
 
-        // 2. 碰撞检测(当前位置)
-        let pairs = broadphase(&self.bodies);
-        let mut constraints: Vec<ContactConstraint<T>> = Vec::new();
-        for (i, j) in pairs {
-            if let Some(c) = collide(&self.bodies[i], &self.bodies[j]) {
-                constraints.push(ContactConstraint::new(i, j, c));
+        // 2. CCD 子步循环:按位移受限决定子步数,使最快体每子步位移 ≤ 其最小特征尺寸的一半,
+        //    再在每个子步上跑离散 collide + 速度求解。低速/无接近时 n=1,等价于原整步离散检测。
+        let n = ccd::substep_count(&self.bodies, dt, max_sub);
+        let h = dt / T::from_usize(n).unwrap();
+        let mut last_constraints: Vec<ContactConstraint<T>> = Vec::new();
+        for _ in 0..n {
+            // 2a. 常规粗筛 + 当前位置离散碰撞检测。
+            let pairs = broadphase(&self.bodies);
+            let mut cons: Vec<ContactConstraint<T>> = Vec::new();
+            for (i, j) in pairs {
+                if let Some(c) = collide(&self.bodies[i], &self.bodies[j]) {
+                    cons.push(ContactConstraint::new(i, j, c));
+                }
             }
+
+            // 2b. 速度求解(顺序冲量,含角冲量)+ 关节速度求解。
+            solve_velocity(&mut self.bodies, &mut cons, &self.params);
+            solve_joints_velocity(
+                &mut self.bodies,
+                &mut self.joints,
+                self.params.iterations,
+            );
+            last_constraints = cons;
+
+            // 2c. 把所有体按子步时长 h 推进位置与姿态。
+            Self::advance(&mut self.bodies, h);
         }
 
-        // 3. 速度求解(顺序冲量,含角冲量)
-        solve_velocity(&mut self.bodies, &mut constraints, &self.params);
-        // 3b. 关节速度求解(与接触同构的顺序冲量,消除关节相对漂移速度)。
-        solve_joints_velocity(&mut self.bodies, &mut self.joints, self.params.iterations);
-
-        // 4. 积分位置(用求解后速度)
-        for b in self.bodies.iter_mut() {
-            if b.inv_mass > T::zero() {
-                b.pos += b.vel * dt;
-            }
-        }
-
-        // 5. 位置修正(split impulse 伪速度):解伪速度使物体分离,
+        // 3. 位置修正(split impulse 伪速度):解伪速度使物体分离,
         //    伪速度只用于修正位置,不污染真实速度(避免抖动/能量注入)。
         let mut pseudo: Vec<Vec3<T>> = vec![Vec3::zeros(); self.bodies.len()];
         let mut ang_pseudo: Vec<Vec3<T>> = vec![Vec3::zeros(); self.bodies.len()];
@@ -131,12 +130,12 @@ impl<T: RealField + Copy> RigidWorld<T> {
         let beta_over_dt = beta / dt;
         solve_position(
             &self.bodies,
-            &constraints,
+            &last_constraints,
             &mut pseudo,
             &mut ang_pseudo,
             beta_over_dt,
         );
-        // 5b. 关节位置投影(split-impulse 伪速度):把残余关节距离误差消除而不污染真实速度。
+        // 3b. 关节位置投影(split-impulse 伪速度):把残余关节距离误差消除而不污染真实速度。
         solve_joints_position(
             &self.bodies,
             &self.joints,
@@ -166,7 +165,32 @@ impl<T: RealField + Copy> RigidWorld<T> {
             }
         }
 
-        constraints.into_iter().map(|c| c.contact).collect()
+        last_constraints.into_iter().map(|c| c.contact).collect()
+    }
+
+    /// 把所有可动体按时间步 `h` 推进位置(线速度)与姿态(角速度)。
+    ///
+    /// 姿态积分 `q += 0.5·(0,ω)⊗q·h` 后与 `step` 原逻辑一致;把积分放此处使 CCD
+    /// 子步能按每个子步时长精确推进,整体在 `h` 求和等于 `dt` 时等价于原整步积分。
+    fn advance(bodies: &mut [Body<T>], h: T) {
+        let half = h * T::from_f64(0.5).unwrap();
+        for b in bodies.iter_mut() {
+            if b.inv_mass > T::zero() {
+                b.pos += b.vel * h;
+            }
+            if b.inv_inertia_local.iter().any(|x| *x != T::zero()) {
+                let wbar = b.ang_vel;
+                let q = *b.rot.quaternion();
+                let dq = Quat::new(T::zero(), wbar.x, wbar.y, wbar.z) * q;
+                let nq = Quat::new(
+                    q.w + dq.w * half,
+                    q.i + dq.i * half,
+                    q.j + dq.j * half,
+                    q.k + dq.k * half,
+                );
+                b.rot = na::UnitQuaternion::new_normalize(nq);
+            }
+        }
     }
 
     /// 刚体↔热场双向耦合(M11):热浮力 + 对流换热。

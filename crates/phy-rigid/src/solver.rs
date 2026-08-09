@@ -21,6 +21,9 @@ pub struct SolverParams<T: RealField> {
     pub friction: T,
     /// 速度求解迭代次数。
     pub iterations: usize,
+    /// CCD 子步上限(连续碰撞检测:每步把位置积分拆成至多这么多个子步以避免隧穿)。
+    /// 设 0 关闭 CCD(退化为离散碰撞,高速会隧穿)。
+    pub ccd_max_substeps: usize,
 }
 
 impl<T: RealField> Default for SolverParams<T> {
@@ -29,6 +32,7 @@ impl<T: RealField> Default for SolverParams<T> {
             restitution: T::from_f64(0.0).unwrap(),
             friction: T::from_f64(0.5).unwrap(),
             iterations: 20,
+            ccd_max_substeps: 8,
         }
     }
 }

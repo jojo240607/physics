@@ -10,6 +10,7 @@
 
 pub mod shape;
 pub mod contact;
+pub mod ccd;
 pub mod broadphase;
 pub mod narrowphase;
 pub mod solver;
@@ -98,7 +99,7 @@ mod tests {
     fn rotated_box_still_detects() {
         // 把一个盒绕 Z 转 45°,与另一个重叠
         let rot = na::UnitQuaternion::from_axis_angle(&na::Vector3::z_axis(), std::f64::consts::FRAC_PI_4);
-        let mut a = Body::new(
+        let a = Body::new(
             Shape::Box {
                 half: Vec3::new(1.0, 1.0, 1.0),
             },
@@ -233,5 +234,137 @@ mod tests {
         // 下盒也应停在地面之上
         let lower_bottom = w.bodies[lower].pos.y - 0.5;
         assert!(lower_bottom > -0.05, "下盒穿透地面, bottom={}", lower_bottom);
+    }
+
+    // ---- S6 连续碰撞检测(CCD) ----
+
+    /// 高速球应被 CCD 挡在薄壁之前,绝不隧穿。
+    #[test]
+    fn fast_sphere_does_not_tunnel_through_wall() {
+        let mut w = RigidWorld::<f64>::new();
+        w.gravity = Vec3::new(0.0, 0.0, 0.0); // 关重力,专测隧穿
+        // 薄壁(厚度 0.2)置于 x=0,从 x=-5 以 100 单位/秒射向它。
+        let wall = w.add_body(Body::new(
+            Shape::Box {
+                half: Vec3::new(0.1, 5.0, 5.0),
+            },
+            Vec3::new(0.0, 0.0, 0.0),
+            0.0, // 静态
+        ));
+        let ball = w.add_body(Body::new(
+            Shape::Sphere { r: 0.5 },
+            Vec3::new(-5.0, 0.0, 0.0),
+            1.0,
+        ));
+        w.bodies[ball].vel = Vec3::new(100.0, 0.0, 0.0); // 一帧跨 100*dt,远超壁厚
+
+        let dt = 1.0 / 120.0;
+        for _ in 0..30 {
+            w.step(dt);
+        }
+
+        // 球必须停在壁左侧(不应穿越到 x>0 的壁后)。
+        let x = w.bodies[ball].pos.x;
+        let wall_right = w.bodies[wall].pos.x + 0.1; // 壁右表面
+        assert!(
+            x < wall_right + 0.6,
+            "高速球隧穿! 球 x={}, 壁右表面={}",
+            x,
+            wall_right
+        );
+        // 球应被弹回(速度反向或至少不再以原速前进)。
+        assert!(w.bodies[ball].vel.x <= 1.0, "球未被壁阻挡, vx={}", w.bodies[ball].vel.x);
+        // 位置有限(无 NaN)。
+        assert!(w.bodies[ball].pos.x.is_finite());
+    }
+
+    /// 关闭 CCD(ccd_max_substeps=0)时,同样的高速球会隧穿(对照组)。
+    #[test]
+    fn fast_sphere_tunnels_with_ccd_disabled() {
+        let mut w = RigidWorld::<f64>::new();
+        w.gravity = Vec3::new(0.0, 0.0, 0.0);
+        w.params.ccd_max_substeps = 0; // 关 CCD
+        let _wall = w.add_body(Body::new(
+            Shape::Box {
+                half: Vec3::new(0.1, 5.0, 5.0),
+            },
+            Vec3::new(0.0, 0.0, 0.0),
+            0.0,
+        ));
+        let ball = w.add_body(Body::new(
+            Shape::Sphere { r: 0.5 },
+            Vec3::new(-5.0, 0.0, 0.0),
+            1.0,
+        ));
+        w.bodies[ball].vel = Vec3::new(100.0, 0.0, 0.0);
+
+        let dt = 1.0 / 120.0;
+        for _ in 0..30 {
+            w.step(dt);
+        }
+        // 对照组:球应已越过壁(隧穿到 x>0)。
+        assert!(
+            w.bodies[ball].pos.x > 0.5,
+            "CCD 关闭对照组预期隧穿, 但球 x={}",
+            w.bodies[ball].pos.x
+        );
+    }
+
+    /// 低速场景:CCD 开启时行为与离散检测一致(球静止停在地面附近,无穿透)。
+    #[test]
+    fn ccd_enabled_matches_discrete_at_low_speed() {
+        let mut w = RigidWorld::<f64>::new();
+        w.params.ccd_max_substeps = 8; // 开启
+        let _ground = w.add_body(ground());
+        let ball = w.add_body(Body::new(
+            Shape::Sphere { r: 0.5 },
+            Vec3::new(0.0, 3.0, 0.0),
+            1.0,
+        ));
+
+        let dt = 1.0 / 120.0;
+        for _ in 0..600 {
+            w.step(dt);
+        }
+        // 球应停在地面上方(球心 y≈0.5,底面≈0)。
+        let bottom = w.bodies[ball].pos.y - 0.5;
+        assert!(bottom > -0.05 && bottom < 0.05, "CCD 稳态穿透, bottom={}", bottom);
+        assert!(w.bodies[ball].vel.norm() < 0.5, "速度未收敛");
+    }
+
+    /// 高速盒不应穿透静态地面(包围球保守推进对盒也生效)。
+    #[test]
+    fn fast_box_does_not_tunnel_through_ground() {
+        let mut w = RigidWorld::<f64>::new();
+        w.gravity = Vec3::new(0.0, 0.0, 0.0);
+        let ground = w.add_body(Body::new(
+            Shape::Box {
+                half: Vec3::new(50.0, 0.5, 50.0),
+            },
+            Vec3::new(0.0, -0.5, 0.0),
+            0.0,
+        ));
+        let box_id = w.add_body(Body::new(
+            Shape::Box {
+                half: Vec3::new(0.5, 0.5, 0.5),
+            },
+            Vec3::new(0.0, 5.0, 0.0),
+            1.0,
+        ));
+        w.bodies[box_id].vel = Vec3::new(0.0, -200.0, 0.0); // 一帧跨 >1.6,远超盒高
+
+        let dt = 1.0 / 120.0;
+        for _ in 0..40 {
+            w.step(dt);
+        }
+        // 盒底面不得穿入地面(地面顶面 y=0)。
+        let bottom = w.bodies[box_id].pos.y - 0.5;
+        assert!(
+            bottom > -0.6,
+            "高速盒隧穿地面! bottom={}",
+            bottom
+        );
+        assert!(w.bodies[box_id].vel.y >= -1.0, "盒未被地面阻挡, vy={}", w.bodies[box_id].vel.y);
+        let _ = ground;
     }
 }

@@ -304,6 +304,72 @@ fn sat_penetration<T: RealField + Copy>(
     r - dist
 }
 
+/// 球-盒快速相交(解析法):将球心变换到盒的局部坐标系,夹取到盒半空间得到最近点,
+/// 再按"球心在盒外/内"两种情况求接触法线与穿透深度。比 GJK/EPA 更快且对球-盒更稳健。
+/// `s` 为球,`b` 为盒;返回法线由 `s` 指向 `b`。
+pub fn sphere_box<T: RealField + Copy>(s: &Body<T>, b: &Body<T>) -> Option<Contact<T>> {
+    let (r, half) = match (&s.shape, &b.shape) {
+        (Shape::Sphere { r }, Shape::Box { half }) => (*r, *half),
+        _ => return None,
+    };
+    // 球心在盒局部坐标中的位置。
+    let local = b.rot.inverse() * (s.pos - b.pos);
+    let mut closest = local;
+    let mut inside = true;
+    for k in 0..3 {
+        if closest[k] > half[k] {
+            closest[k] = half[k];
+            inside = false;
+        } else if closest[k] < -half[k] {
+            closest[k] = -half[k];
+            inside = false;
+        }
+    }
+    if inside {
+        // 球心在盒内部:沿穿透最浅的面推出。法线由盒指向球(世界系)。
+        let mut axis = 0usize;
+        let mut best = half[0] - local[0].abs();
+        for k in 1..3 {
+            let pen = half[k] - local[k].abs();
+            if pen < best {
+                best = pen;
+                axis = k;
+            }
+        }
+        let sign = if local[axis] >= T::zero() {
+            T::one()
+        } else {
+            -T::one()
+        };
+        let mut n_local = Vec3::zeros();
+        n_local[axis] = sign; // 盒→球(局部)
+        let normal = b.rot * n_local; // 世界系:盒→球
+        // 约定法线由 s 指向 b,即取反。
+        let normal = -normal;
+        let depth = r + best;
+        let point = s.pos + normal * r; // 球面上接触点
+        Some(Contact::new(point, normal, depth))
+    } else {
+        let delta = local - closest; // 盒表面最近点 → 球心(局部)
+        let dist2 = delta.norm_squared();
+        if dist2 > r * r {
+            return None;
+        }
+        let dist = dist2.sqrt();
+        let n_local = if dist > T::from_f64(1e-9).unwrap() {
+            delta / dist
+        } else {
+            // 退化:球心恰在盒表面最近点,沿局部 +Z 兜底。
+            Vec3::new(T::zero(), T::zero(), T::one())
+        };
+        // n_local 指向 盒→球;约定法线由 s 指向 b,取反。
+        let normal = -(b.rot * n_local);
+        let depth = r - dist;
+        let point = s.pos + normal * r; // 球面接触点
+        Some(Contact::new(point, normal, depth))
+    }
+}
+
 /// 通用 Narrow-phase 入口:优先快速路径,回退 GJK+EPA。
 pub fn collide<T: RealField + Copy>(a: &Body<T>, b: &Body<T>) -> Option<Contact<T>> {
     if matches!(a.shape, Shape::Sphere { .. }) && matches!(b.shape, Shape::Sphere { .. }) {
@@ -314,6 +380,18 @@ pub fn collide<T: RealField + Copy>(a: &Body<T>, b: &Body<T>) -> Option<Contact<
     if matches!(a.shape, Shape::Box { .. }) && matches!(b.shape, Shape::Box { .. }) {
         if let Some(c) = box_box_sat(a, b) {
             return Some(c);
+        }
+    }
+    // 球-盒快速路径(两种顺序都覆盖)。法线约定由 a 指向 b。
+    if matches!(a.shape, Shape::Sphere { .. }) && matches!(b.shape, Shape::Box { .. }) {
+        if let Some(c) = sphere_box(a, b) {
+            return Some(c);
+        }
+    }
+    if matches!(a.shape, Shape::Box { .. }) && matches!(b.shape, Shape::Sphere { .. }) {
+        if let Some(c) = sphere_box(b, a) {
+            // sphere_box 返回法线 球→盒(=b→a),翻转成 a→b。
+            return Some(Contact::new(c.point, -c.normal, c.depth));
         }
     }
     if gjk_intersect(a, b) {
