@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// `body_acc` 为体力累加器(重力 + 热浮力/刚体耦合浮力),由 `couple` 阶段写入、
 /// 在 `integrate` 中与 `acc` 叠加后清零,从而不会被 `compute_forces` 覆盖。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + Default + nalgebra::Scalar")]
 pub struct Particle<T: RealField + Copy> {
     /// 世界位置。
     #[serde(with = "phy_rigid::shape::serde_geom")]
@@ -33,6 +33,12 @@ pub struct Particle<T: RealField + Copy> {
     pub p: T,
     /// 粒子质量。
     pub mass: T,
+    /// 材料标签(0 = 默认水;多材料流体时区分不同流体相)。
+    pub material: usize,
+    /// 本步生效的非牛顿有效粘度(由 `compute_forces` 写入,仅用于自检/可视化,
+    /// 不参与序列化),牛顿流体下恒为 `visc_k[material]`。
+    #[serde(skip)]
+    pub mu_eff: T,
 }
 
 impl<T: RealField + Copy> Particle<T> {
@@ -46,6 +52,15 @@ impl<T: RealField + Copy> Particle<T> {
             rho: T::zero(),
             p: T::zero(),
             mass,
+            material: 0,
+            mu_eff: T::zero(),
         }
+    }
+
+    /// 以给定位置、质量与材料标签创建静止粒子。
+    pub fn with_material(pos: Vec3<T>, mass: T, material: usize) -> Self {
+        let mut p = Self::new(pos, mass);
+        p.material = material;
+        p
     }
 }

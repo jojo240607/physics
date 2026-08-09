@@ -22,7 +22,7 @@ use crate::sph::FluidWorld;
 ///   (`World::step` 调 `couple` 时已把 `self`(自身)取出,故本处可直接 `remove`
 ///   其它子系统而自身不会与自身冲突)。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive")]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + Default + nalgebra::Scalar + num_traits::ToPrimitive")]
 pub struct FluidSubsystem<T: RealField + Copy + num_traits::ToPrimitive> {
     /// 内部流体世界。
     pub world: FluidWorld<T>,

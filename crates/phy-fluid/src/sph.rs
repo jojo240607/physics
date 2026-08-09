@@ -26,8 +26,16 @@ pub struct SphParams<T: RealField + Copy> {
     pub rest_density: T,
     /// 压力刚度系数 k(越大越不可压,但需更小 dt 保持稳定)。
     pub stiffness: T,
-    /// 动力粘度 μ。
+    /// 动力粘度 μ(牛顿流体,也是多材料表 `visc_k` 默认值)。
     pub viscosity: T,
+    /// 非牛顿幂律一致性系数 `k`,按材料索引(`visc_k[material]`)。
+    /// 有效粘度 μ_eff = `visc_k[m] · max(应变率, shear_min)^(visc_n[m]-1)`。
+    pub visc_k: Vec<T>,
+    /// 非牛顿幂律指数 `n`,按材料索引(`visc_n[material]`)。
+    /// n = 1 退化为牛顿流体;`n < 1` 剪切变稀(高剪切更稀);`n > 1` 剪切变稠。
+    pub visc_n: Vec<T>,
+    /// 应变率正则化下限(避免零剪切处粘度发散/除零)。
+    pub shear_min: T,
     /// 粒子质量。
     pub mass: T,
     /// 光滑长度 h(核作用半径,也是网格单元边长)。
@@ -55,6 +63,9 @@ impl<T: RealField + Copy> SphParams<T> {
             rest_density: <T as num_traits::FromPrimitive>::from_f64(1000.0).unwrap(),
             stiffness: <T as num_traits::FromPrimitive>::from_f64(250.0).unwrap(),
             viscosity: <T as num_traits::FromPrimitive>::from_f64(3.5).unwrap(),
+            visc_k: vec![<T as num_traits::FromPrimitive>::from_f64(3.5).unwrap()],
+            visc_n: vec![<T as num_traits::FromPrimitive>::from_f64(1.0).unwrap()],
+            shear_min: <T as num_traits::FromPrimitive>::from_f64(0.01).unwrap(),
             mass: <T as num_traits::FromPrimitive>::from_f64(0.02).unwrap(),
             h: <T as num_traits::FromPrimitive>::from_f64(0.2).unwrap(),
             gravity: Vec3::new(
@@ -167,7 +178,7 @@ pub struct FluidWorld<T: RealField + Copy + num_traits::ToPrimitive> {
 
 /// 序列化辅助结构:仅存档公开状态(params + particles),核/网格缓存重建。
 #[derive(Serialize, Deserialize)]
-#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive")]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + Default + nalgebra::Scalar + num_traits::ToPrimitive")]
 struct FluidWorldData<T: RealField + Copy + num_traits::ToPrimitive> {
     params: SphParams<T>,
     particles: Vec<Particle<T>>,
@@ -175,7 +186,7 @@ struct FluidWorldData<T: RealField + Copy + num_traits::ToPrimitive> {
 
 impl<T: RealField + Copy + num_traits::ToPrimitive> Serialize for FluidWorld<T>
 where
-    T: Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive,
+    T: Serialize + DeserializeOwned + Default + nalgebra::Scalar + num_traits::ToPrimitive,
 {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         FluidWorldData {
@@ -188,7 +199,7 @@ where
 
 impl<'de, T: RealField + Copy + num_traits::ToPrimitive> Deserialize<'de> for FluidWorld<T>
 where
-    T: Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive,
+    T: Serialize + DeserializeOwned + Default + nalgebra::Scalar + num_traits::ToPrimitive,
 {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let data = FluidWorldData::<T>::deserialize(d)?;
@@ -306,6 +317,12 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidWorld<T> {
         self.particles.push(p);
     }
 
+    /// 查询粒子 `i` 上一 SPH 步生效的非牛顿有效粘度(用于自检/可视化;
+    /// 需先调用 `step` 使 `compute_forces` 写入 `mu_eff`)。
+    pub fn effective_viscosity(&self, i: usize) -> T {
+        self.particles[i].mu_eff
+    }
+
     /// 推进一个 SPH 时间步 `dt`(不含刚体耦合;耦合见 `couple_bodies`)。
     pub fn step(&mut self, dt: T) {
         if self.particles.is_empty() {
@@ -347,20 +364,24 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidWorld<T> {
         }
     }
 
-    /// 受力:对称压力力 + 粘性力 + 重力,汇聚成加速度。
+    /// 受力:对称压力力 + 粘性力(非牛顿幂律有效粘度) + 重力,汇聚成加速度。
     fn compute_forces(&mut self) {
         let k = &self.kernels;
         let h = self.params.h;
-        let mu = self.params.viscosity;
+        let r_eps = <T as num_traits::FromPrimitive>::from_f64(1e-4).unwrap();
         for i in 0..self.particles.len() {
             let p_i = self.particles[i].pos;
             let v_i = self.particles[i].vel;
             let rho_i = self.particles[i].rho;
             let p_i_p = self.particles[i].p;
             let m_i = self.particles[i].mass;
+            let mat = self.particles[i].material;
 
             let mut f_press = Vec3::zeros();
-            let mut f_visc = Vec3::zeros();
+            // 粘性累加(尚未乘有效粘度 μ)
+            let mut f_visc_raw = Vec3::zeros();
+            // 局部应变率代理 = Σ |v_j - v_i| / (r+ε) · (m_j/ρ_j)
+            let mut shear = T::zero();
 
             self.grid.for_each_neighbor(&p_i, |j| {
                 if j == i {
@@ -379,11 +400,33 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidWorld<T> {
                 let coef =
                     m_i * self.particles[j].mass * (p_i_p / (rho_i * rho_i) + p_j / (rho_j * rho_j));
                 f_press += dir * (coef * grad);
-                // 粘性力: μ m_i m_j (v_j - v_i)/ρ_j ∇²W
+                // 粘性力(原始项,μ 在外层乘): μ m_i m_j (v_j - v_i)/ρ_j ∇²W
                 let lap = k.visc_lap(r);
-                f_visc += (self.particles[j].vel - v_i)
-                    * (mu * m_i * self.particles[j].mass / rho_j * lap);
+                f_visc_raw += (self.particles[j].vel - v_i)
+                    * (m_i * self.particles[j].mass / rho_j * lap);
+                // 应变率代理累加
+                let dv = (self.particles[j].vel - v_i).norm();
+                shear += dv / (r + r_eps) * (self.particles[j].mass / rho_j);
             });
+
+            // 非牛顿幂律有效粘度:μ_eff = k·max(剪切率, ε)^(n-1)
+            // (n=1 退化为牛顿流体;n<1 剪切变稀;n>1 剪切变稠)
+            let m_idx = if mat < self.params.visc_k.len() {
+                mat
+            } else {
+                0
+            };
+            let kc = self.params.visc_k[m_idx];
+            let nn = self.params.visc_n[m_idx];
+            let sreg = if shear > self.params.shear_min {
+                shear
+            } else {
+                self.params.shear_min
+            };
+            let mu_eff = kc * sreg.powf(nn - T::one());
+            self.particles[i].mu_eff = mu_eff;
+
+            let f_visc = f_visc_raw * mu_eff;
 
             // SPH 近邻加速度(压力+粘性),不含体力;重力/浮力在 integrate 经 body_acc 叠加,
             // 这样 `couple_heat`/`couple_points` 在 step→couple 阶段写入的浮力不会被此处覆盖。
@@ -1129,5 +1172,87 @@ mod tests {
             heat.field.u.iter().all(|&v| v.is_finite()),
             "闭环多帧步进后热场应有限"
         );
+    }
+
+    /// 构建两层反向速度的小剪切构型,返回给定幂律指数 `n` 下的流体世界(已 step 一次)。
+    fn shear_world(n: f64, dv: f64) -> FluidWorld<f64> {
+        let mut p = test_params();
+        p.gravity = Vec3::zeros();
+        let mut w = FluidWorld::new(p);
+        w.particles.clear();
+        // 两层粒子:y 方向分层、沿 x 反向速度 => 产生剪切率。
+        for iy in 0..2u32 {
+            let vy = if iy == 0 { -dv } else { dv };
+            for ix in 0..5u32 {
+                let x = (ix as f64 - 2.0) * 0.08;
+                let mut pt = Particle::with_material(Vec3::new(x, iy as f64 * 0.06, 0.0), 0.05, 0);
+                pt.vel = Vec3::new(vy, 0.0, 0.0);
+                w.particles.push(pt);
+            }
+        }
+        w.params.visc_k = vec![3.5];
+        w.params.visc_n = vec![n];
+        w.step(0.001);
+        w
+    }
+
+    #[test]
+    fn non_newtonian_shear_thinning_and_thickening() {
+        // 同一剪切构型下:剪切变稀(n<1)有效粘度低于牛顿;剪切变稠(n>1)高于牛顿。
+        let thin = shear_world(0.5, 300.0);
+        let newt = shear_world(1.0, 300.0);
+        let thick = shear_world(1.5, 300.0);
+        let mt = thin.effective_viscosity(0);
+        let mn = newt.effective_viscosity(0);
+        let mk = thick.effective_viscosity(0);
+        assert!(mt.is_finite() && mn.is_finite() && mk.is_finite());
+        assert!(mt < mn, "剪切变稀应比牛顿更稀: {} < {}", mt, mn);
+        assert!(mk > mn, "剪切变稠应比牛顿更稠: {} > {}", mk, mn);
+    }
+
+    #[test]
+    fn material_tag_distinguishes_viscosity() {
+        // 两种材料(visc_k 不同,n 均为 1)在同样剪切下应得到不同有效粘度。
+        let mut p = test_params();
+        p.gravity = Vec3::zeros();
+        let mut w = FluidWorld::new(p);
+        w.particles.clear();
+        // 粒子 0(材料0) 与粒子 1(材料1):反向速度、近距 => 剪切。
+        let mut a = Particle::with_material(Vec3::new(0.0, 0.0, 0.0), 0.05, 0);
+        a.vel = Vec3::new(-300.0, 0.0, 0.0);
+        let mut b = Particle::with_material(Vec3::new(0.0, 0.06, 0.0), 0.05, 1);
+        b.vel = Vec3::new(300.0, 0.0, 0.0);
+        w.particles.push(a);
+        w.particles.push(b);
+        w.params.visc_k = vec![3.5, 10.0];
+        w.params.visc_n = vec![1.0, 1.0];
+        w.step(0.001);
+        let mu0 = w.effective_viscosity(0);
+        let mu1 = w.effective_viscosity(1);
+        assert!((mu0 - 3.5).abs() < 1e-6, "材料0 应为 3.5,实际 {}", mu0);
+        assert!((mu1 - 10.0).abs() < 1e-6, "材料1 应为 10.0,实际 {}", mu1);
+    }
+
+    #[test]
+    fn multi_material_tags_conserved_under_step() {
+        // 多材料流体:step 后粒子材料标签应保持不变(用于相分离/界面识别)。
+        let mut w = FluidWorld::new(test_params());
+        w.particles.clear();
+        for i in 0..10 {
+            let mat = i % 3;
+            let mut pt = Particle::with_material(
+                Vec3::new((i as f64) * 0.1, 0.0, 0.0),
+                0.05,
+                mat,
+            );
+            pt.vel = Vec3::new(0.0, -1.0, 0.0);
+            w.particles.push(pt);
+        }
+        let tags: Vec<usize> = w.particles.iter().map(|p| p.material).collect();
+        for _ in 0..20 {
+            w.step(0.003);
+        }
+        let after: Vec<usize> = w.particles.iter().map(|p| p.material).collect();
+        assert_eq!(tags, after, "材料标签应在 step 中保持");
     }
 }

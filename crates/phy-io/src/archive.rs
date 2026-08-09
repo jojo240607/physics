@@ -33,8 +33,8 @@ use serde::{Deserialize, Serialize};
 /// ToPrimitive`),与 serde bound 脱节而报错。改为手写 `Debug` impl。
 #[derive(Serialize, Deserialize)]
 #[serde(bound(
-    serialize = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive",
-    deserialize = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive"
+    serialize = "T: RealField + Copy + Serialize + DeserializeOwned + Default + nalgebra::Scalar + num_traits::ToPrimitive",
+    deserialize = "T: RealField + Copy + Serialize + DeserializeOwned + Default + nalgebra::Scalar + num_traits::ToPrimitive"
 ))]
 pub enum SubArchive<T: RealField + Copy + num_traits::ToPrimitive> {
     Rigid(RigidSubsystem<T>),
@@ -74,8 +74,8 @@ impl<T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar + num
 /// 顶层存档格式:版本 + 仿真时间 + 子系统列表。
 #[derive(Serialize, Deserialize)]
 #[serde(bound(
-    serialize = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive",
-    deserialize = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive"
+    serialize = "T: RealField + Copy + Serialize + DeserializeOwned + Default + nalgebra::Scalar + num_traits::ToPrimitive",
+    deserialize = "T: RealField + Copy + Serialize + DeserializeOwned + Default + nalgebra::Scalar + num_traits::ToPrimitive"
 ))]
 pub struct WorldArchive<T: RealField + Copy + num_traits::ToPrimitive> {
     /// 格式版本(便于将来兼容性判断)。
@@ -108,6 +108,7 @@ where
         + Copy
         + Serialize
         + DeserializeOwned
+        + Default
         + nalgebra::Scalar
         + num_traits::ToPrimitive,
 {
@@ -155,6 +156,7 @@ where
         + Copy
         + Serialize
         + DeserializeOwned
+        + Default
         + nalgebra::Scalar
         + num_traits::ToPrimitive,
 {
@@ -186,6 +188,7 @@ where
         + Copy
         + Serialize
         + DeserializeOwned
+        + Default
         + nalgebra::Scalar
         + num_traits::ToPrimitive,
 {
@@ -200,6 +203,7 @@ where
         + Copy
         + Serialize
         + DeserializeOwned
+        + Default
         + nalgebra::Scalar
         + num_traits::ToPrimitive,
 {
@@ -215,6 +219,7 @@ where
         + Copy
         + Serialize
         + DeserializeOwned
+        + Default
         + nalgebra::Scalar
         + num_traits::ToPrimitive,
 {
@@ -229,6 +234,7 @@ where
         + Copy
         + Serialize
         + DeserializeOwned
+        + Default
         + nalgebra::Scalar
         + num_traits::ToPrimitive,
 {

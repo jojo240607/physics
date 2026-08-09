@@ -177,6 +177,7 @@ struct World<T: RealField> {
 | S6 | **连续碰撞检测(CCD)** | `phy-rigid` 扩展 | 在 `solver` 接触生成前置射线/扫掠体;复用 M20 `ray_cast` 能力 | 中 | 高速小物体防隧穿,现靠细分步长缓解 |
 | S7 | **GPU/并行后端** | `phy-demo` 渲染/计算 | 当前 CPU 软光栅化(因 MinGW 链接 wgpu 崩溃,M3 决策);粒子/颗粒可并行 | 高 | 大规模粒子/颗粒/流体性能,实时大场景 |
 | S8 | **数值确定性 / WASM 回放** | 全局 | §5.5 原"暂不做",架构已预留;需固定步长 + 定点/确定性浮点 | 中 | 科研复现、锁帧回放、网络同步 |
+| S9 | **多材料 / 非牛顿流体(SPH 增强)** ✅已完成 | `phy-fluid` SPH | `Particle` 加 `material` 标签;`SphParams` 加幂律表 `visc_k`/`visc_n`+`shear_min`;`compute_forces` 据局部应变率算有效粘度 μ_eff=k·max(剪切率,ε)^(n-1)(n<1 剪切变稀,n>1 剪切变稠,n=1 牛顿);`effective_viscosity(i)` 查询 | 中 | 蜂蜜/牙膏/玉米淀粉流体、油水分层等多相流体,攻克 M4e“仅牛顿均质”缺口 |
 
 ### 5.6.1 实施建议(后续)
 
