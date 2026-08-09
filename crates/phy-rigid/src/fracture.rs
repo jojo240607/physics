@@ -289,6 +289,8 @@ pub fn fracture_body<T: RealField + Copy + NumCast>(
             rot: body.rot, // 继承母朝向(碎片不自转)。
             vel,
             inv_mass,
+        
+            ..Default::default()
         });
     }
     frags
@@ -450,6 +452,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::zeros(),
             inv_mass: 1.0,
+        
+            ..Default::default()
         };
         let frags = fracture_body(&body, 4, None, 0.0);
         assert!(frags.len() >= 3, "应切出至少 3 块,得 {}", frags.len());
@@ -475,6 +479,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::zeros(),
             inv_mass: 1.0 / m,
+        
+            ..Default::default()
         };
         let frags = fracture_body(&body, 8, None, 0.0);
         let sum: f64 = frags.iter().map(|f| 1.0 / f.inv_mass).sum();
@@ -492,6 +498,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::zeros(),
             inv_mass: 1.0,
+        
+            ..Default::default()
         };
         let frags = fracture_body(&body, 6, None, 2.0);
         let max_speed = frags.iter().map(|f| f.vel.norm()).fold(0.0_f64, f64::max);

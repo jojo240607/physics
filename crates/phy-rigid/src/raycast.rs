@@ -227,6 +227,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::zeros(),
             inv_mass: 0.0,
+        
+            ..Default::default()
         }
     }
 

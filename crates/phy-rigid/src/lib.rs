@@ -38,13 +38,7 @@ mod tests {
     use phy_math::{na, Vec3};
 
     fn body(shape: Shape<f64>, pos: Vec3<f64>) -> Body<f64> {
-        Body {
-            shape,
-            pos,
-            rot: na::UnitQuaternion::identity(),
-            vel: Vec3::zeros(),
-            inv_mass: 1.0,
-        }
+        Body::new(shape, pos, 1.0)
     }
 
     #[test]
@@ -104,24 +98,21 @@ mod tests {
     fn rotated_box_still_detects() {
         // 把一个盒绕 Z 转 45°,与另一个重叠
         let rot = na::UnitQuaternion::from_axis_angle(&na::Vector3::z_axis(), std::f64::consts::FRAC_PI_4);
-        let a = Body {
-            shape: Shape::Box {
+        let mut a = Body::new(
+            Shape::Box {
                 half: Vec3::new(1.0, 1.0, 1.0),
             },
-            pos: Vec3::new(0.0, 0.0, 0.0),
-            rot: na::UnitQuaternion::identity(),
-            vel: Vec3::zeros(),
-            inv_mass: 1.0,
-        };
-        let b = Body {
-            shape: Shape::Box {
+            Vec3::new(0.0, 0.0, 0.0),
+            1.0,
+        );
+        let mut b = Body::new(
+            Shape::Box {
                 half: Vec3::new(1.0, 1.0, 1.0),
             },
-            pos: Vec3::new(1.2, 0.0, 0.0),
-            rot,
-            vel: Vec3::zeros(),
-            inv_mass: 1.0,
-        };
+            Vec3::new(1.2, 0.0, 0.0),
+            1.0,
+        );
+        b.rot = rot;
         assert!(collide(&a, &b).is_some());
     }
 
@@ -144,15 +135,13 @@ mod tests {
 
     /// 静态地面的构造 helper(反质量 0)。
     fn ground() -> Body<f64> {
-        Body {
-            shape: Shape::Box {
+        Body::new(
+            Shape::Box {
                 half: Vec3::new(50.0, 0.5, 50.0),
             },
-            pos: Vec3::new(0.0, -0.5, 0.0),
-            rot: na::UnitQuaternion::identity(),
-            vel: Vec3::zeros(),
-            inv_mass: 0.0, // 静态
-        }
+            Vec3::new(0.0, -0.5, 0.0),
+            0.0, // 静态
+        )
     }
 
     #[test]

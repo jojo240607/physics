@@ -111,18 +111,18 @@ impl Scene {
             rot: na::UnitQuaternion::identity(),
             vel: Vec3::zeros(),
             inv_mass: 0.0,
+        
+            ..Default::default()
         });
         // 掉落小球(带电,演示电磁洛伦兹力偏转)。
         for i in 0..3 {
             let r = 1.0 + 0.3 * (i as f64);
             rigid.add_charged_body(
-                Body {
-                    shape: Shape::Sphere { r },
-                    pos: Vec3::new(-6.0 + i as f64 * 6.0, 8.0 + i as f64 * 2.0, 0.0),
-                    rot: na::UnitQuaternion::identity(),
-                    vel: Vec3::zeros(),
-                    inv_mass: 1.0 / 2.0,
-                },
+                Body::new(
+                    Shape::Sphere { r },
+                    Vec3::new(-6.0 + i as f64 * 6.0, 8.0 + i as f64 * 2.0, 0.0),
+                    1.0 / 2.0,
+                ),
                 if i == 1 { 5.0 } else { -5.0 }, // 中间球 +5,两侧 -5(相反电荷反向偏转)
             );
         }
@@ -229,20 +229,20 @@ impl Scene {
                 rot: na::UnitQuaternion::identity(),
                 vel: Vec3::zeros(),
                 inv_mass: 0.0,
-            },
+            
+            ..Default::default()
+        },
             Surface::diffuse(Vec3::new(0.4, 0.4, 0.45)),
         ));
         // 三个掉落小球:玻璃质感,分别映射到刚体索引 1/2/3(随刚体运动)。
         for i in 0..3usize {
             let r = 1.0 + 0.3 * (i as f64);
             optic_scene.add(OpticBody::from_rigid(
-                Body {
-                    shape: Shape::Sphere { r },
-                    pos: Vec3::new(-6.0 + i as f64 * 6.0, 8.0 + i as f64 * 2.0, 0.0),
-                    rot: na::UnitQuaternion::identity(),
-                    vel: Vec3::zeros(),
-                    inv_mass: 1.0 / 2.0,
-                },
+                Body::new(
+                    Shape::Sphere { r },
+                    Vec3::new(-6.0 + i as f64 * 6.0, 8.0 + i as f64 * 2.0, 0.0),
+                    1.0 / 2.0,
+                ),
                 Surface::glass(1.5, Vec3::new(0.8, 0.9, 1.0)),
                 i + 1, // 刚体索引:地面=0,故小球为 1/2/3
             ));
@@ -714,7 +714,9 @@ impl Scene {
                 rot: na::UnitQuaternion::identity(),
                 vel: Vec3::zeros(),
                 inv_mass: 0.0,
-            },
+            
+            ..Default::default()
+        },
             Surface::diffuse(Vec3::new(0.5, 0.5, 0.5)),
         ));
         scene.add(OpticBody::new(
@@ -724,7 +726,9 @@ impl Scene {
                 rot: na::UnitQuaternion::identity(),
                 vel: Vec3::zeros(),
                 inv_mass: 0.0,
-            },
+            
+            ..Default::default()
+        },
             Surface::glass(1.5, Vec3::new(0.9, 0.95, 1.0)),
         ));
         scene.add(OpticBody::new(
@@ -734,7 +738,9 @@ impl Scene {
                 rot: na::UnitQuaternion::identity(),
                 vel: Vec3::zeros(),
                 inv_mass: 0.0,
-            },
+            
+            ..Default::default()
+        },
             Surface::glass(1.33, Vec3::new(0.4, 0.6, 1.0)),
         ));
 
@@ -1253,13 +1259,11 @@ mod tests {
         // 刚体:球放在热场中心 (1,1,1)。
         let mut rworld = RigidWorld::new();
         rworld.gravity = Vec3::new(0.0, -9.81, 0.0);
-        rworld.add_body(Body {
-            shape: Shape::Sphere { r: 0.2 },
-            pos: Vec3::new(1.0, 1.0, 1.0),
-            rot: phy_math::na::one(),
-            vel: Vec3::zeros(),
-            inv_mass: 1.0,
-        });
+        rworld.add_body(Body::new(
+            Shape::Sphere { r: 0.2 },
+            Vec3::new(1.0, 1.0, 1.0),
+            1.0,
+        ));
         let mut rsub = RigidSubsystem::new(rworld);
         rsub.thermal_expansion = 0.5;
         rsub.heat_gain = 0.1;
@@ -1353,16 +1357,9 @@ mod tests {
         // 刚体:带电球,初速度 +X,在 X-Z 平面运动,受 v×B=(X×Z)=-Y 偏转 + 电场(零,纯磁)。
         let mut rworld = RigidWorld::new();
         rworld.gravity = Vec3::new(0.0, -9.81, 0.0);
-        rworld.add_charged_body(
-            Body {
-                shape: Shape::Sphere { r: 0.2 },
-                pos: Vec3::new(0.0, 0.0, 0.0),
-                rot: phy_math::na::one(),
-                vel: Vec3::new(2.0, 0.0, 0.0), // 初速 +X
-                inv_mass: 1.0,
-            },
-            1.0,
-        );
+        let mut em_ball = Body::new(Shape::Sphere { r: 0.2 }, Vec3::new(0.0, 0.0, 0.0), 1.0);
+        em_ball.vel = Vec3::new(2.0, 0.0, 0.0); // 初速 +X
+        rworld.add_charged_body(em_ball, 1.0);
         let mut rsub = RigidSubsystem::new(rworld);
         rsub.em_coupling = 1.0;
         w.add_subsystem(Box::new(rsub));
@@ -1438,13 +1435,11 @@ mod tests {
         // 刚体:放在天体正上方 (world y=+4),初速为零,应被引力井向下加速。
         let mut rworld = RigidWorld::new();
         rworld.gravity = Vec3::new(0.0, 0.0, 0.0); // 关掉均匀重力,专测局部引力井
-        rworld.add_body(Body {
-            shape: Shape::Sphere { r: 0.2 },
-            pos: Vec3::new(0.0, 4.0, 0.0), // 天体上方
-            rot: phy_math::na::one(),
-            vel: Vec3::zeros(),
-            inv_mass: 1.0,
-        });
+        rworld.add_body(Body::new(
+            Shape::Sphere { r: 0.2 },
+            Vec3::new(0.0, 4.0, 0.0), // 天体上方
+            1.0,
+        ));
         let mut rsub = RigidSubsystem::new(rworld);
         rsub.grav_coupling = 1.0;
         w.add_subsystem(Box::new(rsub));
@@ -1557,20 +1552,16 @@ mod tests {
         let mut w = World::<f64>::new();
         let mut rworld = RigidWorld::new();
         rworld.gravity = Vec3::zeros();
-        rworld.add_body(Body {
-            shape: Shape::Sphere { r: 0.2 },
-            pos: Vec3::new(-1.0, 0.0, 0.0), // 初始间距 2
-            rot: na::one(),
-            vel: Vec3::zeros(),
-            inv_mass: 1.0,
-        });
-        rworld.add_body(Body {
-            shape: Shape::Sphere { r: 0.2 },
-            pos: Vec3::new(1.0, 0.0, 0.0),
-            rot: na::one(),
-            vel: Vec3::zeros(),
-            inv_mass: 1.0,
-        });
+        rworld.add_body(Body::new(
+            Shape::Sphere { r: 0.2 },
+            Vec3::new(-1.0, 0.0, 0.0), // 初始间距 2
+            1.0,
+        ));
+        rworld.add_body(Body::new(
+            Shape::Sphere { r: 0.2 },
+            Vec3::new(1.0, 0.0, 0.0),
+            1.0,
+        ));
         // 杆长 1.5:步进后应把间距从 2 拉回 1.5。
         rworld.add_joint(0, 1, Joint::Distance {
             pa: Vec3::zeros(),
@@ -1614,17 +1605,17 @@ mod tests {
             rot: na::one(),
             vel: Vec3::zeros(),
             inv_mass: 0.0,
+        
+            ..Default::default()
         });
         // 车身(500 kg 盒),悬空在地面上方。
-        let cid = rworld.add_body(Body {
-            shape: Shape::Box {
+        let cid = rworld.add_body(Body::new(
+            Shape::Box {
                 half: Vec3::new(1.0, 0.25, 0.5),
             },
-            pos: Vec3::new(0.0, 1.0, 0.0),
-            rot: na::one(),
-            vel: Vec3::zeros(),
-            inv_mass: 1.0 / 500.0,
-        });
+            Vec3::new(0.0, 1.0, 0.0),
+            1.0 / 500.0,
+        ));
         // 四轮:四角,悬挂自然长度 0.6、刚度 8000、阻尼 800、轮半径 0.3。
         let rest = 0.6;
         let k = 8000.0;
@@ -1689,15 +1680,13 @@ mod tests {
         let mut rworld = RigidWorld::new();
         rworld.gravity = Vec3::new(0.0, -9.81, 0.0);
         // 母本盒(8 kg),静止悬在空中。
-        let pid = rworld.add_body(Body {
-            shape: Shape::Box {
+        let pid = rworld.add_body(Body::new(
+            Shape::Box {
                 half: Vec3::new(1.0, 1.0, 1.0),
             },
-            pos: Vec3::new(0.0, 5.0, 0.0),
-            rot: na::one(),
-            vel: Vec3::zeros(),
-            inv_mass: 1.0 / 8.0,
-        });
+            Vec3::new(0.0, 5.0, 0.0),
+            1.0 / 8.0,
+        ));
         let rsub = RigidSubsystem::new(rworld);
         w.add_subsystem(Box::new(rsub));
 

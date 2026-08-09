@@ -232,6 +232,7 @@ mod tests {
             rot: na::one(),
             vel: Vec3::zeros(),
             inv_mass: 0.0, // 静态地面
+            ..Default::default()
         }
     }
 
@@ -244,6 +245,7 @@ mod tests {
             rot: na::one(),
             vel: Vec3::zeros(),
             inv_mass: 1.0 / 500.0, // 500 kg 车身。
+            ..Default::default()
         }
     }
 

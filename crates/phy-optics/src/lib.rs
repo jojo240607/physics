@@ -50,6 +50,8 @@ mod tests {
             rot: na::UnitQuaternion::identity(),
             vel: Vec3::zeros(),
             inv_mass: 0.0,
+        
+            ..Default::default()
         }
     }
 
@@ -154,7 +156,9 @@ mod tests {
                 rot: na::UnitQuaternion::identity(),
                 vel: Vec3::zeros(),
                 inv_mass: 0.0,
-            },
+            
+            ..Default::default()
+        },
             Surface::diffuse(Vec3::new(0.9, 0.9, 0.9)),
         ));
         let caustics = Caustics;

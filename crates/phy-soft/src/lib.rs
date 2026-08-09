@@ -123,6 +123,7 @@ mod tests {
             rot: na::UnitQuaternion::identity(),
             vel: Vec3::new(0.0, 0.0, 0.0),
             inv_mass: 0.0,
+            ..Default::default()
         };
         let mut soft = SoftBody::<f64>::new(-9.81);
         let pid = soft.add_particle(Vec3::new(0.0, 0.0, 0.0), 1.0); // 在球心。
@@ -142,6 +143,7 @@ mod tests {
             rot: na::UnitQuaternion::identity(),
             vel: Vec3::new(0.0, 0.0, 0.0),
             inv_mass: 0.5,
+            ..Default::default()
         };
         let mut soft = SoftBody::<f64>::new(-9.81);
         soft.add_particle(Vec3::new(0.9, 0.0, 0.0), 1.0);
@@ -163,6 +165,7 @@ mod tests {
             rot: na::UnitQuaternion::identity(),
             vel: Vec3::new(0.0, 0.0, 0.0),
             inv_mass: 0.5,
+            ..Default::default()
         };
         let mut soft = SoftBody::<f64>::new(-9.81);
         soft.add_particle(Vec3::new(0.9, 0.0, 0.0), 1.0);
@@ -192,6 +195,8 @@ mod tests {
             rot: na::UnitQuaternion::identity(),
             vel: Vec3::zeros(),
             inv_mass: 0.0,
+        
+            ..Default::default()
         });
         rigid.add_body(Body {
             shape: Shape::Sphere { r: 0.5 },
@@ -199,6 +204,8 @@ mod tests {
             rot: na::UnitQuaternion::identity(),
             vel: Vec3::zeros(),
             inv_mass: 1.0 / 2.0,
+        
+            ..Default::default()
         });
 
         // 流体:小盒(避免 1000+ 粒子拖慢测试)。

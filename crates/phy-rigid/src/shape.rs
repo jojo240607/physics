@@ -3,7 +3,7 @@
 //! M1 支持:球、轴对齐盒(AABB)、凸多面体(以顶点+面定义)。
 //! 所有形状都提供"支撑点 (support)"查询,供 GJK/EPA 使用。
 
-use phy_math::{na, RealField, Vec3};
+use phy_math::{na, Mat3, RealField, Vec3};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +58,30 @@ pub mod serde_geom {
             let a = <[T; 4]>::deserialize(d)?;
             let q = na::Quaternion::new(a[0], a[1], a[2], a[3]);
             Ok(na::UnitQuaternion::new_normalize(q))
+        }
+    }
+
+    /// 体坐标系逆惯性张量(Matrix3<T>)的序列化:展平为 9 元素行主序数组。
+    pub mod mat3 {
+        use phy_math::{Mat3, RealField};
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+        pub fn serialize<S: Serializer, T: RealField + Serialize + Copy>(
+            m: &Mat3<T>,
+            s: S,
+        ) -> Result<S::Ok, S::Error> {
+            [
+                m[(0, 0)], m[(0, 1)], m[(0, 2)],
+                m[(1, 0)], m[(1, 1)], m[(1, 2)],
+                m[(2, 0)], m[(2, 1)], m[(2, 2)],
+            ]
+            .serialize(s)
+        }
+        pub fn deserialize<'de, D: Deserializer<'de>, T: RealField + Deserialize<'de> + Copy>(
+            d: D,
+        ) -> Result<Mat3<T>, D::Error> {
+            let a = <[T; 9]>::deserialize(d)?;
+            Ok(Mat3::from_row_slice(&a))
         }
     }
 }
@@ -166,11 +190,55 @@ pub struct Body<T: RealField + Copy> {
     /// 线速度(世界)。
     #[serde(with = "serde_geom")]
     pub vel: Vec3<T>,
+    /// 角速度(世界系,rad/s)。
+    #[serde(with = "serde_geom")]
+    pub ang_vel: Vec3<T>,
+    /// 体坐标系下的逆惯性张量(世界系逆惯性 = rot * inv_inertia_local * rotᵀ)。
+    /// 静态/无限转动惯量物体置 0 矩阵。
+    #[serde(with = "serde_geom::mat3")]
+    pub inv_inertia_local: Mat3<T>,
     /// 反质量(0 = 静态/无限质量)。
     pub inv_mass: T,
 }
 
+impl<T: RealField + Copy> Default for Body<T> {
+    /// 默认体:退化球体(半径 0)、位于原点、单位朝向、零速度、零逆质量与零逆惯性。
+    ///
+    /// 逆惯性默认 0(= 无旋转响应),需要真实转动的物体请用 `Body::new` 或
+    /// 构造后调用 `set_inertia_from_shape`。该默认仅用于让既有字面量用
+    /// `..Default::default()` 补齐新增字段而不破坏编译。
+    fn default() -> Self {
+        Body {
+            shape: Shape::Sphere { r: T::zero() },
+            pos: Vec3::zeros(),
+            rot: na::UnitQuaternion::identity(),
+            vel: Vec3::zeros(),
+            ang_vel: Vec3::zeros(),
+            inv_inertia_local: Mat3::zeros(),
+            inv_mass: T::zero(),
+        }
+    }
+}
+
 impl<T: RealField + Copy> Body<T> {
+    /// 便捷构造:形状 + 世界位置 + 质量(0 表示静态)。
+    ///
+    /// 反质量由 `inv_mass` 给出(`mass==0` => 静态)。构造后自动按几何估计并写入
+    /// 体坐标逆惯性张量(`set_inertia_from_shape`)。朝向初值单位四元数,速度 0。
+    pub fn new(shape: Shape<T>, pos: Vec3<T>, inv_mass: T) -> Self {
+        let mut b = Body {
+            shape,
+            pos,
+            rot: na::UnitQuaternion::identity(),
+            vel: Vec3::zeros(),
+            ang_vel: Vec3::zeros(),
+            inv_inertia_local: Mat3::zeros(),
+            inv_mass,
+        };
+        b.set_inertia_from_shape();
+        b
+    }
+
     /// 支撑点(世界坐标):局部支撑点经旋转+平移变换。
     pub fn support(&self, dir_world: &Vec3<T>) -> Vec3<T> {
         // 把世界方向转回局部空间求支撑,再变换回世界。
@@ -194,9 +262,66 @@ impl<T: RealField + Copy> Body<T> {
         self.vel
     }
 
+    /// 世界坐标系下的逆惯性张量(由体坐标逆惯性经旋转抬升)。
+    pub fn inv_inertia_world(&self) -> Mat3<T> {
+        let r = self.rot.quaternion().clone();
+        // 用四元数构造旋转矩阵(nalgebra UnitQuaternion -> Matrix3)。
+        let m = na::Matrix3::from_columns(&[
+            self.rot * Vec3::x(),
+            self.rot * Vec3::y(),
+            self.rot * Vec3::z(),
+        ]);
+        let _ = r;
+        m * self.inv_inertia_local * m.transpose()
+    }
+
     /// 施加线冲量(静态物体 inv_mass=0 无效果)。
     pub fn apply_impulse(&mut self, j: Vec3<T>) {
         self.vel += j * self.inv_mass;
+    }
+
+    /// 在接触点 `r`(相对质心的世界向量)施加冲量 `j`,更新线速度与角速度。
+    pub fn apply_impulse_at(&mut self, j: Vec3<T>, r: Vec3<T>) {
+        self.vel += j * self.inv_mass;
+        let torque_imp = r.cross(&j);
+        self.ang_vel += self.inv_inertia_world() * torque_imp;
+    }
+
+    /// 由质量与几何计算并写入体坐标逆惯性张量(球体/盒/凸多面体的主惯量近似)。
+    ///
+    /// 静态物体(`inv_mass==0`)置 0 矩阵(无旋转响应)。
+    pub fn set_inertia_from_shape(&mut self) {
+        if self.inv_mass <= T::zero() {
+            self.inv_inertia_local = Mat3::zeros();
+            return;
+        }
+        let mass = T::one() / self.inv_mass;
+        // 用包围盒半长作为等效惯量估计(对角张量,局部主轴 = 世界轴)。
+        let half = match &self.shape {
+            Shape::Sphere { r } => Vec3::new(*r, *r, *r),
+            Shape::Box { half } => *half,
+            Shape::Convex { vertices, .. } => {
+                // 取各轴最大投影作为半长。
+                let mut h = Vec3::new(T::zero(), T::zero(), T::zero());
+                for v in vertices {
+                    h.x = if v.x.abs() > h.x { v.x.abs() } else { h.x };
+                    h.y = if v.y.abs() > h.y { v.y.abs() } else { h.y };
+                    h.z = if v.z.abs() > h.z { v.z.abs() } else { h.z };
+                }
+                h
+            }
+        };
+        // 实心长方体主惯量: I_x = m/12 (y²+z²) 等(球用 r 等价)。
+        let c = mass / T::from_f64(12.0).unwrap();
+        let ix = c * (half.y * half.y + half.z * half.z);
+        let iy = c * (half.x * half.x + half.z * half.z);
+        let iz = c * (half.x * half.x + half.y * half.y);
+        let inv = Mat3::from_diagonal(&Vec3::new(
+            if ix > T::zero() { T::one() / ix } else { T::zero() },
+            if iy > T::zero() { T::one() / iy } else { T::zero() },
+            if iz > T::zero() { T::one() / iz } else { T::zero() },
+        ));
+        self.inv_inertia_local = inv;
     }
 }
 
@@ -246,6 +371,7 @@ mod tests {
             rot: na::UnitQuaternion::from_euler_angles(0.1, 0.2, 0.3),
             vel: Vec3::new(0.5, 0.0, -0.5),
             inv_mass: 0.25,
+            ..Default::default()
         };
         let json = serde_json::to_string(&b).unwrap();
         let b2: Body<f64> = serde_json::from_str(&json).unwrap();
@@ -258,5 +384,62 @@ mod tests {
             }
             _ => panic!("shape kind mismatch"),
         }
+    }
+
+    #[test]
+    fn body_new_sets_inertia_for_dynamic() {
+        // 动态球应写入非零逆惯性;静态体(inv_mass=0)逆惯性应为 0。
+        let dyn_b = Body::<f64>::new(Shape::Sphere { r: 1.0 }, Vec3::zeros(), 1.0);
+        assert!(dyn_b.inv_inertia_local.trace() > 0.0, "动态体应有逆惯性");
+        let stat_b = Body::<f64>::new(Shape::Sphere { r: 1.0 }, Vec3::zeros(), 0.0);
+        assert!(stat_b.inv_inertia_local.norm() < 1e-12, "静态体逆惯性应为 0");
+    }
+
+    #[test]
+    fn box_inertia_is_diagonal_in_local_frame() {
+        // 盒体在体坐标下逆惯性应为对角(主轴=世界轴),且长宽越大对应轴惯量越小。
+        let b = Body::<f64>::new(
+            Shape::Box {
+                half: Vec3::new(2.0, 1.0, 0.5),
+            },
+            Vec3::zeros(),
+            1.0,
+        );
+        // 沿 x 的惯量正比于 (y²+z²),y、z 较小 => Ix 最小 => 逆惯性最大。
+        let m = b.inv_inertia_local;
+        assert!(m[(0, 1)].abs() < 1e-12 && m[(0, 2)].abs() < 1e-12 && m[(1, 2)].abs() < 1e-12,
+            "体坐标逆惯性应是对角");
+        assert!(m[(0, 0)] > m[(1, 1)] && m[(1, 1)] > m[(2, 2)],
+            "x 轴(短轴)逆惯性应最大");
+    }
+
+    #[test]
+    fn inv_inertia_world_rotates_with_body() {
+        // 把体绕 z 转 90°,逆惯性矩阵应随之旋转,且对角线元素交换。
+        let mut b = Body::<f64>::new(
+            Shape::Box {
+                half: Vec3::new(2.0, 1.0, 0.5),
+            },
+            Vec3::zeros(),
+            1.0,
+        );
+        let iw0 = b.inv_inertia_world();
+        b.rot = na::UnitQuaternion::from_axis_angle(&Vec3::z_axis(), std::f64::consts::FRAC_PI_2);
+        let iw90 = b.inv_inertia_world();
+        // 旋转后 (0,0) 与原 (1,1) 应近似相等,(1,1) 与原 (0,0) 相等。
+        assert!((iw90[(0, 0)] - iw0[(1, 1)]).abs() < 1e-9, "旋转 90° 后逆惯性 (0,0) 应等于原 (1,1)");
+        assert!((iw90[(1, 1)] - iw0[(0, 0)]).abs() < 1e-9, "旋转 90° 后逆惯性 (1,1) 应等于原 (0,0)");
+    }
+
+    #[test]
+    fn apply_impulse_at_off_center_yields_angular_velocity() {
+        // 在偏离质心处施加横向冲量应同时产生线速度和角速度。
+        let mut b = Body::<f64>::new(Shape::Sphere { r: 1.0 }, Vec3::zeros(), 1.0);
+        let r = Vec3::new(0.0, 1.0, 0.0); // 在质心正上方施力
+        let j = Vec3::new(1.0, 0.0, 0.0); // 沿 +x 冲量 => 绕 -z 旋转
+        b.apply_impulse_at(j, r);
+        assert!((b.vel - Vec3::new(1.0, 0.0, 0.0)).norm() < 1e-9, "线速度应为 j/m");
+        assert!(b.ang_vel.norm() > 1e-9, "离轴冲量应产生角速度");
+        assert!(b.ang_vel.z < 0.0, "绕 +y 位矢 × +x 冲量 => 角速度沿 -z");
     }
 }

@@ -882,6 +882,7 @@ mod tests {
             rot: phy_math::na::UnitQuaternion::identity(),
             vel: Vec3::zeros(),
             inv_mass: 0.0, // 静态
+            ..Default::default()
         };
         for _ in 0..100 {
             w.step(0.0025);
@@ -923,6 +924,8 @@ mod tests {
             rot: phy_math::na::UnitQuaternion::identity(),
             vel: Vec3::zeros(),
             inv_mass: 1.0 / mass_b,
+        
+            ..Default::default()
         };
         let v0 = body.vel.y;
         // 把粒子推到球内以制造淹没(流体静止,不会有下拽动量)。

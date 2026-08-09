@@ -19,7 +19,9 @@ fn make_world() -> World<f64> {
         rot: phy_math::na::UnitQuaternion::identity(),
         vel: Vec3::new(0.0, 0.0, 0.0),
         inv_mass: 0.5,
-    });
+    
+            ..Default::default()
+        });
     let rigid = RigidSubsystem {
         world: rw,
         thermal_expansion: 0.0,

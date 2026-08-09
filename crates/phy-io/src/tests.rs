@@ -14,7 +14,9 @@ fn trajectory_csv_has_header_and_one_row_per_body() {
         rot: na::one(),
         vel: Vec3::new(0.0, 0.0, 0.0),
         inv_mass: 1.0,
-    });
+    
+            ..Default::default()
+        });
     let frames = vec![BodySample::snapshot(&world, 0.0)];
     let path = std::env::temp_dir().join("phy_io_test_traj.csv");
     {

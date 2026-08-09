@@ -161,11 +161,13 @@ pub fn solve_joints_velocity<T: RealField + Copy>(
 
 /// 位置层求解:split-impulse 伪速度投影,把残余距离误差消除而不污染真实速度。
 ///
-/// 返回每个刚体的伪速度;调用方用 `pos += pseudo*dt` 修正位置。
+/// 关节仅约束平动(`ang_pseudo` 透传但本函数不修改它)。
+/// 调用方用 `pos += pseudo*dt` 修正位置。
 pub fn solve_joints_position<T: RealField + Copy>(
     bodies: &[Body<T>],
     joints: &[JointConstraint<T>],
     pseudo: &mut [Vec3<T>],
+    _ang_pseudo: &mut [Vec3<T>],
     beta_over_dt: T,
 ) {
     // 位置层独立累积冲量。

@@ -8,7 +8,7 @@
 //! 5. 位置修正(防止穿透累积)
 
 use phy_field::{EmFieldLike, GravFieldLike, HeatFieldLike};
-use phy_math::{gravity, RealField, Vec3};
+use phy_math::{gravity, na, Mat3, Quat, RealField, Vec3};
 use num_traits::NumCast;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -79,13 +79,26 @@ impl<T: RealField + Copy> RigidWorld<T> {
     /// 推进一步。返回本步检测到的接触(供调试/渲染)。
     ///
     /// 标准半隐式欧拉 + 顺序冲量流程:
-    /// 1. 积分速度(重力) 2. detect(当前位置) 3. 求解速度冲量
-    /// 4. 积分位置(用求解后速度) 5. 位置投影(清残余穿透)
+    /// 1. 积分速度(重力) + 姿态(角速度) 2. detect(当前位置) 3. 求解速度冲量(含角冲量)
+    /// 4. 积分位置(用求解后速度) 5. 位置投影(清残余穿透,含角伪速度)
     pub fn step(&mut self, dt: T) -> Vec<Contact<T>> {
-        // 1. 积分速度(重力)
+        // 1. 积分速度(重力) + 姿态(角速度)
         for b in self.bodies.iter_mut() {
             if b.inv_mass > T::zero() {
                 b.vel += self.gravity * dt;
+            }
+            if b.inv_inertia_local.iter().any(|x| *x != T::zero()) {
+                // q += 0.5 * (0,ω)⊗q * dt,再归一化。
+                let wbar = b.ang_vel;
+                let q = *b.rot.quaternion();
+                let dq = Quat::new(T::zero(), wbar.x, wbar.y, wbar.z) * q;
+                let nq = Quat::new(
+                    q.w + dq.w * (dt * T::from_f64(0.5).unwrap()),
+                    q.i + dq.i * (dt * T::from_f64(0.5).unwrap()),
+                    q.j + dq.j * (dt * T::from_f64(0.5).unwrap()),
+                    q.k + dq.k * (dt * T::from_f64(0.5).unwrap()),
+                );
+                b.rot = na::UnitQuaternion::new_normalize(nq);
             }
         }
 
@@ -98,7 +111,7 @@ impl<T: RealField + Copy> RigidWorld<T> {
             }
         }
 
-        // 3. 速度求解(顺序冲量)
+        // 3. 速度求解(顺序冲量,含角冲量)
         solve_velocity(&mut self.bodies, &mut constraints, &self.params);
         // 3b. 关节速度求解(与接触同构的顺序冲量,消除关节相对漂移速度)。
         solve_joints_velocity(&mut self.bodies, &mut self.joints, self.params.iterations);
@@ -113,19 +126,43 @@ impl<T: RealField + Copy> RigidWorld<T> {
         // 5. 位置修正(split impulse 伪速度):解伪速度使物体分离,
         //    伪速度只用于修正位置,不污染真实速度(避免抖动/能量注入)。
         let mut pseudo: Vec<Vec3<T>> = vec![Vec3::zeros(); self.bodies.len()];
+        let mut ang_pseudo: Vec<Vec3<T>> = vec![Vec3::zeros(); self.bodies.len()];
         let beta = T::from_f64(0.2).unwrap();
         let beta_over_dt = beta / dt;
         solve_position(
             &self.bodies,
             &constraints,
             &mut pseudo,
+            &mut ang_pseudo,
             beta_over_dt,
         );
         // 5b. 关节位置投影(split-impulse 伪速度):把残余关节距离误差消除而不污染真实速度。
-        solve_joints_position(&self.bodies, &self.joints, &mut pseudo, beta_over_dt);
+        solve_joints_position(
+            &self.bodies,
+            &self.joints,
+            &mut pseudo,
+            &mut ang_pseudo,
+            beta_over_dt,
+        );
         for (i, b) in self.bodies.iter_mut().enumerate() {
             if b.inv_mass > T::zero() {
                 b.pos += pseudo[i] * dt;
+                if b.inv_inertia_local.iter().any(|x| *x != T::zero()) {
+                    let q = *b.rot.quaternion();
+                    let dq = Quat::new(
+                        T::zero(),
+                        ang_pseudo[i].x,
+                        ang_pseudo[i].y,
+                        ang_pseudo[i].z,
+                    ) * q;
+                    let nq = Quat::new(
+                        q.w + dq.w * (dt * T::from_f64(0.5).unwrap()),
+                        q.i + dq.i * (dt * T::from_f64(0.5).unwrap()),
+                        q.j + dq.j * (dt * T::from_f64(0.5).unwrap()),
+                        q.k + dq.k * (dt * T::from_f64(0.5).unwrap()),
+                    );
+                    b.rot = na::UnitQuaternion::new_normalize(nq);
+                }
             }
         }
 
@@ -312,6 +349,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::new(0.0, 0.0, 0.0),
             inv_mass: 1.0,
+        
+            ..Default::default()
         };
         world.add_body(body);
 
@@ -342,6 +381,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::new(2.0, 0.0, 0.0),
             inv_mass: 1.0,
+        
+            ..Default::default()
         };
         world.add_body(body);
 
@@ -371,6 +412,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::new(0.0, 0.0, 0.0),
             inv_mass: 1.0,
+        
+            ..Default::default()
         };
         world.add_charged_body(body, 1.0); // q=+1
 
@@ -384,6 +427,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::new(0.0, 0.0, 0.0),
             inv_mass: 1.0,
+        
+            ..Default::default()
         };
         world.add_body(neutral);
         let vx_before = world.bodies[1].vel.x;
@@ -409,6 +454,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::new(1.0, 0.0, 0.0),
             inv_mass: 1.0,
+        
+            ..Default::default()
         };
         world.add_charged_body(body, 1.0);
         world.couple_em(&mut em, 0.1, 1.0);
@@ -428,6 +475,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::new(2.0, 0.0, 0.0), // 已有速度
             inv_mass: 1.0,
+        
+            ..Default::default()
         };
         world.add_charged_body(body, 1.0);
         world.couple_em(&mut em, 0.1, 1.0);
@@ -456,6 +505,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::new(0.0, 0.0, 0.0),
             inv_mass: 1.0,
+        
+            ..Default::default()
         };
         world.add_body(body);
         world.couple_grav(&mut grav, 0.1, 1.0);
@@ -476,6 +527,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::new(2.0, 0.0, 0.0), // 已有速度,m=1
             inv_mass: 1.0,
+        
+            ..Default::default()
         };
         world.add_body(body);
         world.couple_grav(&mut grav, 0.1, 1.0);
@@ -496,6 +549,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::zeros(),
             inv_mass: 1.0,
+        
+            ..Default::default()
         });
         let b = world.add_body(Body {
             shape: Shape::Sphere { r: 0.2 },
@@ -503,6 +558,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::zeros(),
             inv_mass: 1.0,
+        
+            ..Default::default()
         });
         world.add_joint(a, b, Joint::Distance {
             pa: Vec3::zeros(),
@@ -532,6 +589,7 @@ mod tests {
             rot: na::one(),
             vel: Vec3::zeros(),
             inv_mass: 0.0, // 静态
+            ..Default::default()
         });
         // 摆动体初始在锚点下方偏右 (1,4,0),经球窝挂在锚点上(pa 在锚点局部原点,
         // pb 在摆动体顶部)。
@@ -541,6 +599,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::zeros(),
             inv_mass: 1.0,
+        
+            ..Default::default()
         });
         world.add_joint(anchor, swing, Joint::Ball {
             pa: Vec3::zeros(),               // 锚点局部原点
@@ -577,6 +637,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::new(3.0, 0.0, 0.0), // 已有水平速度
             inv_mass: 1.0 / parent_mass,
+        
+            ..Default::default()
         });
 
         let frag_ids = world.shatter(pid, 8, 2.0);
@@ -620,6 +682,8 @@ mod tests {
             rot: na::one(),
             vel: Vec3::zeros(),
             inv_mass: 1.0,
+        
+            ..Default::default()
         });
         let frags = world.shatter(pid, 6, 1.5);
         assert!(!frags.is_empty());
@@ -631,5 +695,64 @@ mod tests {
             assert!(world.bodies[*id].pos.x.is_finite(), "碎片位置不应 NaN");
             assert!(world.bodies[*id].pos.y.is_finite(), "碎片位置不应 NaN");
         }
+    }
+
+    /// 角动力学(M18 / S1):自由转动体在无外力下以恒定角速度自旋,姿态应随时间演化。
+    #[test]
+    fn free_spin_integrates_attitude_without_drift() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, 0.0, 0.0); // 关重力,专测自旋
+        // 一个绕世界 z 轴自旋的盒体(须用 Body::new 取得真实惯性)。
+        let id = world.add_body(Body::new(
+            Shape::Box {
+                half: Vec3::new(1.0, 0.5, 0.25),
+            },
+            Vec3::zeros(),
+            1.0,
+        ));
+        world.bodies[id].ang_vel = Vec3::new(0.0, 0.0, 1.0); // 1 rad/s 绕 z
+
+        let q0 = *world.bodies[id].rot.quaternion();
+        for _ in 0..200 {
+            world.step(1.0 / 120.0); // 总时长 200/120 ≈ 1.667 s
+        }
+        // 自旋 1.667 s ≈ 1.667 rad。姿态应绕 z 旋转该角度,且归一化四元数应仍有效。
+        let q1 = *world.bodies[id].rot.quaternion();
+        assert!((q1.norm() - 1.0).abs() < 1e-6, "积分后四元数应保持单位范数");
+        // 绕 z 轴转 1.667 rad 的四元数 w = cos(θ/2)。
+        let expected_w = (1.667_f64 / 2.0).cos();
+        assert!((q1.w - expected_w).abs() < 0.05, "姿态角应≈角速度×时间, w 得 {}", q1.w);
+        // 质心不应移动(无外力、无角动量耦合到线速度)。
+        assert!(world.bodies[id].pos.norm() < 1e-9, "无外力下质心应静止");
+        let _ = q0;
+    }
+
+    /// 角动力学(S1):离轴冲量使自由体同时平动并绕质心旋转(角动量守恒)。
+    #[test]
+    fn off_center_impulse_spins_free_body() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, 0.0, 0.0);
+        let id = world.add_body(Body::new(
+            Shape::Box {
+                half: Vec3::new(1.0, 1.0, 1.0),
+            },
+            Vec3::zeros(),
+            1.0,
+        ));
+        // 在质心上方 1.0 处施 +x 冲量 => 平动 +x 且绕 -z 自旋。
+        world.bodies[id].apply_impulse_at(
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        );
+        assert!(world.bodies[id].vel.x > 0.0, "应获得 +x 线速度");
+        assert!(world.bodies[id].ang_vel.z < 0.0, "离轴冲量应产生 -z 角速度");
+        let p0 = world.bodies[id].vel; // 动量 = m·v(初始无角动量耦合)
+        for _ in 0..120 {
+            world.step(1.0 / 120.0);
+        }
+        // 无外力:线动量守恒(只考虑质心线速度)。
+        assert!((world.bodies[id].vel - p0).norm() < 1e-6, "无外力下质心线动量守恒");
+        // 角速度在无外力下保持恒定(自由刚体角动量守恒 => 对主轴体恒定)。
+        assert!(world.bodies[id].ang_vel.z < 0.0, "自旋角速度应持续");
     }
 }
