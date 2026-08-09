@@ -74,6 +74,12 @@ pub struct SoftBody<T: RealField + Copy> {
     pub body_restitution: T,
     /// 与刚体碰撞时对刚体施加冲量的比例(0 = 仅软体被挡,1 = 完全双向)。
     pub body_coupling: T,
+    /// 锚点驱动(软↔刚体挂接,S4/S5):`anchors[i] = Some((pos, vel))` 时,
+    /// 质点 `i` 每步被强制跟随该世界位置/速度(等效钉死但由刚体驱动),
+    /// 实现“布料挂在运动刚体上”。`None` 表示不受锚点约束。
+    /// 运行时挂接状态,不随软体序列化持久化。
+    #[serde(skip)]
+    pub anchors: Vec<Option<(Vec3<T>, Vec3<T>)>>,
 }
 
 impl<T: RealField + Copy> SoftBody<T> {
@@ -88,6 +94,7 @@ impl<T: RealField + Copy> SoftBody<T> {
             restitution: T::from_f64(0.2).unwrap(),
             body_restitution: T::from_f64(0.2).unwrap(),
             body_coupling: T::from_f64(1.0).unwrap(),
+            anchors: Vec::new(),
         }
     }
 
@@ -163,13 +170,35 @@ impl<T: RealField + Copy> SoftBody<T> {
                 }
             }
         }
+        body.anchors = vec![None; body.particles.len()];
         body
     }
 
     /// 添加质点,返回索引。
     pub fn add_particle(&mut self, pos: Vec3<T>, inv_mass: T) -> usize {
         self.particles.push(Particle::new(pos, inv_mass));
+        self.anchors.push(None);
         self.particles.len() - 1
+    }
+
+    /// 把质点 `i` 锚定到外部世界位置/速度(由刚体驱动,实现软↔刚体挂接)。
+    ///
+    /// 调用方应在每步 `step` 之前根据刚体当前位姿刷新锚点:
+    /// `set_anchor(i, body.pos, body.vel)`,随后 `SoftBody::step` 会把该质点
+    /// 强制跟随锚点,从而“布料挂在运动刚体上”。
+    pub fn set_anchor(&mut self, i: usize, pos: Vec3<T>, vel: Vec3<T>) {
+        assert!(i < self.particles.len(), "set_anchor 索引越界");
+        if self.anchors.len() <= i {
+            self.anchors.resize(i + 1, None);
+        }
+        self.anchors[i] = Some((pos, vel));
+    }
+
+    /// 解除质点 `i` 的锚定(恢复自由)。
+    pub fn clear_anchor(&mut self, i: usize) {
+        if let Some(a) = self.anchors.get_mut(i) {
+            *a = None;
+        }
     }
 
     /// 添加弹簧(自动用当前距离作为 rest)。
@@ -309,6 +338,17 @@ impl<T: RealField + Copy> SoftBody<T> {
                 p.pos.y = gy;
                 if p.vel.y < T::zero() {
                     p.vel.y = -p.vel.y * rest;
+                }
+            }
+        }
+
+        // 6. 锚点驱动(软↔刚体挂接):被锚定的质点强制跟随刚体给出的
+        //    世界位置/速度,实现“布料挂在运动刚体上”。
+        for (i, a) in self.anchors.iter().enumerate() {
+            if let Some((apos, avel)) = a {
+                if let Some(p) = self.particles.get_mut(i) {
+                    p.pos = *apos;
+                    p.vel = *avel;
                 }
             }
         }
@@ -552,5 +592,75 @@ mod tests {
             }
             _ => panic!("proxy_body 应返回 Sphere"),
         }
+    }
+
+    /// 锚点驱动(软↔刚体挂接):被锚质点跟随外部位置,其余质点在重力下垂荡。
+    #[test]
+    fn anchored_particle_follows_external_anchor() {
+        let mut body = SoftBody::<f64>::new(-1.0);
+        // 两质点 + 一根竖直弹簧,模拟一段悬挂链。
+        body.add_particle(Vec3::new(0.0, 2.0, 0.0), 1.0);
+        body.add_particle(Vec3::new(0.0, 1.0, 0.0), 1.0);
+        body.add_spring_len(0, 1, 1.0, 200.0, 5.0);
+        // 把质点 0 锚定到外部运动锚点(模拟刚体把布料吊起)。
+        let anchor0 = Vec3::new(0.5, 3.0, 0.0);
+        body.set_anchor(0, anchor0, Vec3::zeros());
+        let dt = 0.01f64;
+        for _ in 0..200 {
+            // 每步刷新锚点(这里锚点固定,模拟静止刚体)。
+            body.set_anchor(0, anchor0, Vec3::zeros());
+            body.step(dt);
+        }
+        // 锚定质点应精确停在锚点位置。
+        assert!(
+            (body.particles[0].pos - anchor0).norm() < 1e-9,
+            "锚定质点应停在锚点: {:?}",
+            body.particles[0].pos
+        );
+        // 另一端应被弹簧拉住、悬挂在锚点下方(不落到地面以下,长度≈1)。
+        let len = (body.particles[1].pos - body.particles[0].pos).norm();
+        assert!(len > 0.5 && len < 1.5, "悬挂段长度应≈1,实际 {}", len);
+        assert!(body.particles[1].pos.y < anchor0.y, "自由端应在锚点下方");
+    }
+
+    /// 软↔刚体挂接端到端:软体顶端锚定到一个运动刚体,应随刚体平移。
+    #[test]
+    fn soft_hangs_from_moving_rigid_body() {
+        use phy_rigid::Body;
+        let mut body = SoftBody::<f64>::new(-5.0);
+        // 一排 3 质点 + 两根弹簧,模拟垂挂细带。
+        body.add_particle(Vec3::new(0.0, 2.0, 0.0), 1.0);
+        body.add_particle(Vec3::new(0.0, 1.0, 0.0), 1.0);
+        body.add_particle(Vec3::new(0.0, 0.0, 0.0), 1.0);
+        body.add_spring_len(0, 1, 1.0, 200.0, 5.0);
+        body.add_spring_len(1, 2, 1.0, 200.0, 5.0);
+
+        // 运动刚体(吊钩),每步上移。
+        let mut hook = Body::new(
+            phy_rigid::Shape::Sphere { r: 0.3 },
+            Vec3::new(0.0, 3.0, 0.0),
+            0.0, // 静态吊钩
+        );
+        body.set_anchor(0, hook.pos, hook.vel);
+
+        let dt = 0.01f64;
+        for _ in 0..150 {
+            // 刚体向上移动(模拟吊钩被拉起)。
+            hook.pos.y += 0.02;
+            // 软体锚定到刚体当前位姿。
+            body.set_anchor(0, hook.pos, hook.vel);
+            body.step(dt);
+        }
+
+        // 软体顶端应跟随吊钩上升到 ~3.0 + 150*0.02 = 6.0 附近。
+        assert!(
+            (body.particles[0].pos.y - hook.pos.y).abs() < 1e-9,
+            "软体顶端应跟随吊钩: soft={}, hook={}",
+            body.particles[0].pos.y,
+            hook.pos.y
+        );
+        assert!(body.particles[0].pos.y > 5.5, "吊钩上移后软体应被提起");
+        // 整条带应竖直垂在吊钩下方,且未触地。
+        assert!(body.particles[2].pos.y > body.ground_y, "自由端不应触地");
     }
 }

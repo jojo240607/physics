@@ -172,7 +172,7 @@ struct World<T: RealField> {
 | S1 | **刚体角动力学(旋转)** ✅已完成 | `phy-rigid` 扩展 | 给 `Body` 加角速度/惯性张量/四元数姿态,`step` 积分姿态、`solver` 加接触角冲量;M20 车辆、M21 破碎、M18 关节均受限于"无角速度" | 高 | 真实翻滚、陀螺效应、扭矩驱动关节;多处已交付功能共同天花板 |
 | S2 | **不可压 Navier-Stokes / 有限体积 CFD** ✅已完成 | `phy-fluid` 扩展(`crates/phy-fluid/src/cfd.rs`) | 复用 M7 网格 + M4e 平流 + M12/13 Jacobi 压力泊松;`CfdWorld`(MAC 交错网格 + Chorin 投影)替代弱可压 SPH | 高 | 解决 SPH 持续挤压数值发散(M25 已见),更稳的大尺度流场 |
 | S3 | **绳索/链(Catmull-Rom 或 XPBD 距离约束链)** ✅已完成 | `phy-soft` 扩展(`rope.rs` 的 `Rope`) | 复用 M19 布料 `DistanceConstraint` + PBD 投影;1D 距离约束链 + 钉扎 | 中 | 锁链、藤蔓、辫子等 1D 柔性体的独立常见需求 |
-| S4 | **柔体↔刚体更紧耦合 + 软体↔光学折射** ✅已完成(软→光学) | `phy-soft`×`phy-optics`/`phy-rigid` | 复用 M4b 软↔刚、M16 光↔刚;`SoftBody`/`Rope` 新增 `proxy_body()` 导出代理球刚体,注册为 `OpticBody` 实现折射;端到端测试 `soft_body_proxy_refracts_light` 验证 | 中 | 透明软体(水袋/果冻)光学折射、软布挂接刚体链 |
+| S4 | **柔体↔刚体更紧耦合 + 软体↔光学折射** ✅已完成 | `phy-soft`×`phy-optics`/`phy-rigid` | 复用 M4b 软↔刚、M16 光↔刚;`SoftBody`/`Rope` 新增 `proxy_body()` 导出代理球刚体实现折射;`SoftBody` 新增 `anchors`+`set_anchor`/`clear_anchor` 实现软↔刚体挂接(布料挂运动刚体);端到端测试 `soft_body_proxy_refracts_light` / `soft_hangs_from_moving_rigid_body` 验证 | 中 | 透明软体(水袋/果冻)光学折射、软布挂接刚体链 |
 | S5 | **气体/烟雾多相与燃烧** | `phy-field`×`phy-fluid` | 复用 M22 Boussinesq 闭环 + M4e 平流;加密度/温度多相 + 火焰前缘推进 | 中 | 烟羽/火焰/爆炸等特效,科研向燃烧建模 |
 | S6 | **连续碰撞检测(CCD)** | `phy-rigid` 扩展 | 在 `solver` 接触生成前置射线/扫掠体;复用 M20 `ray_cast` 能力 | 中 | 高速小物体防隧穿,现靠细分步长缓解 |
 | S7 | **GPU/并行后端** | `phy-demo` 渲染/计算 | 当前 CPU 软光栅化(因 MinGW 链接 wgpu 崩溃,M3 决策);粒子/颗粒可并行 | 高 | 大规模粒子/颗粒/流体性能,实时大场景 |
