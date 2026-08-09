@@ -2,10 +2,18 @@
 //!
 //! 与桌面版共用 phy-demo 的 Scene/Framebuffer/Camera 渲染逻辑,
 //! 仅把"窗口/事件/呈现"替换为 Web API(canvas + 键盘监听 + requestAnimationFrame)。
+//!
+//! GPU 加速(W1, §5.7.4):仅当 `target_arch="wasm32" + feature="gpu"` 时,
+//! `gpu` 模块提供 WebGPU compute 后端。桌面端 / 默认 wasm 构建不进入该模块,
+//! 因此不拉入 wgpu,避开 MinGW 链接崩溃(M3 决策)。
 
 use phy_demo::{Camera, DemoMode, Framebuffer, Scene};
 use phy_math::Vec3 as V3;
 use wasm_bindgen::prelude::*;
+
+// W1: 仅 wasm + gpu feature 下编译 WebGPU 后端;其余构建忽略。
+#[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+pub mod gpu;
 
 // 用 console 输出 + panic hook,便于浏览器调试。
 #[wasm_bindgen]
@@ -182,6 +190,86 @@ impl DemoApp {
             *p = 0xFFFF0000u32; // ARGB red
         }
         present(&self.canvas, &self.ctx, &self.state.fb);
+    }
+
+    /// W1 验证入口(仅 wasm + gpu feature):跑 GPU compute 自测,返回 Promise<string>。
+    /// 浏览器里 `app.gpu_self_test().then(s => console.log(s))` 应看到
+    /// "W1 gpu self-test ok=true out=[1.0,4.0,9.0,16.0,25.0]"。
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    pub fn gpu_self_test(&self) -> js_sys::Promise {
+        use wasm_bindgen::JsCast;
+        let fut = async move { crate::gpu::gpu_self_test().await };
+        wasm_bindgen_futures::future_to_promise(async move {
+            match fut.await {
+                Ok(s) => Ok(js_sys::JsString::from(s.as_str()).into()),
+                Err(e) => Err(js_sys::Error::new(&e).into()),
+            }
+        })
+        .unchecked_into()
+    }
+
+    /// W2 验证入口(仅 wasm + gpu feature):用 GPU 跑光学实时近似渲染自测。
+    /// 浏览器里 `app.optic_self_test().then(s => console.log(s))` 应看到
+    /// "W2 optic ok: center=(...) bg=(...)".
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    pub fn optic_self_test(&self) -> js_sys::Promise {
+        use wasm_bindgen::JsCast;
+        let fut = async move { crate::gpu::optic_self_test().await };
+        wasm_bindgen_futures::future_to_promise(async move {
+            match fut.await {
+                Ok(s) => Ok(js_sys::JsString::from(s.as_str()).into()),
+                Err(e) => Err(js_sys::Error::new(&e).into()),
+            }
+        })
+        .unchecked_into()
+    }
+
+    /// W3 验证入口(仅 wasm + gpu feature):用 GPU 跑焦散 march 自测。
+    /// 浏览器里 `app.caustics_self_test().then(s => console.log(s))` 应看到
+    /// "W3 caustics ok: grid_n=16 max=... sum=...".
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    pub fn caustics_self_test(&self) -> js_sys::Promise {
+        use wasm_bindgen::JsCast;
+        let fut = async move { crate::gpu::caustics_self_test().await };
+        wasm_bindgen_futures::future_to_promise(async move {
+            match fut.await {
+                Ok(s) => Ok(js_sys::JsString::from(s.as_str()).into()),
+                Err(e) => Err(js_sys::Error::new(&e).into()),
+            }
+        })
+        .unchecked_into()
+    }
+
+    /// W4 验证入口(仅 wasm + gpu feature):用 GPU 跑 SPH 密度/受力自测。
+    /// 浏览器里 `app.sph_self_test().then(s => console.log(s))` 应看到
+    /// "W4 sph ok: n=... mean_rho=... rest=... ratio=... finite=... acc0=(...)".
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    pub fn sph_self_test(&self) -> js_sys::Promise {
+        use wasm_bindgen::JsCast;
+        let fut = async move { crate::gpu::sph_self_test().await };
+        wasm_bindgen_futures::future_to_promise(async move {
+            match fut.await {
+                Ok(s) => Ok(js_sys::JsString::from(s.as_str()).into()),
+                Err(e) => Err(js_sys::Error::new(&e).into()),
+            }
+        })
+        .unchecked_into()
+    }
+
+    /// W5 验证入口(仅 wasm + gpu feature):用 GPU 跑颗粒 PBD 接触投影自测。
+    /// 浏览器里 `app.granular_self_test().then(s => console.log(s))` 应看到
+    /// "W5 granular ok: n=... npairs=... min_gap=... overlaps=... finite=...".
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    pub fn granular_self_test(&self) -> js_sys::Promise {
+        use wasm_bindgen::JsCast;
+        let fut = async move { crate::gpu::granular_self_test().await };
+        wasm_bindgen_futures::future_to_promise(async move {
+            match fut.await {
+                Ok(s) => Ok(js_sys::JsString::from(s.as_str()).into()),
+                Err(e) => Err(js_sys::Error::new(&e).into()),
+            }
+        })
+        .unchecked_into()
     }
 }
 

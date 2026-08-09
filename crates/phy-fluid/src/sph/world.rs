@@ -175,8 +175,8 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
         self.enforce_bounds();
     }
 
-    /// 重建邻居网格(每步调用)。
-    fn build_grid(&mut self) {
+    /// 重建邻居网格(每步调用;也供 W4 GPU 扁平化前显式调用)。
+    pub fn build_grid(&mut self) {
         self.grid.build(&self.particles);
     }
 
@@ -695,4 +695,47 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
 /// 距离(避免与 kernels 的泛型 dist 重名)。
 pub(crate) fn na_distance<T: RealField + Copy>(a: &Vec3<T>, b: &Vec3<T>) -> T {
     (a - b).norm()
+}
+
+// W4: 导出 GPU 扁平数据(同模块可访问私有字段 grid/params/particles)。
+impl FluidWorld<f32> {
+    /// 把当前粒子 + 网格状态导出为 GPU 友好扁平数据(W4 前置)。
+    ///
+    /// 要求 `grid` 已 `build`(即 `step` 已调用过,或外部显式 `build_grid`)。
+    /// GPU 端(Web Demo)用 `SphFlatData` 把字段上传到 WebGPU buffer 并跑 wgsl 内核
+    /// (复刻 `compute_density_pressure` + `compute_forces`)。CPU 路径完全不变。
+    pub fn to_gpu_flat(&self) -> super::gpu_flat::SphFlatData {
+        let n = self.particles.len();
+        let mut pos = Vec::with_capacity(n);
+        let mut vel = Vec::with_capacity(n);
+        let mut scalar = Vec::with_capacity(n);
+        for p in &self.particles {
+            pos.push([p.pos.x, p.pos.y, p.pos.z, 0.0]);
+            vel.push([p.vel.x, p.vel.y, p.vel.z, 0.0]);
+            // scalar = (rho, p, mass, material)
+            scalar.push([p.rho, p.p, p.mass, p.material as f32]);
+        }
+        let flat: super::grid::FlatGrid<f32> = self.grid.to_flat();
+        super::gpu_flat::SphFlatData {
+            n,
+            pos,
+            vel,
+            scalar,
+            cell_start: flat.cell_start,
+            sorted: flat.sorted,
+            grid_min: [flat.min_i, flat.min_j, flat.min_k],
+            nc: [flat.ncx, flat.ncy, flat.ncz],
+            h: self.params.h,
+            rest_density: self.params.rest_density,
+            stiffness: self.params.stiffness,
+            visc_k: self.params.visc_k.clone(),
+            visc_n: self.params.visc_n.clone(),
+            shear_min: self.params.shear_min,
+            gravity: [
+                self.params.gravity.x,
+                self.params.gravity.y,
+                self.params.gravity.z,
+            ],
+        }
+    }
 }

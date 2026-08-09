@@ -188,6 +188,116 @@ struct World<T: RealField> {
 
 ---
 
+## 5.7 GPU 加速规划(GPU Offload Plan)
+
+> 背景:S7 已把第一梯队热点改成 rayon CPU 并行,核心是"只读遍历 → 独立缓冲写回"的
+> **Jacobi 式无数据竞争结构**,这正是 GPU compute 的内核形态。本规划评估内核里
+> **哪些算法适合 GPU、哪些不适合**,并给出**只做 Web Demo**的落地路径。
+> 决策(用户 2026-08-09):**只做 Web Demo,不考虑桌面 Demo**。桌面端维持 rayon CPU 并行,
+> 不引入任何 wgpu 桌面依赖(避开 MinGW 链接崩溃,见 M3)。GPU 仅通过 `phy-demo-web`
+> 的 WebGPU(wasm32 目标)在浏览器内落地,浏览器不依赖本地链接器。
+
+### 5.7.1 加速 suitability 判据
+
+GPU 最适合:**大量独立小计算 + 只读遍历 + 独立写回**(one-thread-per-element/kernel)。
+GPU 最怕:**全局强耦合 / Gauss-Seidel 顺序依赖 / 跨线程频繁同步**(每帧少量对象的接触图)。
+
+### 5.7.2 各算法 suitability 矩阵
+
+| 档位 | 算法 | 位置 | 理由 |
+|---|---|---|---|
+| **A 非常适合(已是 rayon+Jacobi,可直映射 GPU kernel)** | SPH 密度/压力 | `phy-fluid/src/sph/world.rs::compute_density_pressure`(188) | 每粒子独立读邻居→写自己 rho/p,Jacobi 独立缓冲写回,无竞争 |
+| | SPH 受力 | `phy-fluid/src/sph/world.rs::compute_forces`(236) | 同上,逐粒子算 acc/mu_eff;S9 非牛顿幂律也只是局部应变率,纯逐粒子 |
+| | 颗粒 PBD 接触投影 | `phy-granular/src/world.rs`(Jacobi par_iter().fold().reduce, 190) | 每对只读 predicted 快照→累加 per-body deltas,固定序 reduce,确定性 |
+| | 光学逐像素 trace | `phy-optics/src/subsystem.rs::render_camera`/`render_parallel`(58/84) | 像素间完全独立,经典 one-thread-per-pixel |
+| | 焦散 caustics | `phy-optics/src/caustics.rs::accumulate`(25) | 每条平行光射线独立 march→累加权值到接收面网格(atomic add) |
+| **B 中等适合(结构并行,需先改 Jacobi / 处理归约)** | 标量场解算(热/波/电磁/引力/声/烟) | `phy-field/*`(`step_diffusion`/`step_wave`/`EmField::step`/`GravField::step`/Jacobi 泊松松弛) | 网格每格 u[i]=f(邻居) 是标准 stencil,但**泊松松弛 30 次迭代**须先确认是 Jacobi(可全并行);Gauss-Seidel 不可并行。边界(Neumann 镜像)按线程序号处理 |
+| | 半拉格朗日平流 | `phy-field` `step_advect` | 每格独立回溯+三线性插值,只读采样无写竞争 |
+| | FEM 刚度装配 | `phy-solid` | 单元 Ke 装配 per-element 并行;但 Cholesky 线代系统串行依赖,需 cuSPARSE/cuBLAS 或迭代法,装配部分值得 GPU、求解部分收益小 |
+| | SPH 邻居网格构建 | `phy-fluid::Grid::build` | 粒子分桶是 prefix-sum/histogram 任务,可 GPU 化以喂给 SPH kernel |
+| **C 不适合 / 收益低** | 刚体顺序冲量求解 | `phy-rigid/solver.rs` | 接触图强耦合 + Gauss-Seidel 顺序冲量(M2),全局同步频繁;少量刚体 GPU 调度开销 > 收益 |
+| | 关节约束求解 | `phy-rigid/joint.rs` | 同上顺序冲量累积 lambda,链式关节强数据依赖 |
+| | Voronoi 破碎 | `phy-rigid/fracture.rs` | 一次性事件 + 凸裁剪串行几何,并行收益低、实现复杂 |
+| | CCD 子步化 | `phy-rigid/ccd.rs` | 位移受限子步是串行时间推进,规模小 |
+| | 车辆 / 软体中点弹簧 / 布料 PBD | `phy-rigid/vehicle.rs` / `phy-soft/*` | 布料/软体 PBD 是 Gauss-Seidel(M19),需先改 Jacobi 才能并行;车辆每帧仅 4 轮射线,规模太小 |
+
+### 5.7.3 落地架构:`GpuBackend` 策略层(仅 Web Demo)
+
+因为只做 Web Demo,**不引入桌面 wgpu 依赖**。统一抽象放在 `phy-demo-web`(或 `phy-core`
+仅 `#[cfg(target_arch="wasm32")]` 门控),用特征 flag `gpu` 切换:
+
+```rust
+/// 仅在 wasm32 + feature=gpu 下编译的 GPU 后端,经 WebGPU 跑 compute。
+/// 桌面(非 wasm32)一律走 rayon CPU 路径,本 trait 不参与编译。
+pub trait GpuBackend {
+    /// 逐元素 map:对 [0,n) 每个索引独立计算,结果写回 GPU buffer。
+    /// 光学像素循环 / SPH 逐粒子 / 焦散逐射线 都映射到此。
+    fn par_map_idx(&self, n: usize, wgsl: &str, in_bufs: &[&GpuBuf], out_buf: &mut GpuBuf);
+
+    /// 逐对 reduce:颗粒 PBD 接触投影,每对只读快照累加 per-body delta。
+    fn par_pairs_reduce(&self, pairs: &GpuBuf, acc: &mut GpuBuf, wgsl: &str);
+}
+```
+
+- 桌面:`#[cfg(not(target_arch="wasm32"))]` 或 `gpu` 未开 → 算法直接走现有 rayon,**代码不变**。
+- Web:仅 wasm32 + `gpu` feature → 调 `GpuBackend`,把内核数学写成 wgsl,浏览器 WebGPU 执行。
+- 算法侧切换点:把 `(0..n).into_par_iter().map(...)` 包一层 `if cfg!(gpu) { gpu_backend... } else { rayon... }`,
+  **数值内核(Density/Force/PBD/caustics)逻辑与 wgsl 保持一一对应,保证两端结果可对照**。
+
+### 5.7.4 Web Demo 实施路径(唯一落地路径)
+
+| 阶段 | 内容 | 产物 |
+|---|---|---|
+| **W1** ✅ | `phy-demo-web` 加 `gpu` feature + WebGPU 初始化(device/queue/上下文),
+  最小 compute 原型 `square_self_test`(逐元素平方)打通 wasm32 构建与浏览器 dispatch 链路。
+  门控 `#[cfg(all(target_arch="wasm32", feature="gpu"))]`,默认/桌面构建不拉 wgpu。
+  `DemoApp::gpu_self_test()` 暴露为 JS Promise 供 console 校验(`W1 gpu self-test ok=true out=[1.0,4.0,9.0,16.0,25.0]`)。
+  **验证**:`cargo build -p phy-demo-web --target wasm32-unknown-unknown --features gpu` 通过;默认构建+`cargo test -p phy-demo-web` 全过(1 passed),确认零回归 | 已落地 |
+| **W2** ✅ | 光学**实时近似后端(`Approx`)**走 GPU:逐像素 one-thread,复刻 CPU 端 `OpticScene::intersect`
+  (sphere/box 两种形状)+ `Approx::trace`(折射+反射+Fresnel+阴影射线)到 wgsl。
+  场景降为 f32 扁平缓冲(`BodyGpu` 80B/体 = pos+quat+geo+albedo_ior+misc),相机参数走 uniform。
+  convex 形状 GPU 不支持 → `render_camera_gpu` 返回 Err 由调用方回退 CPU。
+  `optic_self_test()` 自测入口(1 玻璃球场景 8×8 渲染,报告中心像素)经 `DemoApp::optic_self_test()` 暴露为 JS Promise。
+  **验证**:`cargo build -p phy-demo-web --target wasm32-unknown-unknown --features gpu` 通过(零警告);默认 + `cargo test -p phy-demo-web` 零回归。
+  **注**:Whitted(递归)后端未做 GPU(递归不适宜 one-thread-per-pixel),实时 Demo 默认走 Approx,符合 W2 范围 | 已落地 |
+| **W3** ✅ | 焦散 `caustics::accumulate` 逐射线 march 走 GPU:复用 W2 `BodyGpu` 扁平缓冲,
+  逐射线 one-thread 独立 `march`(每条射线只写自己的 grid 单元,无需 atomic 竞争),
+  wgsl 复刻 `Caustics::march`(最多 8 段折射,命中透明体按 (1-Fresnel) 衰减并切换介质 IOR,
+  命中不透明体返回累积 flux)。`render_caustics_gpu` 返回 `grid_n*grid_n` 强度;
+  `caustics_self_test()`(1 玻璃球 16×16,报告 max/sum)经 `DemoApp::caustics_self_test()` 暴露为 JS Promise。
+  **验证**:`cargo build -p phy-demo-web --target wasm32-unknown-unknown --features gpu` 通过;
+  默认构建+测试零回归 | 已落地 |
+| **W4** ✅ | SPH 逐粒子密度/受力上 GPU。`phy-fluid` 新增 `Grid::to_flat`(从 `HashMap` 邻居网格
+  重构为 GPU 友好扁平布局 `FlatGrid{cell_start[c]/sorted[c]}` + 前缀和),`world.rs` 加
+  `build_grid`(pub)+ `to_gpu_flat` 导出 `SphFlatData`(pos/vel/scalar/cell_start/sorted/
+  grid_min/nc/h/rest_density/stiffness/visc_k/visc_n/shear_min/gravity 全部 f32 扁平)。
+  `gpu/mod.rs` 译两个 wgsl entry point:`density_main`(网格遍历求密度ρ+近不可压压力修正)
+  + `force_main`(Müller 压力梯度 Spiky + 粘性 Laplacian Visc + 重力 +  shear 有效粘度),
+  逐粒子 one-thread 复刻 CPU SPH 内核。`sph_self_test()`(溃坝晶格,报告 mean_rho/ratio/
+  finite/acc0)经 `DemoApp::sph_self_test()` 暴露为 JS Promise。
+  **验证**:`cargo build -p phy-demo-web --target wasm32-unknown-unknown --features gpu` 通过;
+  默认构建 + `cargo test -p phy-demo-web` / `cargo test -p phy-fluid`(18 passed)零回归 | 已落地 |
+| **W5** ✅ | 颗粒 PBD 接触投影上 GPU(`par_pairs_reduce`)。`phy-granular` 新增 `gpu_flat.rs`
+  的 `GranularFlatData`(pos/old/vel/inv_mass/pairs/npairs/gravity/bounds/iterations/
+  vel_damp/friction/dt 扁平)+ `world.rs::to_gpu_flat`(预生成全部 O(n²) 接触对)。
+  `gpu/mod.rs` 译三个 wgsl entry point:`clear_main`(清 delta 缓冲)→`contact_main`(每对
+  只读预测位置、按反质量加权算位移修正、以 `atomic<i32>` 定点累加进 per-body delta,
+  Jacobi 式确定性 reduce)→`apply_main`(逐体还原 delta + 盒边界夹紧写回预测位置);
+  `iterations` 轮在主机端循环 dispatch,最后回读 pos。`granular_self_test()`(27 颗粒盒,
+  报告 min_gap/overlaps/finite)经 `DemoApp::granular_self_test()` 暴露为 JS Promise。
+  **验证**:`cargo build -p phy-demo-web --target wasm32-unknown-unknown --features gpu` 通过;
+  默认构建 + `cargo test -p phy-demo-web` / `cargo test -p phy-granular` 零回归 | 已落地 |
+
+> W2/W3 无需重构数据布局(像素/射线天然独立),优先做;W4/W5 需先做 `Grid` 扁平化前置重构。
+
+### 5.7.5 不做项(明确排除)
+
+- ❌ 桌面 wgpu / Vulkan / OpenGL compute 后端(避开 MinGW 链接崩溃,见 M3)。
+- ❌ 刚体顺序冲量 / 关节 / 破碎 / CCD / 车辆 / 软体布料 的 GPU 化(强顺序依赖或规模太小,见矩阵 C)。
+- ❌ 在 `phy-core` 引入跨平台运行时抽象(只服务于 Web Demo,门控在 wasm32)。
+
+---
+
 ## 6. 决策记录 (Decision Log)
 
 - 2026-08-07: 用户确认面向**通用科研/仿真**; 首期目标**完整可玩 Demo**; 数学库**由我推荐 → nalgebra 泛型**。
@@ -230,3 +340,9 @@ struct World<T: RealField> {
 - 2026-08-09: S6 完成。**§5.6.1 S6 连续碰撞检测(CCD)**。`phy-rigid` 的 `RigidWorld::step` 重构为**位移受限子步化** CCD:每帧按"最快可动体位移 / 其最小特征尺寸(默认 ≤½)"决定子步数 `n`(上限 `SolverParams::ccd_max_substeps`,默认 8,设 0 退化为原整步离散,与旧行为等价),把 `[0,dt]` 切成 `n` 个子步,在每个子步上跑既有离散 `collide`+顺序冲量速度求解,再按子步时长推进位置与姿态。因每子步位移远小于物体尺寸,离散检测必能在步内捕获接触,从而**彻底杜绝高速隧穿**;低速/无接近时 `n=1` 等价于原流程,不破坏既有 46 项(关节/自旋/破碎/堆叠/车体)测试。新增 `crates/phy-rigid/src/ccd.rs`(`substep_count` 位移受限子步数计算 + `swept_sphere_sphere` 球-球闭式 TOI + `ccd_contact` 合成接触,各带单测)。**顺带修复一个真实碰撞 bug**:原 `narrowphase::collide` 仅有 球-球 / 盒-盒 两条快速路径,球撞盒(墙/地板)会回退到 GJK/EPA 且漏检(重叠也返回 `None`),导致球穿过墙/地面 —— 新增 `sphere_box` 解析快速碰撞路径(球心变换到盒局部坐标夹取最近点,区分球心在盒外/内两种情形给法线与深度,法线约定由 a→b 与 `sphere_sphere`/`box_box` 一致),并修正 `collide` 对两种球-盒顺序的派发。**验证**:`phy-rigid` 新增 4 单测 `fast_sphere_does_not_tunnel_through_wall`(100 u/s 球被薄壁挡下,`ccd_max_substeps=8`)/`fast_sphere_tunnels_with_ccd_disabled`(对照组关 CCD 如期隧穿,证伪验证)/`ccd_enabled_matches_discrete_at_low_speed`(低速开启 CCD 稳态无穿透,与离散一致)/`fast_box_does_not_tunnel_through_ground`(高速盒不穿地);`cargo test -p phy-rigid` 全过(50 项),全 workspace 测试通过。
 
 - 2026-08-09: S7 完成。**§5.6.1 S7 GPU/并行后端(并行 CPU-rayon)**。GPU 后端因 MinGW 8.1 链接 wgpu 巨型依赖树崩溃(`corrupt .drectve`,M3 决策)放弃,改走 **rayon 并行 CPU** 后端,落点 `phy-fluid`/`phy-granular`/`phy-optics` 三个最易并行热点。核心手法均为"只读遍历 → 独立缓冲写回",无数据竞争:(1) **SPH**(`crates/phy-fluid/src/sph.rs`):`compute_density_pressure` 与 `compute_forces` 原串行双重循环,改为先把本步 `pos/vel/rho/p/mass/material` 快照成并行向量,`into_par_iter` 逐粒子算 `rho/p`/`acc/mu_eff` 累加到独立输出缓冲,再一次性写回 `self.particles`(Jacobi 式,结果与遍历顺序无关);(2) **颗粒 PBD**(`crates/phy-granular/src/world.rs`):球-球接触投影原为 **Gauss-Seidel**(每对即时改写 `predicted`,顺序敏感、不可并行),改为 **Jacobi**——每对只读迭代起点 `predicted` 快照,把位移修正累加到 per-body `deltas` 缓冲(并行 `par_iter().fold().reduce()`,`reduce` 以固定索引顺序合并),迭代末统一施加;Jacobi 修正大小与串行逐对相加一致,仅求和顺序固定,**保持确定性**(利于 S8);(3) **光学渲染**(`crates/phy-optics/src/subsystem.rs`):`render_camera` 逐像素 `trace` 相互独立,改为 rayon 并行 `(0..w*h).into_par_iter().map(trace).collect()` 填色缓冲后再回填 `buf`;因 `dyn Renderer<T>` 不可跨线程共享,把函数泛型为 `render_parallel<R: Renderer<T> + Sync>`,按 `Precision` 分发到 `&Whitted`/`&Approx`(二者零字段单元结构体,天然 `Sync`),避开 trait object 不可 `Sync` 限制。`workspace.dependencies` 加 `rayon = "1"`,`phy-fluid`/`phy-granular`/`phy-optics`/`phy-demo` 的 `Cargo.toml` 引用。**验证**:`phy-granular` 新增 `parallel_solve_is_deterministic`(同初态跑 120 步两次,逐粒位置差 <1e-12,证并行 reduce 可复现);`cargo test -p phy-fluid -p phy-granular -p phy-optics -p phy-rigid` 全过(fluid 18 / granular 5 / optics 7 / rigid 50),全 workspace 26 测试套件零失败。
+- 2026-08-09: GPU 加速范围决策(§5.7)。用户明确:**只做 Web Demo,不考虑桌面 Demo**。即 GPU 仅经 `phy-demo-web` 的 WebGPU(wasm32 目标)在浏览器内落地,避开桌面 wgpu 链接崩溃(M3);桌面端维持 S7 的 rayon CPU 并行,**不引入任何 wgpu 桌面依赖**。各算法 suitability 见 §5.7.2 矩阵:A 档(SPH 密度/受力、颗粒 PBD、光学逐像素 trace、焦散)最易并行、首选;B 档(标量场 stencil、平流、FEM 装配、SPH 邻居网格)需先改 Jacobi/重构;C 档(刚体顺序冲量、关节、破碎、CCD、车辆、软体布料)强顺序依赖或规模太小不做。抽象为仅 `#[cfg(target_arch="wasm32")]` + feature `gpu` 下编译的 `GpuBackend`,算法侧用 `if cfg!(gpu){...}else{ rayon }` 切换,数值内核与 wgsl 一一对应便于对照。Web Demo 分 W1–W5 阶段(W1 WebGPU 上下文原型 → W2 光学 → W3 焦散 → W4 SPH(需 Grid 扁平化前置)→ W5 颗粒 PBD)。
+- 2026-08-09: W1 完成(§5.7.4)。`phy-demo-web` 新增 `gpu` feature(门控 `wgpu`/`bytemuck`/`futures`/`wasm-bindgen-futures`),新增 `src/gpu/mod.rs`:`GpuContext`(WebGPU device/queue 申请)+ 最小 compute 原型 `square_self_test`(逐元素平方 wgsl,one-thread-per-element,workgroup 64)+ 高层 `gpu_self_test`。编译门控 `#[cfg(all(target_arch="wasm32", feature="gpu"))]` 保证桌面/默认构建不拉 wgpu(避 M3 崩溃);`DemoApp::gpu_self_test()` 经 `wasm_bindgen_futures::future_to_promise` 暴露为 JS Promise。`cargo build -p phy-demo-web --target wasm32-unknown-unknown --features gpu` 通过;默认 `cargo build`/`cargo test -p phy-demo-web` 零回归。后续 W2–W5 复用同一"逐元素 map"骨架,仅替换 @compute 函数体。
+- 2026-08-09: W2 完成(§5.7.4)。光学实时近似后端 `Approx` 走 GPU。gpu feature 扩 `phy-optics`/`phy-rigid`/`bytemuck(derive)`;`gpu/mod.rs` 新增 `BodyGpu`(80B/体 f32 扁平,repr(C,align(16),Pod/Zeroable))、`flatten_scene`(sphere/box 支持,convex 返回 None 回退 CPU)、`render_camera_gpu`(相机 uniform + body storage + 逐像素 wgsl)+ wgsl `OPTIC_WGSL`(复刻 `intersect2` sphere/box + `approx_trace` 折射/反射/Fresnel/阴影 + 主 `main`) + `optic_self_test`(1 玻璃球 8×8 自测)。`DemoApp::optic_self_test()` 暴露为 JS Promise。`cargo build ... --features gpu` 零警告通过;默认构建+测试零回归。Whitted(递归)后端未 GPU 化(不适合 one-thread-per-pixel)。
+- 2026-08-09: W3 完成(§5.7.4)。焦散逐射线 march 走 GPU。复用 W2 的 `BodyGpu`/`flatten_scene`;`gpu/mod.rs` 新增 `render_caustics_gpu`(CausticParams uniform: travel/plane_y/half_extent/grid_n/env_ior; 每条射线 one-thread 独立 march,写自己 grid 单元无 atomic)+ wgsl `CAUSTIC_WGSL`(自带 intersect2 sphere/box + `Caustics::march` 复刻:最多 8 段折射、Fresnel 衰减、介质 IOR 切换、命中不透明返回 flux)+ `caustics_self_test`(1 玻璃球 16×16,报告 max/sum)。`DemoApp::caustics_self_test()` 暴露为 JS Promise。`cargo build ... --features gpu` 通过;默认+测试零回归。
+- 2026-08-09: W4 完成(§5.7.4)。SPH 逐粒子密度/受力走 GPU。`phy-fluid` 前置重构: `Grid::to_flat`(HashMap 邻居网格→扁平 `FlatGrid{cell_start[c]/sorted[c]}` 前缀和,`grid.rs` 新增 pub(crate))+ `world.rs` 加 `pub build_grid` + `to_gpu_flat` 导出 `SphFlatData`(pos/vel/scalar/cell_start/sorted/grid_min/nc/h/rest_density/stiffness/visc_k/visc_n/shear_min/gravity 全 f32 扁平,`sph/gpu_flat.rs` 新模块 + `lib.rs` 导出);`phy-demo-web` 新增 `phy-fluid` 进 `gpu` feature。`gpu/mod.rs` 译两 wgsl entry point: `density_main`(遍历 27 邻居格算密度 ρ + 近不可压压力标量 p=stiffness·(ρ−rest_density))与 `force_main`(Müller 压力梯度 Spiky + 粘性 Laplacian Visc + 重力 + shear 有效粘度 μ_eff=(ki+shear_min)·|dot(dv,n)|^ni,逐粒子 one-thread 复刻 CPU 内核)。`sph_self_test`(溃坝晶格,报告 mean_rho/rest/ratio/finite/acc0)经 `DemoApp::sph_self_test()` 暴露为 JS Promise。`cargo build ... --features gpu` 通过;默认 + `cargo test -p phy-fluid`(18 passed)零回归。
+- 2026-08-09: W5 完成(§5.7.4)。颗粒 PBD 接触投影走 GPU(`par_pairs_reduce`)。`phy-granular` 新增 `gpu_flat.rs::GranularFlatData`(pos/old/vel/inv_mass/pairs/npairs/gravity/bounds_lo/hi/iterations/vel_damp/friction/dt 扁平)+ `world.rs::to_gpu_flat`(预生成全部 O(n²) 接触对 `(i<j)`,T→f32 经 `num_traits::cast`);`phy-demo-web` 把 `phy-granular` 加进 `gpu` feature 并 `lib.rs` 暴露 `granular_self_test` JS Promise。`gpu/mod.rs` 译三 wgsl entry point: `clear_main`(清 per-body 3 分量 delta 缓冲)→ `contact_main`(每对只读预测位置、按反质量加权算位移修正、以 `atomic<i32>` 定点 ×1e6 累加进 `deltas[i*3+axis]`/`deltas[j*3+axis]`,Jacobi 式确定性 reduce)→ `apply_main`(逐体 `atomicLoad` 还原 delta + 盒边界夹紧写回预测位置);`render_granular_gpu` 在主机端循环 `iterations` 轮 dispatch 后回读 pos。`granular_self_test`(27 颗粒盒,报告 min_gap/overlaps/finite)。`cargo build ... --features gpu` 通过;默认 + `cargo test -p phy-granular` 零回归。至此 §5.7 W1–W5 全部落地,Web Demo 侧 A 档算法(SPH/颗粒 PBD/光学/焦散)GPU 化收尾;后续如需可继续 B/C 档(标量场 stencil、刚体顺序冲量等)但本次按用户口径只做 Web Demo 且 A 档已完成。

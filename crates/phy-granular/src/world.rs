@@ -13,6 +13,7 @@
 
 use phy_math::{gravity, RealField, Vec3};
 use serde::de::DeserializeOwned;
+use crate::gpu_flat::GranularFlatData;
 use serde::{Deserialize, Serialize};
 use rayon::prelude::*;
 
@@ -305,6 +306,52 @@ impl<T: RealField + Copy> GranularWorld<T> {
             self.grains[k].pos = np;
         }
         self.t += dt;
+    }
+
+    /// W5 前置:导出 GPU 友好扁平数据。
+    ///
+    /// 在调用方预测位置(`step` 的 1. 阶段)后调用,上传当前 `grains` 位置作为
+    /// 预测快照,并预生成全部 `(i<j)` 接触对(朴素 O(n²),与 CPU 端 `pairs`
+    /// 一致),供 `par_pairs_reduce` 内核逐对累加 per-body 位移修正。
+    pub fn to_gpu_flat(&self) -> GranularFlatData
+    where
+        T: num_traits::NumCast,
+    {
+        let f = |x: T| -> f32 { num_traits::cast::<T, f32>(x).unwrap() };
+        let n = self.grains.len();
+        let mut pos = Vec::with_capacity(n);
+        let mut old = Vec::with_capacity(n);
+        let mut vel = Vec::with_capacity(n);
+        let mut inv_mass = Vec::with_capacity(n);
+        for gr in &self.grains {
+            pos.push([f(gr.pos.x), f(gr.pos.y), f(gr.pos.z), f(gr.radius)]);
+            old.push([f(gr.pos.x), f(gr.pos.y), f(gr.pos.z), 0.0]);
+            vel.push([f(gr.vel.x), f(gr.vel.y), f(gr.vel.z), 0.0]);
+            inv_mass.push(f(gr.inv_mass));
+        }
+        let mut pairs = Vec::with_capacity(n * (n.saturating_sub(1)) / 2 * 2);
+        for i in 0..n {
+            for j in (i + 1)..n {
+                pairs.push(i as u32);
+                pairs.push(j as u32);
+            }
+        }
+        GranularFlatData {
+            n,
+            pos,
+            old,
+            vel,
+            inv_mass,
+            pairs,
+            npairs: (n * (n.saturating_sub(1)) / 2) as usize,
+            gravity: [f(self.gravity.x), f(self.gravity.y), f(self.gravity.z)],
+            bounds_lo: [f(self.bounds_lo.x), f(self.bounds_lo.y), f(self.bounds_lo.z)],
+            bounds_hi: [f(self.bounds_hi.x), f(self.bounds_hi.y), f(self.bounds_hi.z)],
+            iterations: self.iterations as u32,
+            vel_damp: f(self.vel_damp),
+            friction: f(self.friction),
+            dt: 1.0f32 / 60.0,
+        }
     }
 
     /// 统计当前颗粒总体积(球体积之和),用于密度/堆积比测试。

@@ -17,10 +17,12 @@ mod couple;
 mod grid;
 mod params;
 mod world;
+mod gpu_flat;
 
 #[cfg(test)]
 mod tests;
 
 pub use couple::CouplePoint;
+pub use gpu_flat::SphFlatData;
 pub use params::SphParams;
 pub use world::FluidWorld;

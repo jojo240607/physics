@@ -15,6 +15,10 @@
 
 pub mod world;
 pub mod subsystem;
+pub mod gpu_flat;
+
+pub use gpu_flat::GranularFlatData;
+
 
 #[cfg(test)]
 mod tests;
