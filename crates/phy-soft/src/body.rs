@@ -3,19 +3,25 @@
 use phy_field::HeatFieldLike;
 use phy_math::{gravity, RealField, Vec3};
 use phy_rigid::Body;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::{DEFAULT_DAMPING, DEFAULT_STIFFNESS, DEFAULT_VERLET_DAMP};
 
 /// 单个质点(velocity-Verlet 积分,显式存速度)。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct Particle<T: RealField + Copy> {
     /// 当前世界位置。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub pos: Vec3<T>,
     /// 速度(世界)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub vel: Vec3<T>,
     /// 反质量(0 = 固定点,如布料钉扎)。
     pub inv_mass: T,
     /// 当前帧累加力(每步清零)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub force: Vec3<T>,
 }
 
@@ -32,7 +38,8 @@ impl<T: RealField + Copy> Particle<T> {
 }
 
 /// 两质点间弹簧(Hooke + 阻尼)。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct Spring<T: RealField + Copy> {
     /// 质点 a 索引。
     pub a: usize,
@@ -47,13 +54,15 @@ pub struct Spring<T: RealField + Copy> {
 }
 
 /// 软体:质点网格 + 弹簧集合。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct SoftBody<T: RealField + Copy> {
     /// 质点。
     pub particles: Vec<Particle<T>>,
     /// 弹簧。
     pub springs: Vec<Spring<T>>,
     /// 重力(默认 -Y 9.81)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub gravity: Vec3<T>,
     /// 地面高度(质点 y 不可低于此值)。
     pub ground_y: T,

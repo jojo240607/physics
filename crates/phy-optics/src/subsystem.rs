@@ -3,12 +3,14 @@
 use phy_core::Subsystem;
 use phy_math::{na, RealField, Vec3};
 use phy_rigid::RigidSubsystem;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::renderer::{Approx, Renderer, Whitted};
 use crate::scene::OpticScene;
 
 /// 光学后端精度开关。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Precision {
     /// 离线 Whitted 递归追踪(高保真)。
     Offline,
@@ -19,6 +21,8 @@ pub enum Precision {
 /// 光学子系统:持有场景与精度模式,可挂入统一 `World<T>`。
 ///
 /// 光场本身不随时间演进(`step` 为空),但保留接口以便将来接入时变介质/动画光源。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive")]
 pub struct OpticSubsystem<T: RealField + Copy + num_traits::ToPrimitive> {
     /// 场景。
     pub scene: OpticScene<T>,

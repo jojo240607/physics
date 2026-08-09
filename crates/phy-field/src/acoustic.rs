@@ -18,6 +18,8 @@
 
 use phy_core::Subsystem;
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::grid_geometry::GridGeometry;
 use crate::grid::ScalarField;
@@ -26,6 +28,8 @@ use crate::grid::ScalarField;
 pub const SOUND_SPEED_AIR: f64 = 343.0;
 
 /// 声波 / 压力波场:声压 `p` 的标量波动方程求解 + 声学派生量工具。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct AcousticField<T: RealField + Copy> {
     /// 底层标量场(值 = 声压扰动 p)。
     pub field: ScalarField<T>,

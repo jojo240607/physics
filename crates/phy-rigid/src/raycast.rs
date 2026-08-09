@@ -12,19 +12,24 @@
 //!
 //! 车辆子系统据此从车轮向下打射线找地面,计算悬挂压缩量与接触法线。
 
-use phy_math::{na, RealField, Vec3};
+use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::shape::Body;
 use crate::shape::Shape;
 
 /// 单次射线命中结果。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct RayHit<T: RealField + Copy> {
     /// 沿射线的参数距离(命中点到原点的距离,因为 ray_dir 已单位化)。
     pub t: T,
     /// 命中点的世界坐标。
+    #[serde(with = "crate::shape::serde_geom")]
     pub point: Vec3<T>,
     /// 命中表面的世界法线(单位向量,指向射线来向一侧)。
+    #[serde(with = "crate::shape::serde_geom")]
     pub normal: Vec3<T>,
 }
 
@@ -213,7 +218,7 @@ fn ray_triangle<T: RealField + Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use phy_math::Vec3;
+    use phy_math::{na, Vec3};
 
     fn sphere_body(pos: Vec3<f64>, r: f64) -> Body<f64> {
         Body {

@@ -10,6 +10,8 @@
 use phy_field::{EmFieldLike, GravFieldLike, HeatFieldLike};
 use phy_math::{gravity, RealField, Vec3};
 use num_traits::NumCast;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::broadphase::broadphase;
 use crate::contact::Contact;
@@ -20,6 +22,8 @@ use crate::shape::Body;
 use crate::solver::{solve_position, solve_velocity, ContactConstraint, SolverParams};
 
 /// 刚体动力学世界。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct RigidWorld<T: RealField + Copy> {
     pub bodies: Vec<Body<T>>,
     /// 每个刚体的电荷量(与 `bodies` 等长,0 = 中性)。用于电磁耦合。
@@ -27,6 +31,7 @@ pub struct RigidWorld<T: RealField + Copy> {
     /// 关节约束(M18):把刚体连成链条/摆/机械结构。
     pub joints: Vec<JointConstraint<T>>,
     /// 重力(默认沿 -Y)。
+    #[serde(with = "crate::shape::serde_geom")]
     pub gravity: Vec3<T>,
     /// 求解参数。
     pub params: SolverParams<T>,

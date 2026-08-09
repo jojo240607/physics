@@ -15,15 +15,19 @@
 //! (`set_engine` / `set_steering` / `set_brake`)驱动。
 
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::raycast::ray_cast;
 use crate::shape::Body;
 use crate::world::RigidWorld;
 
 /// 单个车轮的静态参数与运行时状态。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct Wheel<T: RealField + Copy> {
     /// 车轮在车身局部坐标的悬挂顶端(射线起点)。
+    #[serde(with = "crate::shape::serde_geom")]
     pub anchor: Vec3<T>,
     /// 悬挂自然长度(从顶端到轮心的静止距离)。
     pub suspension_rest: T,
@@ -69,7 +73,8 @@ impl<T: RealField + Copy> Wheel<T> {
 }
 
 /// 射线投射车辆。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct Vehicle<T: RealField + Copy> {
     /// 车身刚体在 `RigidWorld.bodies` 中的索引。
     pub chassis: usize,
@@ -82,6 +87,7 @@ pub struct Vehicle<T: RealField + Copy> {
     /// 刹车力(纵向减速)。由 `set_brake` 设置。
     pub brake: T,
     /// 车身局部"前进"方向(默认 +X),用于把引擎力映射到世界。
+    #[serde(with = "crate::shape::serde_geom")]
     pub forward_axis: Vec3<T>,
 }
 

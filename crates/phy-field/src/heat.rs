@@ -5,6 +5,8 @@
 
 use phy_core::Subsystem;
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::grid_geometry::GridGeometry;
 use crate::grid::ScalarField;
@@ -31,6 +33,8 @@ pub trait HeatFieldLike<T: RealField + Copy>: GridGeometry<T> + std::any::Any {
 }
 
 /// 热扩散子系统。
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct HeatField<T: RealField + Copy> {
     /// 底层标量场(温度)。
     pub field: ScalarField<T>,
@@ -40,7 +44,31 @@ pub struct HeatField<T: RealField + Copy> {
     pub last_r: T,
     /// 可选对流速度场采样器(世界坐标 → 速度)。由流体耦合写入,
     /// 使热场在 `step` 时做扩散-对流(而非纯扩散),构成热浮力↔对流闭环。
+    /// 闭包不可序列化,存档时跳过,加载后由耦合方重新安装。
+    #[serde(skip)]
     pub vel_sampler: Option<Box<dyn Fn(Vec3<T>) -> Vec3<T>>>,
+}
+
+impl<T: RealField + Copy + std::fmt::Debug> std::fmt::Debug for HeatField<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeatField")
+            .field("field", &self.field)
+            .field("alpha", &self.alpha)
+            .field("last_r", &self.last_r)
+            .field("vel_sampler", &self.vel_sampler.is_some())
+            .finish()
+    }
+}
+
+impl<T: RealField + Copy> Clone for HeatField<T> {
+    fn clone(&self) -> Self {
+        HeatField {
+            field: self.field.clone(),
+            alpha: self.alpha,
+            last_r: self.last_r,
+            vel_sampler: None,
+        }
+    }
 }
 
 impl<T: RealField + Copy + num_traits::ToPrimitive> HeatField<T> {

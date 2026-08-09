@@ -9,6 +9,8 @@ use std::any::Any;
 
 use phy_core::Subsystem;
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::grid_geometry::GridGeometry;
 use crate::grid::{Bc, ScalarField};
@@ -34,12 +36,15 @@ pub trait GravFieldLike<T: RealField + Copy>: GridGeometry<T> + Any {
 }
 
 /// 引力场子系统(M13)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct GravField<T: RealField + Copy> {
     /// 质量密度场(单位网格质量)。
     pub rho: ScalarField<T>,
     /// 引力势工作场(泊松松弛的工作变量)。
     pub phi: ScalarField<T>,
     /// 引力加速度矢量(每格一个),由 `g = -∇Φ` 得到。
+    #[serde(with = "crate::serde_geom::vec3_vec")]
     pub g: Vec<Vec3<T>>,
     /// 引力常数 G。
     pub g_const: T,

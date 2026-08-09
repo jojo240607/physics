@@ -10,9 +10,11 @@
 
 use num_traits::FromPrimitive;
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 /// 边界条件。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Bc {
     /// 边界固定为 `bc_val`(狄利克雷)。
     Dirichlet,
@@ -21,6 +23,8 @@ pub enum Bc {
 }
 
 /// 规则网格标量场求解器。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct ScalarField<T: RealField + Copy> {
     /// 各维度网格数。
     pub nx: usize,
@@ -42,6 +46,7 @@ pub struct ScalarField<T: RealField + Copy> {
     pub t: T,
     /// 网格原点(最小角)的世界坐标;默认 (0,0,0)。
     /// 用于把网格索引映射到世界坐标,支持耦合(流体/软体位置 → 网格)。
+    #[serde(with = "crate::serde_geom")]
     pub origin: Vec3<T>,
 }
 

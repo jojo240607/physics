@@ -15,6 +15,7 @@ mod wave;
 mod em;
 mod grav;
 mod acoustic;
+mod serde_geom;
 
 pub use grid::{Bc, ScalarField};
 pub use grid_geometry::GridGeometry;

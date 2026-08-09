@@ -4,16 +4,81 @@
 //! 所有形状都提供"支撑点 (support)"查询,供 GJK/EPA 使用。
 
 use phy_math::{na, RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+
+/// 自定义 serde 模块:把 nalgebra 泛型类型序列化为纯元组,绕过 nalgebra
+/// 自带的 `Matrix<T>: Serialize`(要求 `T: nalgebra::Scalar`)带来的 impl 传播问题。
+pub mod serde_geom {
+    use phy_math::Vec3;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer, T: Serialize + Copy>(v: &Vec3<T>, s: S) -> Result<S::Ok, S::Error> {
+        [v[0], v[1], v[2]].serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>, T: Deserialize<'de> + Copy>(
+        d: D,
+    ) -> Result<Vec3<T>, D::Error> {
+        let a = <[T; 3]>::deserialize(d)?;
+        Ok(Vec3::new(a[0], a[1], a[2]))
+    }
+
+    pub mod vec3_vec {
+        use phy_math::Vec3;
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+        pub fn serialize<S: Serializer, T: Serialize + Copy>(
+            v: &Vec<Vec3<T>>,
+            s: S,
+        ) -> Result<S::Ok, S::Error> {
+            v.iter().map(|x| [x[0], x[1], x[2]]).collect::<Vec<_>>().serialize(s)
+        }
+        pub fn deserialize<'de, D: Deserializer<'de>, T: Deserialize<'de> + Copy>(
+            d: D,
+        ) -> Result<Vec<Vec3<T>>, D::Error> {
+            let arr = <Vec<[T; 3]>>::deserialize(d)?;
+            Ok(arr.into_iter().map(|a| Vec3::new(a[0], a[1], a[2])).collect())
+        }
+    }
+
+    pub mod quat {
+        use phy_math::{na, RealField};
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+        pub fn serialize<S: Serializer, T: RealField + Serialize + Copy>(
+            q: &na::UnitQuaternion<T>,
+            s: S,
+        ) -> Result<S::Ok, S::Error> {
+            let c = q.quaternion().clone();
+            [c.w, c.i, c.j, c.k].serialize(s)
+        }
+        pub fn deserialize<'de, D: Deserializer<'de>, T: RealField + Deserialize<'de> + Copy>(
+            d: D,
+        ) -> Result<na::UnitQuaternion<T>, D::Error> {
+            let a = <[T; 4]>::deserialize(d)?;
+            let q = na::Quaternion::new(a[0], a[1], a[2], a[3]);
+            Ok(na::UnitQuaternion::new_normalize(q))
+        }
+    }
+}
 
 /// 刚体的碰撞形状。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub enum Shape<T: RealField + Copy> {
     /// 球:中心在局部原点,半径 r。
     Sphere { r: T },
     /// 轴对齐盒(局部空间半长 extents)。
-    Box { half: Vec3<T> },
+    Box {
+        #[serde(with = "serde_geom")]
+        half: Vec3<T>,
+    },
     /// 凸多面体:顶点(局部坐标)与索引面。
-    Convex { vertices: Vec<Vec3<T>>, faces: Vec<[usize; 3]> },
+    Convex {
+        #[serde(with = "serde_geom::vec3_vec")]
+        vertices: Vec<Vec3<T>>,
+        faces: Vec<[usize; 3]>,
+    },
 }
 
 impl<T: RealField + Copy> Shape<T> {
@@ -88,14 +153,18 @@ impl<T: RealField + Copy> Shape<T> {
 }
 
 /// 物体的世界位姿 + 形状,构成一个可参与碰撞的实体。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct Body<T: RealField + Copy> {
     pub shape: Shape<T>,
     /// 世界平移。
+    #[serde(with = "serde_geom")]
     pub pos: Vec3<T>,
     /// 世界旋转(四元数)。
+    #[serde(with = "serde_geom::quat")]
     pub rot: na::UnitQuaternion<T>,
     /// 线速度(世界)。
+    #[serde(with = "serde_geom")]
     pub vel: Vec3<T>,
     /// 反质量(0 = 静态/无限质量)。
     pub inv_mass: T,
@@ -163,5 +232,31 @@ mod tests {
         };
         let p = s.support_local(&Vec3::new(0.0, 1.0, 0.0));
         assert!((p - Vec3::new(0.0, 1.0, 0.0)).norm() < 1e-9);
+    }
+
+    #[test]
+    fn shape_body_serde_roundtrip() {
+        use serde_json;
+        let b = Body::<f64> {
+            shape: Shape::Convex {
+                vertices: vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)],
+                faces: vec![[0, 1, 2]],
+            },
+            pos: Vec3::new(1.0, 2.0, 3.0),
+            rot: na::UnitQuaternion::from_euler_angles(0.1, 0.2, 0.3),
+            vel: Vec3::new(0.5, 0.0, -0.5),
+            inv_mass: 0.25,
+        };
+        let json = serde_json::to_string(&b).unwrap();
+        let b2: Body<f64> = serde_json::from_str(&json).unwrap();
+        assert!((b.pos - b2.pos).norm() < 1e-12);
+        assert!((b.vel - b2.vel).norm() < 1e-12);
+        assert!((b.rot.quaternion().w - b2.rot.quaternion().w).abs() < 1e-12);
+        match (&b.shape, &b2.shape) {
+            (Shape::Convex { vertices: v1, .. }, Shape::Convex { vertices: v2, .. }) => {
+                assert_eq!(v1.len(), v2.len());
+            }
+            _ => panic!("shape kind mismatch"),
+        }
     }
 }

@@ -21,7 +21,8 @@ fn grains_fall_and_settle_in_box() {
         w.step(dt);
     }
     // 所有颗粒均在盒内(含半径余量),无 NaN。
-    let (lo, hi) = w.bounds;
+    let lo = w.bounds_lo;
+    let hi = w.bounds_hi;
     let r = w.grains[0].radius;
     for g in &w.grains {
         assert!(g.pos.x >= lo.x + r - 1e-6 && g.pos.x <= hi.x - r + 1e-6);

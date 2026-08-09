@@ -9,4 +9,6 @@ phy-math = { path = "../phy-math" }
 phy-rigid = { path = "../phy-rigid" }
 phy-core = { path = "../phy-core" }
 phy-field = { path = "../phy-field" }
+serde.workspace = true
+nalgebra.workspace = true
 num-traits = "0.2"

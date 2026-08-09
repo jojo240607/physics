@@ -8,15 +8,20 @@
 //! 习惯:x 为梁长方向,左端固定面 `x == lo.x`,外载在自由端 (x = hi.x) 施加。
 
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::fem::{Node, SolidWorld, Tet};
 
 /// 规则盒网格参数。
-#[derive(Clone, Debug)]
-pub struct MeshParams<T: RealField> {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
+pub struct MeshParams<T: RealField + Copy> {
     /// 盒左下后角。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub lo: Vec3<T>,
     /// 盒右上前角。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub hi: Vec3<T>,
     /// 沿各轴单元段数 (>=1)。
     pub segs: (usize, usize, usize),
@@ -30,7 +35,7 @@ pub struct MeshParams<T: RealField> {
     pub fix_x_min: bool,
 }
 
-impl<T: RealField> Default for MeshParams<T> {
+impl<T: RealField + Copy> Default for MeshParams<T> {
     fn default() -> Self {
         Self {
             lo: Vec3::zeros(),

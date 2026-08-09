@@ -10,17 +10,24 @@
 
 use nalgebra::DMatrix;
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 /// 网格节点:含当前位置、位移、速度、内力、是否固定、集总质量。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct Node<T: RealField + Copy> {
     /// 初始(未变形)参考位置。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub x0: Vec3<T>,
     /// 当前位移(相对 x0)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub u: Vec3<T>,
     /// 速度。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub v: Vec3<T>,
     /// 当前受力(内力 + 外力)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub f: Vec3<T>,
     /// 是否固定(位移边界)。
     pub fixed: bool,
@@ -36,14 +43,15 @@ impl<T: RealField + Copy> Node<T> {
 }
 
 /// 四面体单元:四个节点索引(局部编号 0..3)。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Tet {
     /// 节点索引(指向 `SolidWorld::nodes`)。
     pub n: [usize; 4],
 }
 
 /// 固体世界:节点 + 四面体网格 + 材料参数 + 求解状态。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct SolidWorld<T: RealField + Copy> {
     /// 所有节点。
     pub nodes: Vec<Node<T>>,
@@ -56,8 +64,10 @@ pub struct SolidWorld<T: RealField + Copy> {
     /// 密度 ρ(用于动力松弛质量集总与重力)。
     pub density: T,
     /// 重力加速度向量(向下;如 (0,-9.81,0))。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub gravity: Vec3<T>,
     /// 外部集中载荷缓冲(逐节点,由加载函数写入;`step`/`solve_equilibrium` 累加)。
+    #[serde(with = "phy_rigid::shape::serde_geom::vec3_vec")]
     pub load: Vec<Vec3<T>>,
     /// Rayleigh 阻尼系数(α,速度比例),保证动力松弛收敛。
     pub damping: T,

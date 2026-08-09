@@ -6,11 +6,15 @@
 use num_traits::FromPrimitive;
 use phy_math::{na, RealField, Vec3};
 use phy_rigid::{Body, Shape};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 /// 表面材质:漫反射色 + 折射率(IOR) + 粗糙度(仅影响近似后端)。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct Surface<T: RealField + Copy> {
     /// 漫反射/base 颜色(RGB,0..1)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub albedo: Vec3<T>,
     /// 折射率(真空为 1.0;玻璃≈1.5;水≈1.33)。
     pub ior: T,
@@ -42,7 +46,8 @@ impl<T: RealField + Copy> Surface<T> {
 }
 
 /// 光学体:刚体位姿 + 形状 + 表面材质。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct OpticBody<T: RealField + Copy> {
     /// 底层刚体位姿(含 shape)。
     pub body: Body<T>,
@@ -251,9 +256,11 @@ fn normalize_lossy<T: RealField + Copy>(v: &Vec3<T>) -> Vec3<T> {
 }
 
 /// 光学场景:背景颜色 + 环境折射率(默认真空) + 一组光学体。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct OpticScene<T: RealField + Copy> {
     /// 背景(无交时的颜色)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub background: Vec3<T>,
     /// 环境介质折射率(默认 1.0)。
     pub env_ior: T,

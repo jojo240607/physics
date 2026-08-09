@@ -8,6 +8,8 @@ use std::any::Any;
 
 use phy_core::Subsystem;
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::grid_geometry::GridGeometry;
 use crate::grid::{Bc, ScalarField};
@@ -33,14 +35,18 @@ pub trait EmFieldLike<T: RealField + Copy>: GridGeometry<T> + Any {
 }
 
 /// 电磁场子系统(M12)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct EmField<T: RealField + Copy> {
     /// 电荷密度场(单位网格电荷)。
     pub rho: ScalarField<T>,
     /// 电势工作场(泊松松弛的工作变量)。
     pub phi: ScalarField<T>,
     /// 电场矢量(每格一个),由 `-∇φ` 得到。
+    #[serde(with = "crate::serde_geom::vec3_vec")]
     pub e: Vec<Vec3<T>>,
     /// 外加均匀磁场 `B`(洛伦兹力 `v×B` 项)。默认零。
+    #[serde(with = "crate::serde_geom")]
     pub b_ext: Vec3<T>,
     /// 泊松松弛的 Jacobi 迭代次数(每步)。
     pub jacobi_iters: usize,

@@ -1,13 +1,18 @@
 //! 碰撞检测结果的数据结构。
 
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 /// 一对物体之间的接触信息(单向:从 a 指向 b)。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct Contact<T: RealField + Copy> {
     /// 世界空间接触点(近似两表面中点)。
+    #[serde(with = "crate::shape::serde_geom")]
     pub point: Vec3<T>,
     /// 接触法线(由 a 指向 b,单位向量)。
+    #[serde(with = "crate::shape::serde_geom")]
     pub normal: Vec3<T>,
     /// 穿透深度(正数表示相交)。
     pub depth: T,

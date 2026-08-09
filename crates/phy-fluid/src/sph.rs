@@ -12,12 +12,15 @@ use std::collections::HashMap;
 use phy_field::HeatFieldLike;
 use phy_math::{RealField, Vec3};
 use phy_rigid::shape::{Body, Shape};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::kernels::Kernels;
 use crate::particle::Particle;
 
 /// SPH 求解参数(全部采用工程单位,默认 f64)。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct SphParams<T: RealField + Copy> {
     /// 静止密度 ρ0(用于压力状态方程)。
     pub rest_density: T,
@@ -30,10 +33,13 @@ pub struct SphParams<T: RealField + Copy> {
     /// 光滑长度 h(核作用半径,也是网格单元边长)。
     pub h: T,
     /// 重力加速度(向量,x 右 / y 上 / z 前)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub gravity: Vec3<T>,
     /// 模拟盒边界(粒子被约束在 [bounds_min, bounds_max] 内)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub bounds_min: Vec3<T>,
     /// 模拟盒边界上限。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub bounds_max: Vec3<T>,
     /// 边界反弹速度保留系数(0=完全吸收,1=完全弹性)。
     pub boundary_damp: T,
@@ -159,6 +165,54 @@ pub struct FluidWorld<T: RealField + Copy + num_traits::ToPrimitive> {
     grid: Grid<T>,
 }
 
+/// 序列化辅助结构:仅存档公开状态(params + particles),核/网格缓存重建。
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive")]
+struct FluidWorldData<T: RealField + Copy + num_traits::ToPrimitive> {
+    params: SphParams<T>,
+    particles: Vec<Particle<T>>,
+}
+
+impl<T: RealField + Copy + num_traits::ToPrimitive> Serialize for FluidWorld<T>
+where
+    T: Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive,
+{
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        FluidWorldData {
+            params: self.params.clone(),
+            particles: self.particles.clone(),
+        }
+        .serialize(s)
+    }
+}
+
+impl<'de, T: RealField + Copy + num_traits::ToPrimitive> Deserialize<'de> for FluidWorld<T>
+where
+    T: Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive,
+{
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let data = FluidWorldData::<T>::deserialize(d)?;
+        Ok(FluidWorld::new(data.params).with_particles(data.particles))
+    }
+}
+
+impl<T: RealField + Copy + num_traits::ToPrimitive + std::fmt::Debug> std::fmt::Debug
+    for FluidWorld<T>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FluidWorld")
+            .field("params", &self.params)
+            .field("particles", &self.particles)
+            .finish()
+    }
+}
+
+impl<T: RealField + Copy + num_traits::ToPrimitive> Clone for FluidWorld<T> {
+    fn clone(&self) -> Self {
+        FluidWorld::new(self.params.clone()).with_particles(self.particles.clone())
+    }
+}
+
 impl<T: RealField + Copy + num_traits::ToPrimitive> FluidWorld<T> {
     /// 以给定参数创建空世界(含核与网格)。
     pub fn new(params: SphParams<T>) -> Self {
@@ -174,6 +228,12 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidWorld<T> {
     /// 当前粒子数。
     pub fn len(&self) -> usize {
         self.particles.len()
+    }
+
+    /// 用已有粒子列表构造(反序列化后重建,跳过核/网格重新计算)。
+    pub fn with_particles(mut self, particles: Vec<Particle<T>>) -> Self {
+        self.particles = particles;
+        self
     }
 
     /// 是否为空。

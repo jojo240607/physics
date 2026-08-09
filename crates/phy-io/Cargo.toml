@@ -8,7 +8,13 @@ license.workspace = true
 phy-core = { path = "../phy-core" }
 phy-math = { path = "../phy-math" }
 phy-rigid = { path = "../phy-rigid" }
+phy-soft = { path = "../phy-soft" }
+phy-solid = { path = "../phy-solid" }
+phy-granular = { path = "../phy-granular" }
+phy-fluid = { path = "../phy-fluid" }
 phy-field = { path = "../phy-field" }
+phy-optics = { path = "../phy-optics" }
 nalgebra.workspace = true
 serde.workspace = true
+serde_json = "1.0"
 num-traits.workspace = true

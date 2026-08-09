@@ -12,13 +12,18 @@
 //! 邻近检测用朴素 O(n²)(颗粒数几千内足够;海量规模应换空间哈希,留待增强)。
 
 use phy_math::{gravity, RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 /// 单个球面颗粒。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct Grain<T: RealField + Copy> {
     /// 当前世界位置(球心)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub pos: Vec3<T>,
     /// 速度(世界)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub vel: Vec3<T>,
     /// 半径。
     pub radius: T,
@@ -54,14 +59,20 @@ impl<T: RealField + Copy> Grain<T> {
 }
 
 /// 颗粒世界。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct GranularWorld<T: RealField + Copy> {
     /// 颗粒集合。
     pub grains: Vec<Grain<T>>,
     /// 重力(默认 -Y 9.81)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub gravity: Vec3<T>,
-    /// 容器盒(颗粒中心约束在 `[lo, hi]`,含半径余量由约束内部处理)。
-    pub bounds: (Vec3<T>, Vec3<T>),
+    /// 容器盒下界(颗粒中心约束在 `[bounds_lo, bounds_hi]`,含半径余量由约束内部处理)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
+    pub bounds_lo: Vec3<T>,
+    /// 容器盒上界。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
+    pub bounds_hi: Vec3<T>,
     /// PBD 约束投影迭代次数(越多越硬/越精确)。
     pub iterations: usize,
     /// 速度阻尼(<1 衰减,1 无)。
@@ -88,7 +99,8 @@ impl<T: RealField + Copy> GranularWorld<T> {
         Self {
             grains: Vec::new(),
             gravity: gravity::<T>(),
-            bounds: (lo, hi),
+            bounds_lo: lo,
+            bounds_hi: hi,
             iterations: 4,
             vel_damp: T::from_f64(0.99).unwrap(),
             friction: T::from_f64(0.3).unwrap(),
@@ -98,7 +110,8 @@ impl<T: RealField + Copy> GranularWorld<T> {
 
     /// 设置容器盒。
     pub fn set_bounds(&mut self, lo: Vec3<T>, hi: Vec3<T>) {
-        self.bounds = (lo, hi);
+        self.bounds_lo = lo;
+        self.bounds_hi = hi;
     }
 
     /// 添加颗粒。
@@ -112,7 +125,8 @@ impl<T: RealField + Copy> GranularWorld<T> {
     /// 沿 XYZ 按间距 `2·radius·pack` 铺排,从盒底向上堆叠,直到放满 `count` 个
     /// 或到达盒顶。`pack > 1` 留初始间隙避免接触约束首步过度修正。
     pub fn fill_grid(&mut self, count: usize, radius: T, mass: T, pack: T) {
-        let (lo, hi) = self.bounds;
+        let lo = self.bounds_lo;
+        let hi = self.bounds_hi;
         let step = radius * T::from_f64(2.0).unwrap() * pack;
         let mut placed = 0usize;
         let mut y = lo.y + radius;
@@ -179,7 +193,8 @@ impl<T: RealField + Copy> GranularWorld<T> {
                 }
             }
             // 2b. 盒边界约束(夹回中心,留半径余量)。
-            let (lo, hi) = self.bounds;
+            let lo = self.bounds_lo;
+            let hi = self.bounds_hi;
             for k in 0..n {
                 if self.grains[k].inv_mass <= T::zero() {
                     continue;
@@ -218,7 +233,8 @@ impl<T: RealField + Copy> GranularWorld<T> {
             let mut new_vel = (np - old[k]) / dt;
 
             // 边界法向速度消去(撞墙不动)。
-            let (lo, hi) = self.bounds;
+            let lo = self.bounds_lo;
+            let hi = self.bounds_hi;
             let r = self.grains[k].radius;
             if np.x <= lo.x + r + T::from_f64(1e-6).unwrap() {
                 if new_vel.x < T::zero() {

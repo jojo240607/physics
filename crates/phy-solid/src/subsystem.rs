@@ -7,11 +7,17 @@
 use std::any::Any;
 
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::fem::SolidWorld;
 use phy_core::world::Subsystem;
 
 /// 固体子系统包装。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    bound = "T: RealField + Copy + Serialize + DeserializeOwned + num_traits::ToPrimitive + num_traits::FromPrimitive"
+)]
 pub struct SolidSubsystem<
     T: RealField + Copy + num_traits::ToPrimitive + num_traits::FromPrimitive,
 > {

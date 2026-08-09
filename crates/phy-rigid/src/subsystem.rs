@@ -5,6 +5,8 @@ use std::any::Any;
 use phy_core::{Subsystem, World};
 use phy_field::{EmField, GravField, HeatField};
 use phy_math::RealField;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::world::RigidWorld;
 
@@ -12,6 +14,8 @@ use crate::world::RigidWorld;
 ///
 /// 渲染时可通过 `World::get(i).as_any().downcast_ref::<RigidSubsystem<T>>()`
 /// 取回,读取 `world` 字段。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + num_traits::ToPrimitive")]
 pub struct RigidSubsystem<T: RealField + Copy + num_traits::ToPrimitive> {
     /// 内部刚体世界(渲染时直接访问)。
     pub world: RigidWorld<T>,

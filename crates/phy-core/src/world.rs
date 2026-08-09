@@ -92,6 +92,11 @@ impl<T: RealField> World<T> {
         self.t.clone()
     }
 
+    /// 设置仿真时间(读档恢复用)。
+    pub fn set_time(&mut self, t: T) {
+        self.t = t;
+    }
+
     /// 已注册子系统数量。
     pub fn subsystem_count(&self) -> usize {
         self.subsystems.len()

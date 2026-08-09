@@ -5,11 +5,15 @@
 
 use phy_core::Subsystem;
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::grid_geometry::GridGeometry;
 use crate::grid::ScalarField;
 
 /// 波动/电磁标量子系统。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct WaveField<T: RealField + Copy> {
     /// 底层标量场(电势/位移)。
     pub field: ScalarField<T>,

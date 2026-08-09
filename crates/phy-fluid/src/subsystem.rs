@@ -6,6 +6,8 @@ use phy_core::{Subsystem, World};
 use phy_field::HeatField;
 use phy_math::RealField;
 use phy_rigid::RigidSubsystem;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::sph::FluidWorld;
 
@@ -19,6 +21,8 @@ use crate::sph::FluidWorld;
 ///   结束放回。刚体侧不再反向耦合流体,避免两个子系统互 `remove` 造成的死锁
 ///   (`World::step` 调 `couple` 时已把 `self`(自身)取出,故本处可直接 `remove`
 ///   其它子系统而自身不会与自身冲突)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar + num_traits::ToPrimitive")]
 pub struct FluidSubsystem<T: RealField + Copy + num_traits::ToPrimitive> {
     /// 内部流体世界。
     pub world: FluidWorld<T>,

@@ -5,12 +5,15 @@
 //! 避免非累积版本在堆叠场景中产生的反向过冲与抖动。
 
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::contact::Contact;
 use crate::shape::Body;
 
 /// 求解参数。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct SolverParams<T: RealField> {
     /// 恢复系数 (0 = 完全非弹性, 1 = 完全弹性)。
     pub restitution: T,
@@ -31,6 +34,8 @@ impl<T: RealField> Default for SolverParams<T> {
 }
 
 /// 一个接触在求解期的状态(含参与 body 索引、接触几何、累积冲量)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct ContactConstraint<T: RealField + Copy> {
     pub a: usize,
     pub b: usize,
@@ -38,6 +43,7 @@ pub struct ContactConstraint<T: RealField + Copy> {
     /// 累积法向冲量(非负)。
     pub normal_impulse: T,
     /// 累积切向冲量(向量)。
+    #[serde(with = "crate::shape::serde_geom")]
     pub tangent_impulse: Vec3<T>,
 }
 

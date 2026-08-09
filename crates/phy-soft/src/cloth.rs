@@ -19,11 +19,14 @@
 
 use phy_core::Subsystem;
 use phy_math::{gravity, RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::body::Particle;
 
 /// 距离约束(两点保持固定间距)。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct DistanceConstraint<T: RealField + Copy> {
     pub a: usize,
     pub b: usize,
@@ -31,7 +34,8 @@ pub struct DistanceConstraint<T: RealField + Copy> {
 }
 
 /// 布料(PBD)。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct Cloth<T: RealField + Copy> {
     /// 质点网格(nx × ny,平整铺在 XY 平面,z=0)。
     pub particles: Vec<Particle<T>>,
@@ -43,6 +47,7 @@ pub struct Cloth<T: RealField + Copy> {
     /// 网格间距。
     pub spacing: T,
     /// 重力(默认 -Y)。
+    #[serde(with = "phy_rigid::shape::serde_geom")]
     pub gravity: Vec3<T>,
     /// 地面高度(质点 y 不可低于此值)。
     pub ground_y: T,

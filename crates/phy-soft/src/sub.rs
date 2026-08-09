@@ -7,6 +7,8 @@ use phy_field::HeatField;
 use phy_fluid::{CouplePoint, FluidSubsystem};
 use phy_math::RealField;
 use phy_rigid::RigidSubsystem;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::body::SoftBody;
 
@@ -14,6 +16,8 @@ use crate::body::SoftBody;
 ///
 /// 渲染时可通过 `World::get(i).as_any().downcast_ref::<SoftSubsystem<T>>()`
 /// 取回,读取 `body` 字段。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + num_traits::ToPrimitive")]
 pub struct SoftSubsystem<T: RealField + Copy + num_traits::ToPrimitive> {
     /// 内部软体(渲染时直接访问)。
     pub body: SoftBody<T>,

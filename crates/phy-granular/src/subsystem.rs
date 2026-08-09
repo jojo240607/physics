@@ -4,10 +4,14 @@ use std::any::Any;
 
 use phy_core::world::Subsystem;
 use phy_math::RealField;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::world::GranularWorld;
 
 /// 颗粒子系统包装。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned + nalgebra::Scalar")]
 pub struct GranularSubsystem<T: RealField + Copy> {
     /// 内部颗粒世界(渲染时直接访问)。
     pub world: GranularWorld<T>,

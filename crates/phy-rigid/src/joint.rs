@@ -12,11 +12,14 @@
 //! (不污染真实速度,与接触的位置修正一致)。
 
 use phy_math::{RealField, Vec3};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::shape::Body;
 
 /// 关节参数(刚度:0=软约束,1=硬约束;用于位置层投影比例)。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct JointParams<T: RealField> {
     /// 位置层投影比例(类比接触求解的 `beta`):每步纠正多少比例的距离误差。
     pub beta: T,
@@ -31,6 +34,8 @@ impl<T: RealField> Default for JointParams<T> {
 }
 
 /// 一个关节在求解期的状态。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub struct JointConstraint<T: RealField + Copy> {
     /// 关联刚体 a 索引。
     pub a: usize,
@@ -43,20 +48,25 @@ pub struct JointConstraint<T: RealField + Copy> {
 }
 
 /// 关节几何定义。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
 pub enum Joint<T: RealField + Copy> {
     /// 球窝:局部锚点 `pa`(a 上)/`pb`(b 上)世界位置应重合。
     Ball {
         /// a 上的局部锚点。
+        #[serde(with = "crate::shape::serde_geom")]
         pa: Vec3<T>,
         /// b 上的局部锚点。
+        #[serde(with = "crate::shape::serde_geom")]
         pb: Vec3<T>,
     },
     /// 定长杆:两锚点世界距离保持为 `rest`。
     Distance {
         /// a 上的局部锚点。
+        #[serde(with = "crate::shape::serde_geom")]
         pa: Vec3<T>,
         /// b 上的局部锚点。
+        #[serde(with = "crate::shape::serde_geom")]
         pb: Vec3<T>,
         /// 目标距离。
         rest: T,
