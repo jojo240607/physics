@@ -16,10 +16,12 @@
 
 mod body;
 mod cloth;
+mod rope;
 mod sub;
 
 pub use body::{Particle, SoftBody, Spring};
 pub use cloth::{Cloth, DistanceConstraint};
+pub use rope::Rope;
 pub use sub::SoftSubsystem;
 
 /// 默认弹簧刚度(f64)。
