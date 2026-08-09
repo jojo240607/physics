@@ -10,11 +10,13 @@ mod kernels;
 mod particle;
 mod sph;
 mod subsystem;
+mod cfd;
 
 pub use kernels::{dist, Kernels};
 pub use particle::Particle;
 pub use sph::{CouplePoint, FluidWorld, SphParams};
 pub use subsystem::FluidSubsystem;
+pub use cfd::{CfdParams, CfdWorld};
 
 #[cfg(test)]
 mod tests {

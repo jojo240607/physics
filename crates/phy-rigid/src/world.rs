@@ -8,7 +8,7 @@
 //! 5. 位置修正(防止穿透累积)
 
 use phy_field::{EmFieldLike, GravFieldLike, HeatFieldLike};
-use phy_math::{gravity, na, Mat3, Quat, RealField, Vec3};
+use phy_math::{gravity, na, Quat, RealField, Vec3};
 use num_traits::NumCast;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};

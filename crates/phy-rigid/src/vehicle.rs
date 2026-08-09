@@ -19,7 +19,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::raycast::ray_cast;
-use crate::shape::Body;
 use crate::world::RigidWorld;
 
 /// 单个车轮的静态参数与运行时状态。
@@ -220,7 +219,7 @@ impl<T: RealField + Copy> Vehicle<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shape::Shape;
+    use crate::shape::{Body, Shape};
     use phy_math::na;
 
     fn ground_box() -> Body<f64> {
