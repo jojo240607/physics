@@ -16,12 +16,25 @@
   <div id="wrap">
     <h2>多物理场可视化 Demo (Web / wasm)</h2>
     <canvas id="screen" width="800" height="600"></canvas>
-    <div id="hud">
+      <div id="hud">
       拖拽旋转 · 滚轮缩放 · <kbd>P</kbd> 暂停 · <kbd>O</kbd> 循环模式 · <kbd>R</kbd> 重置 · <kbd>I</kbd> 统计<br />
       物理模式: <kbd>1</kbd> 刚体 · <kbd>2</kbd> 流体 · <kbd>3</kbd> 热场 · <kbd>4</kbd> 软体 · <kbd>5</kbd> 光学 ·
       <kbd>6</kbd> 流体+热 · <kbd>7</kbd> 电磁场 · <kbd>8</kbd> 引力场 · <kbd>9</kbd> 波动 · <kbd>0</kbd> 声场 · <kbd>A</kbd> 全耦合<br />
       存档: <kbd>F5</kbd> 存到 localStorage · <kbd>F9</kbd> 读档<br />
       <span id="status">初始化中…</span>
+    </div>
+    <div id="gpu-panel">
+      <details>
+        <summary>GPU 自测 (WebGPU, 需 --features gpu 构建)</summary>
+        <div id="gpu-buttons" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
+          <button data-test="gpu">W1 平方</button>
+          <button data-test="optic">W2 光学</button>
+          <button data-test="caustics">W3 焦散</button>
+          <button data-test="sph">W4 SPH</button>
+          <button data-test="granular">W5 颗粒</button>
+        </div>
+        <pre id="gpu-out" style="white-space:pre-wrap; max-width:960px; background:#11151f; padding:8px; border-radius:6px;">点按钮运行 GPU 自测…</pre>
+      </details>
     </div>
   </div>
 
@@ -34,6 +47,33 @@
       const status = document.getElementById('status');
       const app = new DemoApp(canvas);
       window.__app = app; // 供测试脚本调用
+
+      // GPU 自测面板(W1-W5):仅当该构建含 gpu feature 时方法才存在。
+      const gpuOut = document.getElementById('gpu-out');
+      const gpuFns = {
+        gpu: (a) => a.gpu_self_test(),
+        optic: (a) => a.optic_self_test(),
+        caustics: (a) => a.caustics_self_test(),
+        sph: (a) => a.sph_self_test(),
+        granular: (a) => a.granular_self_test(),
+      };
+      document.querySelectorAll('#gpu-buttons button').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const name = btn.getAttribute('data-test');
+          const fn = gpuFns[name];
+          if (typeof fn(app) === 'undefined' && typeof app[`${name}_self_test`] === 'undefined') {
+            gpuOut.textContent = `本构建未启用 gpu feature,无 ${name} 自测。`;
+            return;
+          }
+          gpuOut.textContent = `运行 ${name} 自测…`;
+          try {
+            const res = await fn(app);
+            gpuOut.textContent = `${name}: ${res}`;
+          } catch (e) {
+            gpuOut.textContent = `${name} 失败: ${e}`;
+          }
+        });
+      });
 
       // 键盘
       window.addEventListener('keydown', (e) => {

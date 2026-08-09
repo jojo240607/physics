@@ -287,6 +287,15 @@ pub trait GpuBackend {
   报告 min_gap/overlaps/finite)经 `DemoApp::granular_self_test()` 暴露为 JS Promise。
   **验证**:`cargo build -p phy-demo-web --target wasm32-unknown-unknown --features gpu` 通过;
   默认构建 + `cargo test -p phy-demo-web` / `cargo test -p phy-granular` 零回归 | 已落地 |
+| **W6** ✅ | 把 W1–W5 的 GPU 自测真正接到 Web 页面,使其可在浏览器里点按验证(此前只暴露 JS 方法,无 UI/无 gpu 构建)。
+  (1) `index.html` 新增 **GPU 自测面板**(`<details>` 折叠 + 5 个按钮 W1平方/W2光学/W3焦散/W4 SPH/W5 颗粒),
+  点按调用 `app.{gpu,optic,caustics,sph,granular}_self_test()`(返回的 `Promise<string>` 打印到 `<pre>`);
+  用 `typeof app.X_self_test === 'undefined'` 检测:非 gpu 构建下按钮提示"本构建未启用 gpu feature"。
+  (2) 新增 `build_gpu.py`:封装 `wasm-pack build --target web --features gpu`(含 `--release` 选项)产出带
+  WebGPU 后端的 `pkg/`,使上述自测方法实际出现在 `pkg/phy_demo_web.d.ts` 中(已验证 5 个 `*_self_test` 均在)。
+  (3) 已用 `wasm-pack build --target web --features gpu` 实际重建 `pkg/`(798KB wasm)。
+  **验证**:GPU 构建产出 `pkg/` 含全部 5 个自测方法;默认 `cargo build` / `cargo test -p phy-demo-web`(1 passed)零回归;
+  浏览器用 `serve.py` 起服务 + 支持 WebGPU 的 Chrome/Edge 即可点按钮跑自测。至此 §5.7 全部 W1–W6 闭环。 | 已落地 |
 
 > W2/W3 无需重构数据布局(像素/射线天然独立),优先做;W4/W5 需先做 `Grid` 扁平化前置重构。
 
@@ -346,3 +355,5 @@ pub trait GpuBackend {
 - 2026-08-09: W3 完成(§5.7.4)。焦散逐射线 march 走 GPU。复用 W2 的 `BodyGpu`/`flatten_scene`;`gpu/mod.rs` 新增 `render_caustics_gpu`(CausticParams uniform: travel/plane_y/half_extent/grid_n/env_ior; 每条射线 one-thread 独立 march,写自己 grid 单元无 atomic)+ wgsl `CAUSTIC_WGSL`(自带 intersect2 sphere/box + `Caustics::march` 复刻:最多 8 段折射、Fresnel 衰减、介质 IOR 切换、命中不透明返回 flux)+ `caustics_self_test`(1 玻璃球 16×16,报告 max/sum)。`DemoApp::caustics_self_test()` 暴露为 JS Promise。`cargo build ... --features gpu` 通过;默认+测试零回归。
 - 2026-08-09: W4 完成(§5.7.4)。SPH 逐粒子密度/受力走 GPU。`phy-fluid` 前置重构: `Grid::to_flat`(HashMap 邻居网格→扁平 `FlatGrid{cell_start[c]/sorted[c]}` 前缀和,`grid.rs` 新增 pub(crate))+ `world.rs` 加 `pub build_grid` + `to_gpu_flat` 导出 `SphFlatData`(pos/vel/scalar/cell_start/sorted/grid_min/nc/h/rest_density/stiffness/visc_k/visc_n/shear_min/gravity 全 f32 扁平,`sph/gpu_flat.rs` 新模块 + `lib.rs` 导出);`phy-demo-web` 新增 `phy-fluid` 进 `gpu` feature。`gpu/mod.rs` 译两 wgsl entry point: `density_main`(遍历 27 邻居格算密度 ρ + 近不可压压力标量 p=stiffness·(ρ−rest_density))与 `force_main`(Müller 压力梯度 Spiky + 粘性 Laplacian Visc + 重力 + shear 有效粘度 μ_eff=(ki+shear_min)·|dot(dv,n)|^ni,逐粒子 one-thread 复刻 CPU 内核)。`sph_self_test`(溃坝晶格,报告 mean_rho/rest/ratio/finite/acc0)经 `DemoApp::sph_self_test()` 暴露为 JS Promise。`cargo build ... --features gpu` 通过;默认 + `cargo test -p phy-fluid`(18 passed)零回归。
 - 2026-08-09: W5 完成(§5.7.4)。颗粒 PBD 接触投影走 GPU(`par_pairs_reduce`)。`phy-granular` 新增 `gpu_flat.rs::GranularFlatData`(pos/old/vel/inv_mass/pairs/npairs/gravity/bounds_lo/hi/iterations/vel_damp/friction/dt 扁平)+ `world.rs::to_gpu_flat`(预生成全部 O(n²) 接触对 `(i<j)`,T→f32 经 `num_traits::cast`);`phy-demo-web` 把 `phy-granular` 加进 `gpu` feature 并 `lib.rs` 暴露 `granular_self_test` JS Promise。`gpu/mod.rs` 译三 wgsl entry point: `clear_main`(清 per-body 3 分量 delta 缓冲)→ `contact_main`(每对只读预测位置、按反质量加权算位移修正、以 `atomic<i32>` 定点 ×1e6 累加进 `deltas[i*3+axis]`/`deltas[j*3+axis]`,Jacobi 式确定性 reduce)→ `apply_main`(逐体 `atomicLoad` 还原 delta + 盒边界夹紧写回预测位置);`render_granular_gpu` 在主机端循环 `iterations` 轮 dispatch 后回读 pos。`granular_self_test`(27 颗粒盒,报告 min_gap/overlaps/finite)。`cargo build ... --features gpu` 通过;默认 + `cargo test -p phy-granular` 零回归。至此 §5.7 W1–W5 全部落地,Web Demo 侧 A 档算法(SPH/颗粒 PBD/光学/焦散)GPU 化收尾;后续如需可继续 B/C 档(标量场 stencil、刚体顺序冲量等)但本次按用户口径只做 Web Demo 且 A 档已完成。
+- 2026-08-10: W6 完成(§5.7.4)。把 W1–W5 的 GPU 自测接到 Web 页面。`index.html` 加 GPU 自测面板(5 按钮点按调 `app.{gpu,optic,caustics,sph,granular}_self_test()`,Promise 结果打印到 `<pre>`;非 gpu 构建用 `typeof app.X_self_test==='undefined'` 提示未启用)。新增 `build_gpu.py`(`wasm-pack build --target web --features gpu`,支持 `--release`)重建 `pkg/`。已实跑 `wasm-pack build --target web --features gpu` 产出 pkg(798KB wasm),`phy_demo_web.d.ts` 含全部 5 个 `*_self_test` 方法。默认 `cargo build`/`cargo test -p phy-demo-web`(1 passed)零回归。§5.7 W1–W6 全闭环。
+

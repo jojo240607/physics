@@ -1360,8 +1360,6 @@ fn force_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // 边界夹紧也在 apply 阶段逐体完成。速度回写/摩擦留主机端(轻量)。
 // ===========================================================================
 
-const GRAN_SCALE: f32 = 1.0e6;
-
 /// W5 颗粒 PBD wgsl:三个 entry point。
 /// - `clear_main`:清 delta 缓冲(每体 3 分量)。
 /// - `contact_main`:每对累加位移修正(atomic 定点)。
