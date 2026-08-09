@@ -463,17 +463,27 @@ impl Scene {
         };
     }
 
-    /// 当前刚体数量(用于 HUD)。
+    /// 当前刚体数量(用于 HUD)。非刚体模式下安全返回 0(无刚体子系统)。
     pub fn body_count(&self) -> usize {
-        self.world
-            .get(IDX_RIGID)
-            .unwrap()
-            .as_any()
-            .downcast_ref::<RigidSubsystem<f64>>()
-            .unwrap()
-            .world
-            .bodies
-            .len()
+        match self.world.get(IDX_RIGID) {
+            Some(sub) => match sub.as_any().downcast_ref::<RigidSubsystem<f64>>() {
+                Some(r) => r.world.bodies.len(),
+                None => 0,
+            },
+            None => 0,
+        }
+    }
+
+    /// 把当前 World 序列化为 JSON 字符串(用于 Web / 无文件系统的存档)。
+    pub fn save_string(&self) -> Result<String, String> {
+        Ok(phy_io::save_world_json(&self.world))
+    }
+
+    /// 从 JSON 字符串载入 World(替换当前 world,保留 mode/相机)。
+    pub fn load_string(&mut self, s: &str) -> Result<(), String> {
+        let w = phy_io::load_world_json(s);
+        self.world = w;
+        Ok(())
     }
 
     /// 渲染当前模式。
@@ -483,7 +493,7 @@ impl Scene {
             DemoMode::Fluid => self.render_fluid(fb, cam),
             DemoMode::Heat => self.render_heat(fb, cam),
             DemoMode::Soft => self.render_soft(fb, cam),
-            DemoMode::Optics => { /* 光学由 App 独立渲染,这里不处理 */ }
+            DemoMode::Optics => self.render_optics(fb, cam),
             DemoMode::FluidHeat => self.render_fluid_heat(fb, cam),
             DemoMode::All => self.render_all(fb, cam),
             DemoMode::Em => self.render_em(fb, cam),
@@ -675,6 +685,65 @@ impl Scene {
             .downcast_ref::<AcousticField<f64>>()
             .unwrap();
         self.render_scalar_slice(fb, cam, &sub.field, [20u8, 120u8, 60u8], [200u8, 60u8, 200u8]);
+    }
+
+    /// 光学演示:用 phy-optics 的实时近似后端渲染一个玻璃球 + 地面,
+    /// 复用传入相机位姿直接写入帧缓冲像素。从 App 迁入,使 lib/Web 版也能渲染光学。
+    fn render_optics(&self, fb: &mut Framebuffer, cam: &Camera) {
+        use phy_optics::to_rgba8;
+        let (w, h) = (fb.width as usize, fb.height as usize);
+        let yaw = cam.yaw as f64;
+        let pitch = cam.pitch as f64;
+        let dist = cam.distance as f64;
+        let target = Vec3::new(0.0, 0.0, 0.0);
+        let eye = Vec3::new(
+            dist * (pitch.cos()) * (yaw.sin()),
+            dist * pitch.sin(),
+            dist * (pitch.cos()) * (yaw.cos()),
+        ) + target;
+        let up = Vec3::new(0.0, 1.0, 0.0);
+        let fov = std::f64::consts::FRAC_PI_4;
+
+        let mut scene = OpticScene::<f64>::new();
+        scene.add(OpticBody::new(
+            Body {
+                shape: Shape::Box {
+                    half: Vec3::new(4.0, 0.1, 4.0),
+                },
+                pos: Vec3::new(0.0, -1.5, 0.0),
+                rot: na::UnitQuaternion::identity(),
+                vel: Vec3::zeros(),
+                inv_mass: 0.0,
+            },
+            Surface::diffuse(Vec3::new(0.5, 0.5, 0.5)),
+        ));
+        scene.add(OpticBody::new(
+            Body {
+                shape: Shape::Sphere { r: 1.0 },
+                pos: Vec3::new(0.0, 0.0, 0.0),
+                rot: na::UnitQuaternion::identity(),
+                vel: Vec3::zeros(),
+                inv_mass: 0.0,
+            },
+            Surface::glass(1.5, Vec3::new(0.9, 0.95, 1.0)),
+        ));
+        scene.add(OpticBody::new(
+            Body {
+                shape: Shape::Sphere { r: 0.5 },
+                pos: Vec3::new(1.8, -0.5, 0.5),
+                rot: na::UnitQuaternion::identity(),
+                vel: Vec3::zeros(),
+                inv_mass: 0.0,
+            },
+            Surface::glass(1.33, Vec3::new(0.4, 0.6, 1.0)),
+        ));
+
+        let sub = OpticSubsystem::new(scene, Precision::Realtime);
+        let mut buf = vec![Vec3::new(0.0, 0.0, 0.0); w * h];
+        sub.render_camera(&mut buf, w, h, &eye, &target, &up, fov);
+        for i in 0..buf.len() {
+            fb.pixels[i] = to_rgba8(&buf[i]);
+        }
     }
 
     fn render_soft(&self, fb: &mut Framebuffer, cam: &Camera) {

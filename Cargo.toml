@@ -12,6 +12,7 @@ members = [
     "crates/phy-granular",
     "crates/phy-io",
     "crates/phy-demo",
+    "crates/phy-demo-web",
 ]
 
 [workspace.package]

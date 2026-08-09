@@ -7,3 +7,9 @@
 .vscode/
 *.swp
 .DS_Store
+
+# 一次性补丁脚本(直接改写源码,非项目文件)
+patch_impls.py
+
+# Web 自测截图产物
+crates/phy-demo-web/shot_*.png

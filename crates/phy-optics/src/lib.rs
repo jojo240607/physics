@@ -28,13 +28,13 @@ pub use renderer::{Approx, Renderer, Whitted};
 pub use scene::{OpticBody, OpticScene, Surface};
 pub use subsystem::{OpticSubsystem, Precision};
 
-/// 把颜色(Vec3<f64>,0..1)转成 u32 ABGR(供软件帧缓冲)。
+/// 把颜色(Vec3<f64>,0..1)转成 u32 ARGB(供软件帧缓冲,0xAARRGGBB)。
 pub fn to_rgba8(c: &phy_math::Vec3<f64>) -> u32 {
     let clamp = |x: f64| (x.max(0.0).min(1.0) * 255.0).round() as u32;
     let r = clamp(c.x);
     let g = clamp(c.y);
     let b = clamp(c.z);
-    0xFF00_0000 | (b << 16) | (g << 8) | r
+    0xFF00_0000 | (r << 16) | (g << 8) | b
 }
 
 #[cfg(test)]

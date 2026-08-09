@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>phy-demo · 多物理场可视化 (Web)</title>
+  <style>
+    body { margin: 0; background: #0b0e14; color: #cdd6f4; font-family: monospace; }
+    #wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; }
+    canvas { border: 1px solid #313244; background: #000; image-rendering: pixelated; max-width: 100%; }
+    #hud { font-size: 13px; line-height: 1.5; max-width: 960px; }
+    kbd { background: #313244; padding: 1px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <h2>多物理场可视化 Demo (Web / wasm)</h2>
+    <canvas id="screen" width="800" height="600"></canvas>
+    <div id="hud">
+      拖拽旋转 · 滚轮缩放 · <kbd>P</kbd> 暂停 · <kbd>O</kbd> 循环模式 · <kbd>R</kbd> 重置 · <kbd>I</kbd> 统计<br />
+      物理模式: <kbd>1</kbd> 刚体 · <kbd>2</kbd> 流体 · <kbd>3</kbd> 热场 · <kbd>4</kbd> 软体 · <kbd>5</kbd> 光学 ·
+      <kbd>6</kbd> 流体+热 · <kbd>7</kbd> 电磁场 · <kbd>8</kbd> 引力场 · <kbd>9</kbd> 波动 · <kbd>0</kbd> 声场 · <kbd>A</kbd> 全耦合<br />
+      存档: <kbd>F5</kbd> 存到 localStorage · <kbd>F9</kbd> 读档<br />
+      <span id="status">初始化中…</span>
+    </div>
+  </div>
+
+  <script type="module">
+    import init, { DemoApp } from './pkg/phy_demo_web.js';
+
+    async function run() {
+      await init();
+      const canvas = document.getElementById('screen');
+      const status = document.getElementById('status');
+      const app = new DemoApp(canvas);
+      window.__app = app; // 供测试脚本调用
+
+      // 键盘
+      window.addEventListener('keydown', (e) => {
+        // 阻止默认(如 F5 刷新)
+        if (e.key === 'F5' || e.key === 'F9') e.preventDefault();
+        app.key(e.key);
+      });
+
+      // 鼠标拖拽
+      let dragging = false, lastX = 0, lastY = 0;
+      canvas.addEventListener('mousedown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+      window.addEventListener('mouseup', () => { dragging = false; });
+      window.addEventListener('mousemove', (e) => {
+        if (dragging) { app.drag(e.clientX - lastX, e.clientY - lastY); lastX = e.clientX; lastY = e.clientY; }
+      });
+      canvas.addEventListener('wheel', (e) => { e.preventDefault(); app.zoom(e.deltaY); }, { passive: false });
+
+      // 渲染循环
+      function loop() {
+        app.frame();
+        window.__rafId = requestAnimationFrame(loop);
+      }
+      status.textContent = '运行中 · 默认刚体模式,按 1-0/A 切换';
+      window.__rafId = requestAnimationFrame(loop);
+    }
+    run().catch((e) => {
+      document.getElementById('status').textContent = '启动失败: ' + e;
+      console.error(e);
+    });
+  </script>
+</body>
+</html>
