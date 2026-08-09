@@ -15,11 +15,13 @@ mod wave;
 mod em;
 mod grav;
 mod acoustic;
+mod smoke;
 mod serde_geom;
 
 pub use grid::{Bc, ScalarField};
 pub use grid_geometry::GridGeometry;
 pub use heat::{HeatField, HeatFieldLike};
+pub use smoke::SmokeField;
 pub use wave::WaveField;
 pub use em::{EmField, EmFieldLike};
 pub use grav::{GravField, GravFieldLike};
