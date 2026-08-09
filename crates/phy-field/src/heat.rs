@@ -87,6 +87,31 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> HeatField<T> {
     pub fn set_vel_sampler(&mut self, f: Option<Box<dyn Fn(Vec3<T>) -> Vec3<T>>>) {
         self.vel_sampler = f;
     }
+
+    /// 三线性采样某世界坐标处的温度(供燃烧等跨场耦合读取)。
+    pub fn temp_at_world(&self, p: Vec3<T>) -> T
+    where
+        T: num_traits::ToPrimitive,
+    {
+        let (cx, cy, cz, tx, ty, tz) = crate::world_to_cell(self, p);
+        self.sample_trilinear(cx, cy, cz, tx, ty, tz)
+    }
+
+    /// 向某世界坐标最近的网格单元注入热源 `q`(供燃烧放热回灌)。
+    pub fn inject_heat_world(&mut self, p: Vec3<T>, q: T)
+    where
+        T: num_traits::ToPrimitive,
+    {
+        let (cx, cy, cz, _tx, _ty, _tz) = crate::world_to_cell(self, p);
+        self.field.add_source(cx, cy, cz, q);
+    }
+
+    /// 在网格单元 `(cx,cy,cz)` 处**直接累加**温度(不经 `src·dt` 弱源项)。
+    /// 供燃烧火焰核把放热直接写入温度场,确保邻格被加热到点燃阈值。
+    pub fn add_temperature_at(&mut self, cx: usize, cy: usize, cz: usize, delta: T) {
+        let i = self.field.idx(cx, cy, cz);
+        self.field.u[i] += delta;
+    }
 }
 
 impl<T: RealField + Copy> GridGeometry<T> for HeatField<T> {
