@@ -14,6 +14,7 @@ use crate::body::Particle;
 use crate::cloth::DistanceConstraint;
 use phy_core::Subsystem;
 use phy_math::{gravity, RealField, Vec3};
+use phy_rigid::{Body, Shape};
 
 /// 一维 PBD 绳索/链。
 ///
@@ -164,6 +165,37 @@ impl<T: RealField + Copy> Rope<T> {
         }
         s
     }
+
+    /// 由粒子生成代理刚体(`phy_rigid::Body`),用于绳索→光学折射耦合(S4)。
+    ///
+    /// 取所有链节质心为球心、质心到最远链节距离为半径,产出 `Shape::Sphere`
+    /// 刚体,可注册为半透明 `OpticBody`(如发光/折射的细绳/藤蔓)。
+    pub fn proxy_body(&self) -> Body<T> {
+        let n = self.particles.len();
+        assert!(n > 0, "Rope 无粒子,无法生成代理刚体");
+        let mut c = Vec3::zeros();
+        for p in &self.particles {
+            c += p.pos;
+        }
+        c /= T::from_usize(n).expect("n 超出可表示范围");
+        let mut r = T::zero();
+        for p in &self.particles {
+            let d = (p.pos - c).norm();
+            if d > r {
+                r = d;
+            }
+        }
+        let mut inv_total = T::zero();
+        for p in &self.particles {
+            inv_total = inv_total + p.inv_mass;
+        }
+        let inv_mass = if inv_total > T::zero() {
+            T::one() / inv_total
+        } else {
+            T::zero()
+        };
+        Body::new(Shape::Sphere { r }, c, inv_mass)
+    }
 }
 
 impl<T: RealField + Copy> Subsystem<T> for Rope<T> {
@@ -262,5 +294,25 @@ mod tests {
         // 两端保持钉死位置。
         assert!((rope.particles[0].pos - start).norm() < 1e-5);
         assert!((rope.particles[5].pos - end).norm() < 1e-5);
+    }
+
+    /// proxy_body 应生成覆盖整条链节的代理球(绳索→光学折射耦合 S4)。
+    #[test]
+    fn rope_proxy_body_covers_chain() {
+        let start = Vec3::<f32>::new(-1.0, 0.0, 0.0);
+        let end = Vec3::<f32>::new(1.0, 0.0, 0.0);
+        let rope = Rope::<f32>::line(start, end, 5, 1.0);
+        let proxy = rope.proxy_body();
+        match &proxy.shape {
+            Shape::Sphere { r } => {
+                // 质心 = (0,0,0);最远链节 (±1,0,0) 距离 = 1。
+                assert!((proxy.pos - Vec3::<f32>::zeros()).norm() < 1e-5);
+                assert!((r - 1.0).abs() < 1e-5, "代理球半径应为 1.0,实际 {}", r);
+                for p in &rope.particles {
+                    assert!((p.pos - proxy.pos).norm() <= *r + 1e-4);
+                }
+            }
+            _ => panic!("rope proxy_body 应返回 Sphere"),
+        }
     }
 }

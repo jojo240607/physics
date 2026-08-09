@@ -1226,6 +1226,7 @@ dependencies = [
  "phy-core",
  "phy-math",
  "phy-rigid",
+ "phy-soft",
  "serde",
 ]
 

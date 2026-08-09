@@ -177,5 +177,52 @@ mod tests {
             mean
         );
     }
+
+    /// S4 软体→光学折射耦合:由 `SoftBody` 导出的代理刚体注册为半透明折射体,
+    /// 离线渲染应产生偏离背景的折射像素(果冻/水袋在光追中折射)。
+    #[test]
+    fn soft_body_proxy_refracts_light() {
+        use phy_soft::SoftBody;
+        use phy_math::Vec3 as PV;
+
+        // 一团质点(果冻),质心在原点附近。
+        let mut body = SoftBody::<f64>::new(0.0);
+        for &(x, y, z) in &[
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (0.0, 0.0, 1.0),
+            (-1.0, 0.0, 0.0),
+            (0.0, -1.0, 0.0),
+        ] {
+            body.particles.push(phy_soft::Particle {
+                pos: PV::new(x, y, z),
+                vel: PV::zeros(),
+                force: PV::zeros(),
+                inv_mass: 1.0,
+            });
+        }
+        let proxy = body.proxy_body();
+        let mut scene = OpticScene::<f64>::new();
+        scene.add(OpticBody::new(
+            proxy,
+            Surface::glass(1.5, PV::new(0.8, 0.95, 1.0)),
+        ));
+        let sub = OpticSubsystem::new(scene, Precision::Offline);
+        let (w, h) = (32usize, 32usize);
+        let mut buf = vec![PV::new(0.0, 0.0, 0.0); w * h];
+        let eye = PV::new(0.0, 0.0, 5.0);
+        let target = PV::new(0.0, 0.0, 0.0);
+        let up = PV::new(0.0, 1.0, 0.0);
+        sub.render_camera(&mut buf, w, h, &eye, &target, &up, std::f64::consts::FRAC_PI_4);
+        let bg = buf[0];
+        let mut diff = 0usize;
+        for c in &buf {
+            if (c.x - bg.x).abs() > 1e-6 || (c.y - bg.y).abs() > 1e-6 || (c.z - bg.z).abs() > 1e-6 {
+                diff += 1;
+            }
+        }
+        assert!(diff > 0, "软体代理折射体应使部分像素偏离背景");
+    }
 }
 

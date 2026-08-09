@@ -2,7 +2,7 @@
 
 use phy_field::HeatFieldLike;
 use phy_math::{gravity, RealField, Vec3};
-use phy_rigid::Body;
+use phy_rigid::{Body, Shape};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -181,6 +181,40 @@ impl<T: RealField + Copy> SoftBody<T> {
     /// 添加弹簧(显式 rest 长度)。
     pub fn add_spring_len(&mut self, a: usize, b: usize, rest: T, k: T, damp: T) {
         self.springs.push(Spring { a, b, rest, k, damp });
+    }
+
+    /// 由粒子生成代理刚体(`phy_rigid::Body`),用于软体→光学折射耦合(S4)。
+    ///
+    /// 取所有质点的质心为球心、质心到最远质点的距离为半径,产出
+    /// `Shape::Sphere` 刚体。该代理球可注册为半透明 `OpticBody`,使果冻/
+    /// 水袋等软体在光线追踪中表现为折射体。返回刚体的反质量取软体总质量倒数。
+    pub fn proxy_body(&self) -> Body<T> {
+        let n = self.particles.len();
+        assert!(n > 0, "SoftBody 无质点,无法生成代理刚体");
+        let zero = Vec3::zeros();
+        let mut c = zero;
+        for p in &self.particles {
+            c += p.pos;
+        }
+        c /= T::from_usize(n).expect("n 超出可表示范围");
+        let mut r = T::zero();
+        for p in &self.particles {
+            let d = (p.pos - c).norm();
+            if d > r {
+                r = d;
+            }
+        }
+        // 总质量倒数(全部钉死则为静态体 inv_mass=0)。
+        let mut inv_total = T::zero();
+        for p in &self.particles {
+            inv_total = inv_total + p.inv_mass;
+        }
+        let inv_mass = if inv_total > T::zero() {
+            T::one() / inv_total
+        } else {
+            T::zero()
+        };
+        Body::new(Shape::Sphere { r }, c, inv_mass)
     }
 
     /// 累加所有力到 `particles[i].force`(重力 + 弹簧 Hooke + 阻尼)。
@@ -474,5 +508,49 @@ mod tests {
         body.couple_heat(&mut heat, 0.1, 0.0, 0.0, 0.1);
         heat.field.step_diffusion(0.1, 0.01);
         assert!(heat.field.sample(1, 1, 1) > 0.0, "运动质点应加热所在网格");
+    }
+
+    /// proxy_body 应生成覆盖全部质点的代理球(软体→光学折射耦合 S4)。
+    #[test]
+    fn proxy_body_covers_all_particles() {
+        let mut body = SoftBody::<f64>::new(0.0);
+        // 三个质点构成三角形,包围球心应在 (1,1,1),半径 sqrt(2)。
+        body.particles.push(Particle {
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            vel: Vec3::zeros(),
+            force: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+        body.particles.push(Particle {
+            pos: Vec3::new(2.0, 0.0, 0.0),
+            vel: Vec3::zeros(),
+            force: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+        body.particles.push(Particle {
+            pos: Vec3::new(0.0, 2.0, 2.0),
+            vel: Vec3::zeros(),
+            force: Vec3::zeros(),
+            inv_mass: 1.0,
+        });
+        let proxy = body.proxy_body();
+        match &proxy.shape {
+            Shape::Sphere { r } => {
+                // 质心 = (2/3, 2/3, 2/3);最远质点 (0,2,2) 距离 = sqrt(4/9+16/9+16/9) = 2。
+                let expected_r = 2.0_f64;
+                assert!((r - expected_r).abs() < 1e-9, "代理球半径应为 {}", expected_r);
+                assert!(
+                    (proxy.pos.x - 2.0 / 3.0).abs() < 1e-9
+                        && (proxy.pos.y - 2.0 / 3.0).abs() < 1e-9
+                        && (proxy.pos.z - 2.0 / 3.0).abs() < 1e-9,
+                    "代理球心应为质心"
+                );
+                // 全部质点应落在球内。
+                for p in &body.particles {
+                    assert!((p.pos - proxy.pos).norm() <= *r + 1e-12);
+                }
+            }
+            _ => panic!("proxy_body 应返回 Sphere"),
+        }
     }
 }
