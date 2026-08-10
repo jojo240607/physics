@@ -135,3 +135,85 @@ fn parallel_solve_is_deterministic() {
         assert!((ga.pos.z - gb.pos.z).abs() < 1e-12);
     }
 }
+
+/// 朴素暴力参考:返回所有 `i<j` 且中心距 < r_i+r_j 的接触对(升序)。
+fn brute_contact_pairs(w: &GranularWorld<f64>) -> Vec<(usize, usize)> {
+    let n = w.grains.len();
+    let mut v = Vec::new();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let d = (w.grains[j].pos - w.grains[i].pos).norm();
+            let min = w.grains[i].radius + w.grains[j].radius;
+            if d < min {
+                v.push((i, j));
+            }
+        }
+    }
+    v.sort_unstable();
+    v
+}
+
+#[test]
+fn spatial_hash_matches_bruteforce_contacts() {
+    // P4 宽相位正确性:空间哈希生成的接触对集合必须与朴素暴力 O(n²) 完全等价
+    // (不漏任何真实接触、不产生误报),证明网格 cell_size 与查询半径推导正确。
+    let mut w: GranularWorld<f64> = GranularWorld::new();
+    w.set_bounds(
+        Vec3::new(-4.0, -4.0, -4.0),
+        Vec3::new(4.0, 4.0, 4.0),
+    );
+    w.fill_grid(300, 0.3, 1.0, 1.03); // 密集,大量接触。
+    // 先步进几步让颗粒位移,破坏初始网格对齐,检验动态场景仍正确。
+    let dt = 1.0 / 60.0;
+    for _ in 0..10 {
+        w.step(dt);
+    }
+    let got = w.contact_pairs();
+    let expected = brute_contact_pairs(&w);
+    assert_eq!(got, expected, "空间哈希接触集必须等于暴力参考");
+}
+
+#[test]
+fn large_scale_runs_without_overlap() {
+    // P4 规模验证:5000 颗粒在合理盒内填充并步进,宽相位必须在可接受时间内完成,
+    // 且投影后无穿透(任意两球中心距 >= 半径和 - 容差)。
+    let mut w: GranularWorld<f64> = GranularWorld::new();
+    // 大盒以容纳 5000 个 r=0.3 的球(体积占比 < 0.3 即可)。
+    w.set_bounds(
+        Vec3::new(-15.0, -15.0, -15.0),
+        Vec3::new(15.0, 15.0, 15.0),
+    );
+    w.iterations = 4;
+    w.fill_grid(5000, 0.3, 1.0, 1.1);
+    assert_eq!(w.grains.len(), 5000);
+    let dt = 1.0 / 60.0;
+    let t0 = std::time::Instant::now();
+    for _ in 0..30 {
+        w.step(dt);
+    }
+    let elapsed = t0.elapsed();
+    // 单步平均应远低于 1s(宽相位预期);宽松上限以防 CI 慢机。
+    assert!(
+        elapsed.as_secs_f64() / 30.0 < 2.0,
+        "5000 颗粒单步平均 {:.3}s 过慢",
+        elapsed.as_secs_f64() / 30.0
+    );
+    // 投影后无显著穿透。PBD 有限迭代在大规模密集堆积下存在残余穿透(约 1-2% 半径),
+    // 这是算法固有特性而非宽相位漏检(由 `spatial_hash_matches_bruteforce_contacts`
+    // 证明接触集与暴力完全等价)。容差取 0.01(半径 0.3 的 ~3%)。
+    let n = w.grains.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let d = (w.grains[j].pos - w.grains[i].pos).norm();
+            let min = w.grains[i].radius + w.grains[j].radius;
+            assert!(
+                d >= min - 0.01,
+                "overlap: d={:.4} < min={:.4} (i={},j={})",
+                d,
+                min,
+                i,
+                j
+            );
+        }
+    }
+}

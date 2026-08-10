@@ -9,8 +9,10 @@
 //! 3. **速度回写**:`v = (p_new - p_old)/dt · vel_damp`(PBD 速度由位置差定义)。
 //! 4. **切向摩擦**(近似):接触后按 `friction` 衰减切向相对速度,维持堆积角。
 //!
-//! 邻近检测用朴素 O(n²)(颗粒数几千内足够;海量规模应换空间哈希,留待增强)。
+//! 宽相位邻近检测用 `phy_core::SpatialGrid` 均匀网格哈希(见 `step`),将朴素
+//! O(n²) 邻域搜索降为近似 O(n),支撑数万级颗粒规模。
 
+use phy_core::SpatialGrid;
 use phy_math::{gravity, RealField, Vec3};
 use serde::de::DeserializeOwned;
 use crate::gpu_flat::GranularFlatData;
@@ -148,7 +150,10 @@ impl<T: RealField + Copy> GranularWorld<T> {
     }
 
     /// PBD 推进一步。
-    pub fn step(&mut self, dt: T) {
+    pub fn step(&mut self, dt: T)
+    where
+        T: num_traits::NumCast,
+    {
         let n = self.grains.len();
         if n == 0 {
             return;
@@ -175,15 +180,10 @@ impl<T: RealField + Copy> GranularWorld<T> {
         // 独立的 per-body delta 缓冲(`deltas`),迭代末统一施加。这样可在 rayon
         // 下并行遍历所有 (i<j) 对;reduce 以固定顺序合并,结果与串行逐对相加
         // 完全一致(同索引对的修正大小相同,仅求和顺序固定),保持确定性(利于 S8)。
-        let pairs: Vec<(usize, usize)> = {
-            let mut v = Vec::with_capacity(n * (n.saturating_sub(1)) / 2);
-            for i in 0..n {
-                for j in (i + 1)..n {
-                    v.push((i, j));
-                }
-            }
-            v
-        };
+        //
+        // 宽相位邻域对由 `_contact_pairs` 经 `SpatialGrid` 空间哈希生成(见该函数),
+        // 把朴素 O(n²) 降为近似 O(n)。
+        let pairs = self._contact_pairs(&predicted);
         for _ in 0..self.iterations {
             // 2a. 球-球非穿透(单边约束),Jacobi 并行累积。
             let zero = Vec3::zeros();
@@ -308,10 +308,72 @@ impl<T: RealField + Copy> GranularWorld<T> {
         self.t += dt;
     }
 
+    /// 宽相位接触对生成(空间哈希)。
+    ///
+    /// 给定快照位置 `pts`(长度须等于 `grains.len()`),返回所有满足
+    /// `|pts[i]-pts[j]| < r_i+r_j` 且 `i<j` 的接触对,按 `(i,j)` 升序排列。
+    /// 内部用 `SpatialGrid`(cell_size = 2·max_radius)只扫描邻近 27 桶,把朴素
+    /// O(n²) 降为近似 O(n)。结果与暴力全配对**集合等价**(仅顺序固定为升序),
+    /// 保证确定性且不会漏掉任何真实接触。
+    fn _contact_pairs(&self, pts: &[Vec3<T>]) -> Vec<(usize, usize)>
+    where
+        T: num_traits::NumCast,
+    {
+        let n = pts.len();
+        let cast = |x: T| -> f64 { num_traits::cast::<T, f64>(x).unwrap() };
+        let max_r = self
+            .grains
+            .iter()
+            .map(|gr| gr.radius)
+            .fold(T::zero(), |a, b| if a > b { a } else { b });
+        if max_r <= T::zero() {
+            // 退化:全配对 O(n²)。
+            let mut v = Vec::with_capacity(n * (n.saturating_sub(1)) / 2);
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    v.push((i, j));
+                }
+            }
+            return v;
+        }
+        // 内部用 f64 网格(避免向 GranularWorld 主 impl 扩散 ToPrimitive bound)。
+        let cell_f = cast(max_r) * 2.0;
+        let pts_f: Vec<Vec3<f64>> = pts
+            .iter()
+            .map(|p| Vec3::new(cast(p.x), cast(p.y), cast(p.z)))
+            .collect();
+        let mut grid = SpatialGrid::with_cell_size(cell_f);
+        grid.build(&pts_f);
+        let mut seen = std::collections::HashSet::new();
+        let mut v = Vec::new();
+        for i in 0..n {
+            let center = pts_f[i];
+            let ri = cast(self.grains[i].radius);
+            // 查询半径覆盖最坏情况:两球切于相邻桶边界时圆心距 = ri+rj <= 2·max_r。
+            let cand = grid.neighbors(center, cell_f);
+            for &j in &cand {
+                if j <= i {
+                    continue; // 只保留 i<j。
+                }
+                let rj = cast(self.grains[j].radius);
+                let min_dist = ri + rj;
+                let d = pts_f[j] - pts_f[i];
+                if d.dot(&d) <= min_dist * min_dist {
+                    let key = (i, j);
+                    if seen.insert(key) {
+                        v.push((i, j));
+                    }
+                }
+            }
+        }
+        v.sort_unstable();
+        v
+    }
+
     /// W5 前置:导出 GPU 友好扁平数据。
     ///
     /// 在调用方预测位置(`step` 的 1. 阶段)后调用,上传当前 `grains` 位置作为
-    /// 预测快照,并预生成全部 `(i<j)` 接触对(朴素 O(n²),与 CPU 端 `pairs`
+    /// 预测快照,并预生成全部 `(i<j)` 接触对(空间哈希宽相位,与 CPU 端 `pairs`
     /// 一致),供 `par_pairs_reduce` 内核逐对累加 per-body 位移修正。
     pub fn to_gpu_flat(&self) -> GranularFlatData
     where
@@ -329,13 +391,20 @@ impl<T: RealField + Copy> GranularWorld<T> {
             vel.push([f(gr.vel.x), f(gr.vel.y), f(gr.vel.z), 0.0]);
             inv_mass.push(f(gr.inv_mass));
         }
-        let mut pairs = Vec::with_capacity(n * (n.saturating_sub(1)) / 2 * 2);
-        for i in 0..n {
-            for j in (i + 1)..n {
-                pairs.push(i as u32);
-                pairs.push(j as u32);
-            }
+        // 宽相位接触对生成(复用 `_contact_pairs`,与 CPU `step` 一致)。
+        // 用当前 `grains` 位置(= pos 缓冲)作为快照,展开为 flat `u32` 对。
+        let positions_t: Vec<Vec3<T>> = self
+            .grains
+            .iter()
+            .map(|gr| Vec3::new(gr.pos.x, gr.pos.y, gr.pos.z))
+            .collect();
+        let contact = self._contact_pairs(&positions_t);
+        let mut pairs = Vec::with_capacity(contact.len() * 2);
+        for (i, j) in &contact {
+            pairs.push(*i as u32);
+            pairs.push(*j as u32);
         }
+        let npairs = contact.len();
         GranularFlatData {
             n,
             pos,
@@ -343,7 +412,7 @@ impl<T: RealField + Copy> GranularWorld<T> {
             vel,
             inv_mass,
             pairs,
-            npairs: (n * (n.saturating_sub(1)) / 2) as usize,
+            npairs,
             gravity: [f(self.gravity.x), f(self.gravity.y), f(self.gravity.z)],
             bounds_lo: [f(self.bounds_lo.x), f(self.bounds_lo.y), f(self.bounds_lo.z)],
             bounds_hi: [f(self.bounds_hi.x), f(self.bounds_hi.y), f(self.bounds_hi.z)],
@@ -362,6 +431,23 @@ impl<T: RealField + Copy> GranularWorld<T> {
             v += four_thirds_pi * gr.radius * gr.radius * gr.radius;
         }
         v
+    }
+
+    /// 查询当前 `grains` 位置的活跃接触对(球-球非穿透约束的候选集)。
+    ///
+    /// 返回所有满足 `|pos[i]-pos[j]| < r_i+r_j` 且 `i<j` 的对,按 `(i,j)` 升序。
+    /// 内部经 `SpatialGrid` 空间哈希宽相位生成,与 `step` / `to_gpu_flat` 用的
+    /// 接触集完全一致。可用于调试、接触网络可视化或耦合其他子系统。
+    pub fn contact_pairs(&self) -> Vec<(usize, usize)>
+    where
+        T: num_traits::NumCast,
+    {
+        let positions: Vec<Vec3<T>> = self
+            .grains
+            .iter()
+            .map(|gr| Vec3::new(gr.pos.x, gr.pos.y, gr.pos.z))
+            .collect();
+        self._contact_pairs(&positions)
     }
 }
 
