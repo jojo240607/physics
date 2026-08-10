@@ -299,6 +299,15 @@ pub trait GpuBackend {
 
 > W2/W3 无需重构数据布局(像素/射线天然独立),优先做;W4/W5 需先做 `Grid` 扁平化前置重构。
 
+| **W7** ✅ | 运行时切换(runtime switch):流体/颗粒子系统的 `step` 在运行时切到 WebGPU compute,其余子系统(刚体/软体/场/光学)与**全部 `couple` 耦合阶段**仍走 CPU,耦合矩阵完整保留。
+  (1) `phy-core` 新增 `World::step_skipping(dt, skip: &[bool])`:跳过 `skip[i]==true` 子系统的 CPU `step`,但**所有**子系统的 `couple` 照常运行;`World::step` 退化为 `step_skipping(dt, &[])`。
+  (2) `phy-fluid` 新增 `FluidWorld<f64>::to_gpu_flat`(f64→f32 平铺,含 `visc_k`/`visc_n` 这两个 `Vec<f32>` 字段的逐元素转换)。
+  (3) `phy-demo-web`(`gpu` feature)新增 `step_sph_gpu`/`step_granular_gpu`/`step_world_gpu`:GPU 算力/接触投影,主机侧做半隐式欧拉积分(velocity/pos 写回)+ 边界 clamp + 摩擦;GPU 接管后用 `get_mut` 循环(规避私有 `subsystems`)收集 `skip` 掩码再调 `step_skipping`。
+  (4) `DemoApp` 改用 `Rc<RefCell<State>>` + `Rc<RefCell<Option<GpuContext>>>`,使 `frame_gpu` 的 `async` 未来具备 `'static` 以喂 `future_to_promise`;`index.html` 加 GPU 运行时切换开关 + `async` rAF 循环(`gpuMode` 时 `await app.frame_gpu()`)。
+  **验证**:`gpu` 与默认两 wasm 构建均编译通过;`cargo test --workspace` 全过(0 失败);`step_skipping` 逻辑核对——跳过 CPU step 但 couple 全跑。浏览器内实时数值对比本环境无法跑(无 WebGPU 运行时),需真浏览器目测。 | 已落地 |
+
+> W7 是 W1–W6 之上的"总开关",把 GPU 从"仅自测"升级为"可运行时接管生产步进"。B 档 GPU 标量场 stencil / 半拉格朗日平流 / FEM 刚度装配 / SPH 邻居网格构建尚未做(见 §5.7.2);确定性回放(§5.6 S8)尚未做。
+
 ### 5.7.5 不做项(明确排除)
 
 - ❌ 桌面 wgpu / Vulkan / OpenGL compute 后端(避开 MinGW 链接崩溃,见 M3)。
@@ -356,4 +365,50 @@ pub trait GpuBackend {
 - 2026-08-09: W4 完成(§5.7.4)。SPH 逐粒子密度/受力走 GPU。`phy-fluid` 前置重构: `Grid::to_flat`(HashMap 邻居网格→扁平 `FlatGrid{cell_start[c]/sorted[c]}` 前缀和,`grid.rs` 新增 pub(crate))+ `world.rs` 加 `pub build_grid` + `to_gpu_flat` 导出 `SphFlatData`(pos/vel/scalar/cell_start/sorted/grid_min/nc/h/rest_density/stiffness/visc_k/visc_n/shear_min/gravity 全 f32 扁平,`sph/gpu_flat.rs` 新模块 + `lib.rs` 导出);`phy-demo-web` 新增 `phy-fluid` 进 `gpu` feature。`gpu/mod.rs` 译两 wgsl entry point: `density_main`(遍历 27 邻居格算密度 ρ + 近不可压压力标量 p=stiffness·(ρ−rest_density))与 `force_main`(Müller 压力梯度 Spiky + 粘性 Laplacian Visc + 重力 + shear 有效粘度 μ_eff=(ki+shear_min)·|dot(dv,n)|^ni,逐粒子 one-thread 复刻 CPU 内核)。`sph_self_test`(溃坝晶格,报告 mean_rho/rest/ratio/finite/acc0)经 `DemoApp::sph_self_test()` 暴露为 JS Promise。`cargo build ... --features gpu` 通过;默认 + `cargo test -p phy-fluid`(18 passed)零回归。
 - 2026-08-09: W5 完成(§5.7.4)。颗粒 PBD 接触投影走 GPU(`par_pairs_reduce`)。`phy-granular` 新增 `gpu_flat.rs::GranularFlatData`(pos/old/vel/inv_mass/pairs/npairs/gravity/bounds_lo/hi/iterations/vel_damp/friction/dt 扁平)+ `world.rs::to_gpu_flat`(预生成全部 O(n²) 接触对 `(i<j)`,T→f32 经 `num_traits::cast`);`phy-demo-web` 把 `phy-granular` 加进 `gpu` feature 并 `lib.rs` 暴露 `granular_self_test` JS Promise。`gpu/mod.rs` 译三 wgsl entry point: `clear_main`(清 per-body 3 分量 delta 缓冲)→ `contact_main`(每对只读预测位置、按反质量加权算位移修正、以 `atomic<i32>` 定点 ×1e6 累加进 `deltas[i*3+axis]`/`deltas[j*3+axis]`,Jacobi 式确定性 reduce)→ `apply_main`(逐体 `atomicLoad` 还原 delta + 盒边界夹紧写回预测位置);`render_granular_gpu` 在主机端循环 `iterations` 轮 dispatch 后回读 pos。`granular_self_test`(27 颗粒盒,报告 min_gap/overlaps/finite)。`cargo build ... --features gpu` 通过;默认 + `cargo test -p phy-granular` 零回归。至此 §5.7 W1–W5 全部落地,Web Demo 侧 A 档算法(SPH/颗粒 PBD/光学/焦散)GPU 化收尾;后续如需可继续 B/C 档(标量场 stencil、刚体顺序冲量等)但本次按用户口径只做 Web Demo 且 A 档已完成。
 - 2026-08-10: W6 完成(§5.7.4)。把 W1–W5 的 GPU 自测接到 Web 页面。`index.html` 加 GPU 自测面板(5 按钮点按调 `app.{gpu,optic,caustics,sph,granular}_self_test()`,Promise 结果打印到 `<pre>`;非 gpu 构建用 `typeof app.X_self_test==='undefined'` 提示未启用)。新增 `build_gpu.py`(`wasm-pack build --target web --features gpu`,支持 `--release`)重建 `pkg/`。已实跑 `wasm-pack build --target web --features gpu` 产出 pkg(798KB wasm),`phy_demo_web.d.ts` 含全部 5 个 `*_self_test` 方法。默认 `cargo build`/`cargo test -p phy-demo-web`(1 passed)零回归。§5.7 W1–W6 全闭环。
+- 2026-08-10: W7 完成(§5.7.4)。**运行时切换(runtime switch)**:流体/颗粒子系统的 `step` 在运行时切到 WebGPU compute,其余子系统(刚体/软体/场/光学)与**全部 `couple` 耦合阶段**仍走 CPU,耦合矩阵完整保留。
+  (1) `phy-core` 新增 `World::step_skipping(dt, skip: &[bool])`:跳过 `skip[i]==true` 子系统的 CPU `step`,但**所有**子系统的 `couple` 照常运行;`World::step` 退化为 `step_skipping(dt, &[])`。
+  (2) `phy-fluid` 新增 `FluidWorld<f64>::to_gpu_flat`(f64→f32 平铺,含 `visc_k`/`visc_n` 这两个 `Vec<f32>` 字段的逐元素转换)。
+  (3) `phy-demo-web`(`gpu` feature)新增 `step_sph_gpu`/`step_granular_gpu`/`step_world_gpu`:GPU 算力/接触投影,主机侧做半隐式欧拉积分(velocity/pos 写回)+ 边界 clamp + 摩擦;GPU 接管后用 `get_mut` 循环(规避私有 `subsystems`)收集 `skip` 掩码再调 `step_skipping`。
+  (4) `DemoApp` 改用 `Rc<RefCell<State>>` + `Rc<RefCell<Option<GpuContext>>>`,使 `frame_gpu` 的 `async` 未来具备 `'static` 以喂 `future_to_promise`;`index.html` 加 GPU 运行时切换开关 + `async` rAF 循环(`gpuMode` 时 `await app.frame_gpu()`)。
+  **验证**:`gpu` 与默认两 wasm 构建均编译通过;`cargo test --workspace` 全过(0 失败);`step_skipping` 逻辑核对——跳过 CPU step 但 couple 全跑。浏览器内实时数值对比本环境无法跑(无 WebGPU 运行时),需真浏览器目测。
+
+---
+
+## §5.8 库化 hardening 路线图(Library Hardening Roadmap)
+
+**目标**:把 `phy-*` 引擎编译成稳定库,供游戏 / 防战建模等业务调用。当前 12 个 crate 是 Rust `rlib` 依赖图,`phy-core` 泛型 `RealField` + `Subsystem`/`couple` 解耦,`phy-io` 已支持 serde JSON 存档。作为 **Rust 库已较成熟**,但对外(尤其非 Rust 业务)调用有四个硬缺口。按优先级推进:
+
+### L1 【高】全局守恒 / 稳定性回归 + phy-math 测试
+- 新增 `World` 级集成测试(`crates/phy-core/tests/regression_stability.rs`):
+  - 复用 S12 统计观测器(`StatsObserver`),跑 **1000+ 步**断言:(a) 全程无 NaN/Inf(`any field finite`);(b) 孤立系统(无外力、无耦合源项)总动能/动量漂移有界(如 `<1e-3` 相对或 `<1e-6` 绝对值);(c) 子系统数、各子系统 `t` 单调推进。
+  - 覆盖至少 3 个典型场景:① 仅 SPH 溃坝;② SPH+刚体浮力耦合;③ 热场+流体 Boussinesq 闭环。
+- `phy-math` 补基础单测(当前 0 例):`Vec3` 加减/点积/叉积/范数、四元数乘法/归一化、矩阵乘、`clamp`/`lerp` 边界。`crates/phy-math/tests/math.rs`。
+- **交付**:守护"大步数下不静默发散",是库化可信度底线。纯 CPU、不依赖浏览器。
+
+### L2 【高】确定性(S8 数值确定性 / WASM 回放)
+- 固定步长驱动(`World::step(dt)` 用调用方给定 `dt`,引擎层不自行变步长;变步长控制器 S11 作为可选包装);或显式 `step_fixed(dt)`。
+- 确定性浮点:统一 `f64` 严格运算顺序(S7 已把颗粒 PBD 改 Jacobi + 固定索引 reduce 保确定性);新增 `is_deterministic` 集成测试——同初态跑两次 N 步,逐子系统状态差 `<1e-12`(复用 `phy-granular::parallel_solve_is_deterministic` 思路扩展到全 `World`)。
+- 存档读档 + 同种子重放:固定 RNG 种子(`fill_grid` / 撒布用可注入 `rng`),读档后重放得逐位一致结果。
+- **交付**:防战建模"同输入同输出"可复现硬门槛。
+
+### L3 【高】C ABI 层(`phy-ffi` 新 crate)
+- 新建 `crates/phy-ffi`:`cbindgen` 生成 C 头,暴露 `extern "C"` 稳定接口:
+  - `world_create()` / `world_step(w, dt)` / `world_destroy(w)`
+  - 子系统增删:`world_add_rigid/rluid_fluid/...` 或通用 `world_add_subsystem(tag, json_cfg)`
+  - 状态读写:`world_get_positions(w, buf, len)` / `world_set_external_force(...)`
+  - 存档:`world_save(w, path)` / `world_load(w, path)`(复用 `phy-io`)
+- 统一错误码 + 不抛 panic(`catch_unwind` 包所有 FFI 入口)。
+- **交付**:Unity/Unreal/C++ 业务可直接链接;游戏侧用 `cdylib` 产物。
+
+### L4 【中】性能基线 / 全局 NaN 看门狗 / GPU 数值实测
+- 新增 `crates/phy-core/benches/`(criterion):SPH 溃坝 N 体帧耗时、刚体 M 体接触帧耗时,作为回归基线(防战建模需量化吞吐)。
+- `World` 级看门狗:`step` 后若检测到 NaN/Inf 或某子系统 `t` 未推进,返回 `Err(WorldError)` 而非静默污染(业务侧可捕获报警)。
+- 浏览器实测 W7:在支持 WebGPU 的 Chrome 跑 `set_gpu_mode(true)`,确认 GPU 与 CPU 数值一致(否则 GPU 路径不能对外宣称可用)。
+- **交付**:性能可量化 + 大场景不静默崩溃 + GPU 路径可信。
+
+### 当前测试力度盘点(2026-08-10)
+- 全 workspace 单测 ≈ 110+,全部绿灯,0 失败。分布:phy-core 12 / phy-demo 10(E2E 耦合) / phy-rigid ~50 / phy-soft 20 / phy-field ~23 / phy-fluid 18 / phy-granular 5 / phy-solid 4 / phy-io 3 / phy-optics 7 / phy-demo-web 1 / phy-math **0**。
+- 强项:每个里程碑带单测 + 端到端 `World` 耦合测试。
+- 缺口:① 无全局守恒/稳定性回归(L1);② `phy-math` 零测试(L1);③ 无确定性保证(L2);④ 无 C ABI(L3);⑤ 无性能基线 + 全局看门狗(L4);⑥ GPU 路径未数值验证(L4)。
+- 结论:作为 Rust 库**核心物理与耦合已可信**,但需先过 L1(纯 CPU、立刻可做)再推进 L2/L3 才能对外(尤其非 Rust)稳定供货。
 
