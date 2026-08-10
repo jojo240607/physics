@@ -468,4 +468,5 @@ pub trait GpuBackend {
 - 强项:每个里程碑带单测 + 端到端 `World` 耦合测试 + **L1 全局稳定性回归(无 NaN/子系统不丢/时钟单调)** + **L2 数值确定性(重复运行逐位一致 + 存档重放一致)**。
 - 缺口(剩余):① GPU 数值一致性仅完成 CPU 端路由验证 + 浏览器端手动核对步骤,缺自动化 CI(需真实 WebGPU adapter)。
 - 结论:作为 Rust 库**核心物理、耦合、稳定性、确定性、C ABI(L3)、性能基线(L4-1)、NaN 看门狗(L4-2)、W7 路由(L4-3)、用户向文档/doctest(README + 4 处可运行示例)均已可信**,可对外(尤其非 Rust 业务)稳定供货;GPU 为 Web 限定/特定工具链可解锁的附加项。
+- **WASM 交叉编译护栏已落地(2026-08-10)**:新增 `wasm-cross-check.py`,对 `phy-core`(S8 replay / L2 WASM 回放核心)与 `phy-demo-web`(W1–W7 Web 消费端,默认 + `--gpu`)交叉编译至 `wasm32-unknown-unknown`,确保 S8/L2/W7 的 "wasm32 兼容" 声明不被后续改动静默破坏(`phy-ffi` 为 `cdylib`,桌面专用,故意排除)。已实跑通过:`phy-core` 与 `phy-demo-web` 默认构建均成功产出 wasm。
 
