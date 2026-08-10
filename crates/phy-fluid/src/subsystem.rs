@@ -4,7 +4,7 @@ use std::any::Any;
 
 use phy_core::{Subsystem, World};
 use phy_field::HeatField;
-use phy_math::RealField;
+use phy_math::{RealField, Vec3};
 use phy_rigid::RigidSubsystem;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -144,5 +144,21 @@ impl<T: RealField + Copy + num_traits::ToPrimitive + num_traits::Float> Subsyste
 
     fn name(&self) -> &'static str {
         "fluid"
+    }
+
+    fn total_momentum(&self) -> Vec3<T> {
+        let mut p = Vec3::zeros();
+        for pt in &self.world.particles {
+            p += pt.vel * pt.mass;
+        }
+        p
+    }
+
+    fn kinetic_energy(&self) -> T {
+        let mut e = T::zero();
+        for pt in &self.world.particles {
+            e += (pt.vel.norm_squared() * pt.mass) / (T::one() + T::one());
+        }
+        e
     }
 }

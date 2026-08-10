@@ -385,6 +385,12 @@ pub trait GpuBackend {
 - `phy-math` 补基础单测(当前 0 例):`Vec3` 加减/点积/叉积/范数、四元数乘法/归一化、矩阵乘、`clamp`/`lerp` 边界。`crates/phy-math/tests/math.rs`。
 - **交付**:守护"大步数下不静默发散",是库化可信度底线。纯 CPU、不依赖浏览器。
 
+#### L1 增强:全局守恒量诊断 API(`World::total_momentum` / `World::kinetic_energy`)
+- `phy-core` `Subsystem` trait 新增两个默认方法 `total_momentum() -> Vec3<T>`、`kinetic_energy() -> T`(默认零),供 `World` 在仿真全程采样总动量 / 总动能;`World` 新增对应聚合方法,遍历各子系统求和。
+- 四个含质量子系统覆写:`phy-rigid`(平动 + 转动 ½ωᵀIω,转动惯量取 `inv_inertia_world` 逆)、`phy-fluid`(Σ½m|v|²)、`phy-granular`(Σ½m|v|²)、`phy-soft`(Σ½m|v|²,逐粒子)。
+- 新增 `crates/phy-demo/tests/library_hardening.rs`:轻量默认回归 `diagnostics_api_reports_energy_and_momentum`(静止物体能量/动量≈0、2m/s 的 1kg 球 KE=2 / 动量=(2,0,0) 精确);其余 5 个守恒/稳定性/确定性重负载用例标记 `#[ignore]`,与既有 `regression_stability.rs` / `determinism.rs` 同约定,经 `cargo test --release -p phy-demo -- --ignored` 跑。
+- **价值**:除"无 NaN + 时钟单调"外,新增"动能有界不爆炸 / 下落物体收敛静止 / 同构造逐位一致 / 存档重放 1e-9 内一致"的可量化守恒断言,且把守恒量采样能力作为公共 API 暴露给业务层。
+
 ### L2 【高】确定性(S8 数值确定性 / WASM 回放)
 - 固定步长驱动(`World::step(dt)` 用调用方给定 `dt`,引擎层不自行变步长;变步长控制器 S11 作为可选包装);或显式 `step_fixed(dt)`。
 - 确定性浮点:统一 `f64` 严格运算顺序(S7 已把颗粒 PBD 改 Jacobi + 固定索引 reduce 保确定性);新增 `is_deterministic` 集成测试——同初态跑两次 N 步,逐子系统状态差 `<1e-12`(复用 `phy-granular::parallel_solve_is_deterministic` 思路扩展到全 `World`)。

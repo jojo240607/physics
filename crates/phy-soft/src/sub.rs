@@ -5,7 +5,7 @@ use std::any::Any;
 use phy_core::{Subsystem, World};
 use phy_field::HeatField;
 use phy_fluid::{CouplePoint, FluidSubsystem};
-use phy_math::RealField;
+use phy_math::{RealField, Vec3};
 use phy_rigid::RigidSubsystem;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -189,5 +189,27 @@ impl<T: RealField + Copy + num_traits::ToPrimitive + num_traits::Float> Subsyste
 
     fn name(&self) -> &'static str {
         "soft"
+    }
+
+    fn total_momentum(&self) -> Vec3<T> {
+        let mut p = Vec3::zeros();
+        for p0 in &self.body.particles {
+            if p0.inv_mass > T::zero() {
+                let m = T::one() / p0.inv_mass;
+                p += p0.vel * m;
+            }
+        }
+        p
+    }
+
+    fn kinetic_energy(&self) -> T {
+        let mut e = T::zero();
+        for p0 in &self.body.particles {
+            if p0.inv_mass > T::zero() {
+                let m = T::one() / p0.inv_mass;
+                e += (p0.vel.norm_squared() * m) / (T::one() + T::one());
+            }
+        }
+        e
     }
 }

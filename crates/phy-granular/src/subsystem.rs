@@ -3,7 +3,7 @@
 use std::any::Any;
 
 use phy_core::world::Subsystem;
-use phy_math::RealField;
+use phy_math::{RealField, Vec3};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -58,5 +58,27 @@ impl<T: RealField + Copy + num_traits::Float> Subsystem<T> for GranularSubsystem
 
     fn name(&self) -> &'static str {
         "granular"
+    }
+
+    fn total_momentum(&self) -> Vec3<T> {
+        let mut p = Vec3::zeros();
+        for g in &self.world.grains {
+            if g.inv_mass > T::zero() {
+                let m = T::one() / g.inv_mass;
+                p += g.vel * m;
+            }
+        }
+        p
+    }
+
+    fn kinetic_energy(&self) -> T {
+        let mut e = T::zero();
+        for g in &self.world.grains {
+            if g.inv_mass > T::zero() {
+                let m = T::one() / g.inv_mass;
+                e += (g.vel.norm_squared() * m) / (T::one() + T::one());
+            }
+        }
+        e
     }
 }

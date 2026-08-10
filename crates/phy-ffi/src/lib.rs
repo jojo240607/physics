@@ -10,7 +10,7 @@
 //! 编译产物:`cargo build -p phy-ffi --release` → `target/release/phy_ffi.{dll,so,dylib}`。
 //! C 头:`PHY_FFI_GEN_HEADER=1 cargo build -p phy-ffi` → `crates/phy-ffi/phy_ffi.h`。
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::panic::{self, AssertUnwindSafe};
 
 use phy_core::World;

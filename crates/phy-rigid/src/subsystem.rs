@@ -4,7 +4,7 @@ use std::any::Any;
 
 use phy_core::{Subsystem, World};
 use phy_field::{EmField, GravField, HeatField};
-use phy_math::RealField;
+use phy_math::{RealField, Vec3};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -173,5 +173,32 @@ impl<T: RealField + Copy + num_traits::ToPrimitive + num_traits::Float> Subsyste
 
     fn name(&self) -> &'static str {
         "rigid"
+    }
+
+    fn total_momentum(&self) -> Vec3<T> {
+        let mut p = Vec3::zeros();
+        for b in &self.world.bodies {
+            if b.inv_mass > T::zero() {
+                let m = T::one() / b.inv_mass;
+                p += b.vel * m;
+            }
+        }
+        p
+    }
+
+    fn kinetic_energy(&self) -> T {
+        let mut e = T::zero();
+        for b in &self.world.bodies {
+            if b.inv_mass > T::zero() {
+                let m = T::one() / b.inv_mass;
+                e += (b.vel.norm_squared() * m) / (T::one() + T::one());
+                // 转动动能 ½ ωᵀ I ω,其中 I = inv_inertia_world 的逆。
+                if let Some(iw_inv) = b.inv_inertia_world().clone().try_inverse() {
+                    let iw = iw_inv * b.ang_vel;
+                    e += (b.ang_vel.dot(&iw)) / (T::one() + T::one());
+                }
+            }
+        }
+        e
     }
 }

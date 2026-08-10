@@ -8,7 +8,7 @@
 use std::any::Any;
 
 use crate::events::{EventBus, EventKind, WorldEvent};
-use phy_math::RealField;
+use phy_math::{RealField, Vec3};
 
 /// 物理子系统接口:任何可挂在 World 上的物理规则。
 ///
@@ -54,6 +54,23 @@ pub trait Subsystem<T: RealField>: Any {
     fn validate(&self) -> Result<(), crate::WorldError> {
         let _ = self;
         Ok(())
+    }
+
+    /// 总线动量 `Σ m·v`(含本子系统所有自由度)。默认零向量。
+    ///
+    /// 含质量的物理子系统(刚体 / 流体 / 颗粒 / 软体)应覆写,供 `World::total_momentum`
+    /// 在仿真全程采样以断言动量守恒 / 稳定性。
+    fn total_momentum(&self) -> Vec3<T> {
+        let _ = self;
+        Vec3::zeros()
+    }
+
+    /// 总动能 `Σ ½m·|v|² + ½I·ω²`(含平动 + 转动)。默认 0。
+    ///
+    /// 用于 `World::kinetic_energy` 的稳定性回归:无外力注入时不应单调增长(爆炸)。
+    fn kinetic_energy(&self) -> T {
+        let _ = self;
+        T::zero()
     }
 }
 
@@ -244,6 +261,30 @@ impl<T: RealField> World<T> {
     /// [`World::step`] 的看门狗版本。
     pub fn step_checked(&mut self, dt: T) -> Result<(), crate::WorldError> {
         self.step_skipping_checked(dt, &[])
+    }
+}
+
+impl<T: RealField + Copy + num_traits::Float> World<T> {
+    /// 汇总所有子系统的总线动量(`Σ m·v`)。用于守恒回归:闭合系统下应随时间恒定。
+    pub fn total_momentum(&self) -> Vec3<T> {
+        let mut p = Vec3::zeros();
+        let mut i = 0;
+        while let Some(s) = self.get(i) {
+            p += s.total_momentum();
+            i += 1;
+        }
+        p
+    }
+
+    /// 汇总所有子系统的总动能。用于稳定性回归:无外力注入时不应单调增长(爆炸)。
+    pub fn kinetic_energy(&self) -> T {
+        let mut e = T::zero();
+        let mut i = 0;
+        while let Some(s) = self.get(i) {
+            e += s.kinetic_energy();
+            i += 1;
+        }
+        e
     }
 }
 
