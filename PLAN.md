@@ -508,7 +508,7 @@ pub trait GpuBackend {
 - [x] 2026-08-10:计划写入 PLAN(本节)。
 - [x] **P1**(2026-08-10):统一 workspace 语义化 `version`(`[workspace.package]` 0.1.0),补齐 `repository`/`description`/`readme`/`rust-version`(MSRV 1.74),理顺 `phy-demo-web`/`phy-soft` 两处内联版本;新增 `CHANGELOG.md`(Keep a Changelog 格式,记录 0.1.0 已落地能力与已知限制)。
 - [x] **P2**(2026-08-10):`build_package.py` 在 Windows 目标下从头文件解析 `phy_*` 导出、生成 `phy_ffi.def` 并经 `llvm-dlltool` 额外产出 MSVC 导入库 `phy_ffi.lib`(已实跑通过,`pkg/release/` 现含 `libphy_ffi.dll.a` + `phy_ffi.lib` 双导入库);`USAGE.md` 区分 MinGW/MSVC/Unity(P/Invoke)/Unreal 链接方式。
-- [ ] **P3**:FFI f32/f64 双精度入口。
+- [x] **P3**(2026-08-10):`phy-ffi/src/lib.rs` 新增 f32 通道入口——`phy_world_step_f32`(dt 走 f32,内部 cast f64)+ `phy_world_get_fluid_positions_f32` / `phy_world_get_fluid_velocities_f32` / `phy_world_get_rigid_transforms_f32`(写回 `f32` 缓冲,save 50% 带宽,对齐 GPU/Unity f32 世界)。内部世界恒 `World<f64>`(保 S8 回放确定性),精度在边界 cast,ABI 稳定且同一世界可混用 f32/f64 入口。新增测试 `ffi_f32_channel_matches_f64`(验证 f32 是 f64 精确 cast)/`ffi_f32_null_pointer_is_safe`。cbindgen 头与 `build_package.py` 的 def 正则自动覆盖新符号,无需手工改脚本。`cargo test -p phy-ffi` 6 用例 + 1 doc 全过。
 - [x] **P4**(2026-08-10):`phy-granular/src/world.rs` 把 `step()` 与 `to_gpu_flat()` 的宽相位从朴素 O(n²) 改为复用 `phy_core::SpatialGrid`(cell_size = 2·max_radius,扫描邻近 27 桶 + 精确球-球判定 + 固定升序去重,保证确定性且与暴力集合等价)。新增私有 `_contact_pairs()`(f64 网格,免扩散泛型 bound)供两处复用,并新增公开 `contact_pairs()` 查询 API。补 3 测试:`spatial_hash_matches_bruteforce_contacts`(证明宽相位不漏不误)、`large_scale_runs_without_overlap`(5000 颗粒步进单步 <2s 且残余穿透 <3% 半径)、复用既有 `parallel_solve_is_deterministic`。`cargo test -p phy-granular` 全过,`cargo build --workspace` 无回归。
 - [ ] **P5**:GPU 数值一致性验收。
 - [ ] **P6**:警告清零。

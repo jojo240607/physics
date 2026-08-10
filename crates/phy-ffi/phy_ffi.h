@@ -94,4 +94,27 @@ PhyWorldHandle *phy_world_load(const char *path);
 // 释放世界句柄。重复释放或空指针安全(no-op)。
 void phy_world_destroy(PhyWorldHandle *w);
 
+// # 双精度条目(P3)
+//
+// 内部世界始终以 `f64` 运行(精度/确定性见 S8 回放契约),但 FFI 边界额外提供
+// **f32 通道**:步进的 `dt` 可为 f32(`phy_world_step_f32`),所有读回缓冲可为
+// f32(`*_f32` 系列),写回时 cast `f64 → f32`。游戏/实时业务用 f32 通道可节省
+// 一半内存带宽并直接对接 GPU/Unity 的 f32 顶点缓冲,无需自己转换。
+//
+// 注意:同一世界可混用 f32/f64 入口(精度在边界转换,内部状态恒 f64),ABI 稳定。
+// 步进仿真 `dt` 秒(f32 入口,内部 cast 为 f64)。返回 0 成功,-1 失败。
+int32_t phy_world_step_f32(PhyWorldHandle *w,
+                           float dt);
+
+// 把所有流体粒子的位置(x,y,z 交错)写入 `buf`(长度 `len` 个 f32)。
+// 返回实际写入的粒子数。f32 通道,省一半带宽,直接对接 GPU/Unity f32 缓冲。
+uintptr_t phy_world_get_fluid_positions_f32(PhyWorldHandle *w, float *buf, uintptr_t len);
+
+// 把所有流体粒子的速度(x,y,z 交错)写入 f32 `buf`。返回写入粒子数。
+uintptr_t phy_world_get_fluid_velocities_f32(PhyWorldHandle *w, float *buf, uintptr_t len);
+
+// 把所有刚体的位姿(pos.x,y,z + quat.w,i,j,k,共 7 个 f32 交错)写入 `buf`。
+// 返回写入的刚体数。
+uintptr_t phy_world_get_rigid_transforms_f32(PhyWorldHandle *w, float *buf, uintptr_t len);
+
 #endif  /* PHY_FFI_H */
