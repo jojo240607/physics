@@ -17,6 +17,22 @@ typedef struct {
 } PhyWorldHandle;
 
 // 创建流体(溃坝)世界。返回不透明句柄(失败返回 NULL)。
+//
+// # 示例(Rust 侧等价调用;实践中由 C/C++/Unity/C# 经 `phy_ffi.h` 调用)
+//
+// ```
+// use phy_ffi::{phy_world_create_fluid, phy_world_step_checked,
+//               phy_world_fluid_count, phy_world_destroy};
+//
+// let w = phy_world_create_fluid();
+// assert!(!w.is_null());
+// // 推进并用看门狗保证数值有限;返回 0 表示健康。
+// for _ in 0..50 {
+//     assert_eq!(phy_world_step_checked(w, 0.005), 0);
+// }
+// assert!(phy_world_fluid_count(w) > 0);
+// phy_world_destroy(w); // 释放,空指针安全 no-op
+// ```
 PhyWorldHandle *phy_world_create_fluid(void);
 
 // 创建刚体(下落球)世界。
