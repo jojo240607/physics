@@ -1,0 +1,31 @@
+[package]
+name = "phy-ffi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "C ABI layer for the physics engine (cdylib for C/C++/Unity/Unreal linking)."
+
+[lib]
+# 同时产出 cdylib(供 C/C++ 业务 dlopen/链接) 与 rlib(供 Rust 侧单测)。
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+phy-core = { path = "../phy-core" }
+phy-math = { path = "../phy-math" }
+phy-rigid = { path = "../phy-rigid" }
+phy-fluid = { path = "../phy-fluid" }
+phy-granular = { path = "../phy-granular" }
+phy-field = { path = "../phy-field" }
+phy-soft = { path = "../phy-soft" }
+phy-solid = { path = "../phy-solid" }
+phy-optics = { path = "../phy-optics" }
+phy-io = { path = "../phy-io" }
+
+nalgebra.workspace = true
+serde.workspace = true
+num-traits.workspace = true
+
+[build-dependencies]
+# 仅在设置 PHY_FFI_GEN_HEADER=1 时由 build.rs 调用,生成 C 头文件;不拖慢常规构建。
+cbindgen = "0.27"

@@ -391,14 +391,28 @@ pub trait GpuBackend {
 - 存档读档 + 同种子重放:固定 RNG 种子(`fill_grid` / 撒布用可注入 `rng`),读档后重放得逐位一致结果。
 - **交付**:防战建模"同输入同输出"可复现硬门槛。
 
-### L3 【高】C ABI 层(`phy-ffi` 新 crate)
-- 新建 `crates/phy-ffi`:`cbindgen` 生成 C 头,暴露 `extern "C"` 稳定接口:
-  - `world_create()` / `world_step(w, dt)` / `world_destroy(w)`
-  - 子系统增删:`world_add_rigid/rluid_fluid/...` 或通用 `world_add_subsystem(tag, json_cfg)`
-  - 状态读写:`world_get_positions(w, buf, len)` / `world_set_external_force(...)`
-  - 存档:`world_save(w, path)` / `world_load(w, path)`(复用 `phy-io`)
-- 统一错误码 + 不抛 panic(`catch_unwind` 包所有 FFI 入口)。
-- **交付**:Unity/Unreal/C++ 业务可直接链接;游戏侧用 `cdylib` 产物。
+### L3 【高】C ABI 层(`phy-ffi` 新 crate) ✅ 已落地
+- 新建 `crates/phy-ffi`:`crate-type = ["cdylib", "rlib"]`,`cbindgen` 生成 C 头(`PhyWorldHandle *` 不透明柄,**纯 C 安全**:`World<double>` 模板语法已规避)。
+- 暴露 `extern "C"` 稳定接口(句柄为 `*mut PhyWorldHandle`,Rust 侧 `Box<World<f64>>` 拥有,边界指针转换):
+  - 工厂:`phy_world_create_fluid / _rigid / _granular / _coupled` → 溃坝 / 下落球 / 颗粒堆积 / 流体+刚体耦合四个典型场景。
+  - 步进/查询:`phy_world_step(w, dt)`(0/-1) / `phy_world_time` / `phy_world_sub_count` / `phy_world_fluid_count` / `phy_world_rigid_count`。
+  - 状态读回:`phy_world_get_fluid_positions/velocities(w, buf, len)`(x,y,z 交错) / `phy_world_get_rigid_transforms(w, buf, len)`(pos+quat 共 7 f64 交错)。
+  - 存档:`phy_world_save(w, path)` / `phy_world_load(path)`(复用 `phy-io` JSON 序列化,`T=f64`)。
+  - 释放:`phy_world_destroy(w)`(空指针/重复释放安全 no-op)。
+- 所有入口经 `catch_unwind(AssertUnwindSafe(...))` 包裹,**Rust panic 绝不跨 FFI**(已单测 `ffi_null_pointer_is_safe` 验证空指针返回哨兵而非崩溃)。指针访问统一走 `as_world`/`nonnull_slice` 辅助,杜绝越界。
+- 3 个 Rust 单测全过:生命周期+读回无 NaN / 存档载入 roundtrip / 空指针安全。
+- **交付**:`cargo build -p phy-ffi --release` → `target/release/phy_ffi.{dll,so,dylib}`;头 `PHY_FFI_GEN_HEADER=1 cargo build -p phy-ffi` → `crates/phy-ffi/phy_ffi.h`。Unity/Unreal/C++ 业务可 `dlopen`/链接调用。
+- C 侧最小用法:
+  ```c
+  #include "phy_ffi.h"
+  PhyWorldHandle *w = phy_world_create_fluid();
+  double pos[3 * phy_world_fluid_count(w)];
+  for (int f = 0; f < 200; f++) phy_world_step(w, 0.005);
+  phy_world_get_fluid_positions(w, pos, 3 * phy_world_fluid_count(w));
+  phy_world_save(w, "scene.json");
+  phy_world_destroy(w);
+  ```
+- 后续可扩:`phy_world_set_external_force`(外部施力注入)、`phy_world_add_subsystem(tag, json_cfg)`(动态组装场景)、GPU 路径开关(见 §5.8 GPU 约束,需 MSVC/Linux 工具链解锁桌面 wgpu)。
 
 ### L4 【中】性能基线 / 全局 NaN 看门狗 / GPU 数值实测
 - 新增 `crates/phy-core/benches/`(criterion):SPH 溃坝 N 体帧耗时、刚体 M 体接触帧耗时,作为回归基线(防战建模需量化吞吐)。
