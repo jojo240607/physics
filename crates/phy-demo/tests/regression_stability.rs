@@ -65,27 +65,32 @@ fn run_stability(mode: DemoMode, steps: usize, dt: f64) {
     );
 }
 
+#[ignore = "heavy numerical regression; run: cargo test --release -p phy-demo -- --ignored"]
 #[test]
 fn fluid_dam_break_stable_200_steps() {
     run_stability(DemoMode::Fluid, 200, 0.005);
 }
 
+#[ignore = "heavy numerical regression; run: cargo test --release -p phy-demo -- --ignored"]
 #[test]
 fn fluid_heat_couple_stable_200_steps() {
     run_stability(DemoMode::FluidHeat, 200, 0.005);
 }
 
+#[ignore = "heavy numerical regression; run: cargo test --release -p phy-demo -- --ignored"]
 #[test]
 fn rigid_fluid_buoyancy_stable_200_steps() {
     // 刚体+流体耦合场景(All 模式含刚体+流体+热)。
     run_stability(DemoMode::All, 200, 0.005);
 }
 
+#[ignore = "heavy numerical regression; run: cargo test --release -p phy-demo -- --ignored"]
 #[test]
 fn soft_cloth_stable_200_steps() {
     run_stability(DemoMode::Soft, 200, 0.005);
 }
 
+#[ignore = "heavy numerical regression; run: cargo test --release -p phy-demo -- --ignored"]
 #[test]
 fn optics_scene_stable_100_steps() {
     // 光学场景 step 主要是相机渲染,但 world.step 仍驱动子系统,跑若干步确认无发散。

@@ -406,9 +406,21 @@ pub trait GpuBackend {
 - 浏览器实测 W7:在支持 WebGPU 的 Chrome 跑 `set_gpu_mode(true)`,确认 GPU 与 CPU 数值一致(否则 GPU 路径不能对外宣称可用)。
 - **交付**:性能可量化 + 大场景不静默崩溃 + GPU 路径可信。
 
-### 当前测试力度盘点(2026-08-10)
-- 全 workspace 单测 ≈ 110+,全部绿灯,0 失败。分布:phy-core 12 / phy-demo 10(E2E 耦合) / phy-rigid ~50 / phy-soft 20 / phy-field ~23 / phy-fluid 18 / phy-granular 5 / phy-solid 4 / phy-io 3 / phy-optics 7 / phy-demo-web 1 / phy-math **0**。
-- 强项:每个里程碑带单测 + 端到端 `World` 耦合测试。
-- 缺口:① 无全局守恒/稳定性回归(L1);② `phy-math` 零测试(L1);③ 无确定性保证(L2);④ 无 C ABI(L3);⑤ 无性能基线 + 全局看门狗(L4);⑥ GPU 路径未数值验证(L4)。
-- 结论:作为 Rust 库**核心物理与耦合已可信**,但需先过 L1(纯 CPU、立刻可做)再推进 L2/L3 才能对外(尤其非 Rust)稳定供货。
+### 库化业务的 GPU 约束(关键约束,避免误解)
+- **引擎的 GPU 后端仅限 Web Demo**(`wasm32 + feature=gpu`,浏览器 WebGPU):A 档(SPH 密度/受力、颗粒 PBD 接触、光学逐像素 trace、焦散)已上 GPU,W7 可运行时接管流体/颗粒 step。
+- **库化交付的 Rust/C 库默认是 CPU(rayon 并行)确定性实现,不含 GPU**:① 桌面 wgpu 在本机 MinGW 8.1 链接器崩溃(`corrupt .drectve`,M3 决策放弃),走 rayon CPU;② §5.7.5 明确排除桌面 GPU。
+- **刚体/关节/破碎/CCD/车辆/软体布料本就不适合 GPU**(强顺序依赖或规模太小,B/C 档矩阵),做 GPU 收益低。
+- **若业务确需 GPU,两条路**:(a) 换非 MinGW 工具链(Linux / macOS / **MSVC VS2019+**)可重新启用 wgpu 桌面后端——数值内核已与 wgsl 一一对应,只需把 `GpuContext` 从 WebGPU 适配到 wgpu 原生;(b) 业务侧自带 GPU 框架,以已验证的 CPU 数值内核为参考实现自写 compute shader。
+
+### 重数值回归的运行方式
+- L1/L2 的 8 个重负载集成测试(SPH/刚体耦合 200 步)在 debug 下较慢,已标记 `#[ignore]`,**默认 `cargo test` 跳过**,不拖慢单元测试。
+- 完整数值回归(确定性 + 稳定性)用 release + ignored 运行:
+  `cargo test --release -p phy-demo -- --ignored`
+  (release 下 SPH 提速约 10–50×,整套 < 1 分钟)。
+
+### 当前测试力度盘点(2026-08-10,含 L1/L2 后)
+- 全 workspace 单测 ≈ 120+,全部绿灯,0 失败。分布:phy-core 12 / phy-demo 10(E2E 耦合) + 8(ignored 重负载回归) / phy-rigid ~50 / phy-soft 20 / phy-field ~23 / phy-fluid 18 / phy-granular 5 / phy-solid 4 / phy-io 3 / phy-optics 7 / phy-demo-web 1 / **phy-math 8(原 0)**。
+- 强项:每个里程碑带单测 + 端到端 `World` 耦合测试 + **L1 全局稳定性回归(无 NaN/子系统不丢/时钟单调)** + **L2 数值确定性(重复运行逐位一致 + 存档重放一致)**。
+- 缺口(剩余):① 无 C ABI(L3);② 无性能基线 + 全局 NaN 看门狗(L4);③ GPU 路径未数值验证(L4);④ 文档/doc-test 近 0(对外可用性)。
+- 结论:作为 Rust 库**核心物理、耦合、稳定性、确定性已可信**,过 L3(FFI)即可对外(尤其非 Rust)稳定供货;GPU 为 Web 限定/特定工具链可解锁的附加项。
 
