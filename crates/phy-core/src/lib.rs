@@ -20,6 +20,9 @@ pub use timestep::{StepMode, TimeController};
 pub mod stats;
 pub use stats::{attach_stats_observer, StatsObserver};
 
+pub mod replay;
+pub use replay::{FrameInput, Replay, ReplayPlayer, Rng};
+
 /// 引擎错误类型。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

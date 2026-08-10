@@ -11,6 +11,7 @@
 //!   (证明序列化链路不丢精度、不引入非确定性;派生缓存重置仅带来 1 ULP 级浮点求和差异)。
 
 use nalgebra::UnitQuaternion;
+use phy_core::replay::{FrameInput, Replay};
 use phy_core::World;
 use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
 use phy_io::{load_world_json, save_world_json};
@@ -242,4 +243,46 @@ fn diagnostics_api_reports_energy_and_momentum() {
     assert!((w1.kinetic_energy() - 2.0).abs() < 1e-9, "动能应=2, 实际={}", w1.kinetic_energy());
     let p = w1.total_momentum();
     assert!((p.x - 2.0).abs() < 1e-9 && p.y.abs() < 1e-12 && p.z.abs() < 1e-12, "动量应=(2,0,0)");
+}
+
+/// S8 确定性回放(主机端):录制一段多物理会话(变化的 `dt` + 每帧确定性种子),
+/// 再用 `Replay` 从同一初始快照重放,断言终态世界 **逐位一致**(存档 JSON 完全相同)。
+///
+/// 这覆盖了 §5.6 S8「确定性回放」——防战建模 / 可复现演示要求同一输入序列复现同一轨迹,
+/// 即使存在逐帧随机种子(供将来随机构造复用)。
+#[test]
+fn s8_deterministic_replay_reproduces_trajectory() {
+    // 录制阶段:构造耦合世界,记录初始快照 + 逐帧 (dt, seed)。
+    let mut world = coupled_world();
+    let snapshot = save_world_json(&world);
+    let mut replay = Replay::new(snapshot);
+
+    // 变化的步长与种子,模拟一段"外部输入驱动"的会话。
+    let dts = [0.01f64, 0.02, 0.01, 0.015, 0.01, 0.02, 0.01, 0.025];
+    for (i, &dt) in dts.iter().enumerate() {
+        let seed = 0xA11CE ^ (i as u64 * 0x9E3779B9);
+        replay.record(dt, seed);
+        world.step_seeded(dt, seed);
+    }
+    let recorded_final = save_world_json(&world);
+
+    // 回放阶段:从同一快照 + 录制序列重建并重放。
+    let replayed_final = replay
+        .into_player()
+        .replay(load_world_json, |w, f: FrameInput| {
+            w.step_seeded(f.dt, f.seed);
+        });
+    let replayed_json = save_world_json(&replayed_final);
+
+    // 比较**语义状态**而非原始字符串:存档中可能存在 HashMap 派生的字段(如刚体
+    // 附属电荷表),其序列化键序在不同 World 实例间不保证一致。逐位复现的判据是
+    // 解析后的数值内容完全相等,而非 JSON 字节序相同。
+    let recorded_val: serde_json::Value =
+        serde_json::from_str(&recorded_final).expect("parse recorded archive");
+    let replayed_val: serde_json::Value =
+        serde_json::from_str(&replayed_json).expect("parse replayed archive");
+    assert_eq!(
+        replayed_val, recorded_val,
+        "回放终态必须与录制终态逐位一致(确定性回放失败)"
+    );
 }

@@ -84,6 +84,9 @@ pub struct World<T: RealField> {
     pub bus: EventBus<T>,
     /// 是否已发出 `SimStart`(首次 step 前)。
     started: bool,
+    /// 当前步的确定性随机种子(由 `step_seeded` 写入,供子系统在 `step`/`couple`
+    /// 内经 `World::seed` 取用,使任何随机构造(抖动、采样)可经回放复现)。
+    current_seed: u64,
 }
 
 impl<T: RealField> Default for World<T> {
@@ -145,7 +148,16 @@ impl<T: RealField> World<T> {
             t: T::zero(),
             bus: EventBus::new(),
             started: false,
+            current_seed: 0,
         }
+    }
+
+    /// 当前步的确定性随机种子(由最近一次 `step_seeded` 写入)。
+    ///
+    /// 子系统在 `step`/`couple` 中经此取用确定性随机源,使随机构造(起始抖动、
+    /// 粒子采样、蒙特卡洛耦合)可经 [crate::replay] 录制后在回放时逐位复现。
+    pub fn seed(&self) -> u64 {
+        self.current_seed
     }
 
     /// 注册一个子系统。
@@ -210,6 +222,16 @@ impl<T: RealField> World<T> {
     /// 通常用于 Web 演示的「运行时切换」:把流体 / 颗粒子系统的力学 step 路由到
     /// GPU compute,其余子系统仍走 CPU,耦合矩阵保持完整。
     pub fn step_skipping(&mut self, dt: T, skip: &[bool]) {
+        self.step_skipping_seeded(dt, skip, 0);
+    }
+
+    /// 确定性步进:与 [`World::step_skipping`] 等价,但先把 `seed` 写入世界
+    /// ([`World::seed`]),供子系统取用确定性随机源。
+    ///
+    /// 这是 [`crate::replay`] 回放的基础设施——录制每一帧的 `(dt, seed)` 序列后,
+    /// 以相同序列重放即可得到逐位一致的轨迹。普通 `step` 以 `seed = 0` 调用本函数。
+    pub fn step_skipping_seeded(&mut self, dt: T, skip: &[bool], seed: u64) {
+        self.current_seed = seed;
         if !self.started {
             self.started = true;
             self.bus.publish_world(WorldEvent::SimStart);
@@ -241,7 +263,14 @@ impl<T: RealField> World<T> {
     /// 各 subsystem `couple`(子系统可在其中经 `world.bus` 发布自定义事件)→
     /// 发 `Step{t,dt}` → `bus.flush()` 把本步累积的事件统一分发给订阅者。
     pub fn step(&mut self, dt: T) {
-        self.step_skipping(dt, &[]);
+        self.step_skipping_seeded(dt, &[], 0);
+    }
+
+    /// [`World::step`] 的确定性版本:写入随机种子后推进一帧。
+    ///
+    /// 见 [`World::step_skipping_seeded`] 与 [`crate::replay`] 的回放说明。
+    pub fn step_seeded(&mut self, dt: T, seed: u64) {
+        self.step_skipping_seeded(dt, &[], seed);
     }
 
     /// 带看门狗的步进:先完成 `step_skipping` 的全部动作,再对全部子系统执行

@@ -1812,6 +1812,8 @@ dependencies = [
  "nalgebra",
  "num-traits",
  "phy-math",
+ "serde",
+ "serde_json",
  "thiserror 1.0.69",
 ]
 
@@ -1830,6 +1832,7 @@ dependencies = [
  "phy-rigid",
  "phy-soft",
  "rayon",
+ "serde_json",
  "softbuffer",
  "winit",
 ]

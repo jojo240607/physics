@@ -25,7 +25,7 @@
 | 流体 | **SPH 粒子法** | 与刚体双向耦合自然(浮沉、阻力),实时性与通用性最佳 |
 | 光学 | **双后端可切换**(离线光路追踪 / 实时近似) | 科研要逼真、游戏要帧率,同一 API 两套后端 |
 | 渲染 | **纯 Rust 软件光栅化**(winit + softbuffer) | 本机 MinGW 8.1 链接器对 wgpu 巨型依赖树崩溃(`corrupt .drectve`),故放弃 GPU 后端,改用 CPU 光栅化,保证任意工具链可编译运行 |
-| 确定性 / WASM | 暂不做,但架构保持 `no_std` 友好以备将来 | 当前优先功能与逼真度 |
+| 确定性 / WASM | ✅ 确定性回放已落地(`phy-core::replay`,主机端 + wasm32 兼容);WASM 运行时接管仍为后续 | 当前优先功能与逼真度 |
 
 ---
 
@@ -176,7 +176,7 @@ struct World<T: RealField> {
 | S5 | **气体/烟雾多相与燃烧** | `phy-field`×`phy-fluid` | 复用 M22 Boussinesq 闭环 + M4e 平流;`SmokeField`(烟/气被动标量 + 浓度依赖浮力上浮, S5a ✅) + 燃烧(燃料场 + 温度阈值点燃 + 放热回灌热场 + 火焰核邻格加热形成自持前缘, S5b ✅)均已落地 | 中 | 烟羽/火焰/爆炸等特效,科研向燃烧建模 |
 | S6 | **连续碰撞检测(CCD)** ✅已完成 | `phy-rigid` 扩展 | `RigidWorld::step` 重构为位移受限子步化:按最快可动体位移/最小特征尺寸(默认 ≤½)切分 ≤`ccd_max_substeps` 子步,每子步跑离散 `collide`+速度求解,杜绝高速隧穿;`SolverParams.ccd_max_substeps`(默认 8,设 0 退化等价原离散)开关;新增 `ccd.rs`(`substep_count`/`swept_sphere_sphere`/`ccd_contact`)+ 修复 `narrowphase` 缺失的**球-盒解析快速碰撞路径**(此前球撞墙/地板漏检,靠 GJK/EPA 回退有 bug) | 中 | 高速小物体防隧穿、子弹/高速碎片命中薄壁;球-盒碰撞稳健性 |
 | S7 | **GPU/并行后端** ✅已完成 | `phy-fluid`/`phy-granular`/`phy-optics` | 因 MinGW 链接 wgpu 崩溃(M3 决策)放弃 GPU,改走 **rayon 并行 CPU 后端**:SPH 密度/压力/受力两遍改为 Jacobi 式并行(`par_iter` + 独立缓冲写回);颗粒 PBD 接触投影由 Gauss-Seidel 改为 **Jacobi**(并行累加 per-body 修正,`reduce` 固定顺序合并,保持确定性);光学 `render_camera` 逐像素 `trace` 经 rayon 并行(`Whitted`/`Approx` 单元结构体 `Sync`,避开 `dyn Renderer` 不可跨线程)。均为无数据竞争的只读遍历→缓冲写回,并行结果与串行逐像素逐一对应 | 中 | 大规模粒子/颗粒/流体与逐像素渲染吞吐;`fill_grid`/流体场大场景实时化,且为 S8 确定性预留(并行不引入顺序依赖) |
-| S8 | **数值确定性 / WASM 回放** | 全局 | §5.5 原"暂不做",架构已预留;需固定步长 + 定点/确定性浮点 | 中 | 科研复现、锁帧回放、网络同步 |
+| S8 | **数值确定性 / WASM 回放** | 全局 | ✅ 已落地(`phy-core::replay`:`Rng` 确定性随机源 + `Replay`/`ReplayPlayer` 录制-回放 + `World::step_seeded(dt,seed)` + `World::seed` 取种通道;demo 端到端 `s8_deterministic_replay_reproduces_trajectory` 验证同输入序列逐位复现)。WASM 回放复用同一机制(无 `std` 依赖,可编译至 wasm32) | 中 | 科研复现、锁帧回放、网络同步 |
 | S9 | **多材料 / 非牛顿流体(SPH 增强)** ✅已完成 | `phy-fluid` SPH | `Particle` 加 `material` 标签;`SphParams` 加幂律表 `visc_k`/`visc_n`+`shear_min`;`compute_forces` 据局部应变率算有效粘度 μ_eff=k·max(剪切率,ε)^(n-1)(n<1 剪切变稀,n>1 剪切变稠,n=1 牛顿);`effective_viscosity(i)` 查询 | 中 | 蜂蜜/牙膏/玉米淀粉流体、油水分层等多相流体,攻克 M4e“仅牛顿均质”缺口 |
 
 ### 5.6.1 实施建议(后续)
@@ -304,9 +304,14 @@ pub trait GpuBackend {
   (2) `phy-fluid` 新增 `FluidWorld<f64>::to_gpu_flat`(f64→f32 平铺,含 `visc_k`/`visc_n` 这两个 `Vec<f32>` 字段的逐元素转换)。
   (3) `phy-demo-web`(`gpu` feature)新增 `step_sph_gpu`/`step_granular_gpu`/`step_world_gpu`:GPU 算力/接触投影,主机侧做半隐式欧拉积分(velocity/pos 写回)+ 边界 clamp + 摩擦;GPU 接管后用 `get_mut` 循环(规避私有 `subsystems`)收集 `skip` 掩码再调 `step_skipping`。
   (4) `DemoApp` 改用 `Rc<RefCell<State>>` + `Rc<RefCell<Option<GpuContext>>>`,使 `frame_gpu` 的 `async` 未来具备 `'static` 以喂 `future_to_promise`;`index.html` 加 GPU 运行时切换开关 + `async` rAF 循环(`gpuMode` 时 `await app.frame_gpu()`)。
-  **验证**:`gpu` 与默认两 wasm 构建均编译通过;`cargo test --workspace` 全过(0 失败);`step_skipping` 逻辑核对——跳过 CPU step 但 couple 全跑。浏览器内实时数值对比本环境无法跑(无 WebGPU 运行时),需真浏览器目测。 | 已落地 |
+  **验证**:`gpu` 与默认两 wasm 构建均编译通过;`cargo test --workspace` 全过(0 失败);`step_skipping` 逻辑核对——跳过 CPU step 但 couple 全跑。浏览器内实时数值对比本环境无法跑(无 WebGPU 运行时),需真浏览器目测。
+- 2026-08-10: S8 完成(§5.6 / §5.8 L2)。**确定性回放(deterministic replay)**——原 §5.5 "暂不做"项,本次补齐主机端能力。`phy-core` 新增 `replay` 模块(无 `std` 平台依赖,可编译至 `wasm32`):
+  (1) `Rng`(SplitMix64)确定性伪随机源,跨平台逐位一致(`next_u64`/`next_f64`/`fork`);
+  (2) `World::step_seeded(dt, seed)` 把每帧种子写入世界,子系统经新增 `World::seed()` 取用本帧随机源;普通 `step` / `step_skipping` 以 `seed=0` 调用(`step_skipping_seeded` 为实际入口);
+  (3) `Replay::new(snapshot_json)` 录制初始世界快照(由 `phy-io` dump,`phy-core` 不反向依赖 `phy-io`)+ 逐帧 `(dt, seed)`,可 `to_json`/`from_json` 持久化与网络传输;`ReplayPlayer::replay(load, step)` 从同一快照重建世界并按序列重放,得逐位一致终态。
+  **验证**:`phy-core` 新增 4 单测(`rng_is_deterministic_and_portable`/`rng_next_f64_in_unit_interval`/`replay_reproduces_seed_driven_trajectory`/`replay_json_roundtrip`)全过;`phy-demo` 新增端到端 `s8_deterministic_replay_reproduces_trajectory`(变化 `dt`+每帧种子的多物理会话,回放终态解析存档值与录制终态完全相等);`cargo test --workspace` 全过(0 失败)。防战建模"同输入同输出"可复现硬门槛达成;WASM 回放复用同一机制。 | 已落地 |
 
-> W7 是 W1–W6 之上的"总开关",把 GPU 从"仅自测"升级为"可运行时接管生产步进"。B 档 GPU 标量场 stencil / 半拉格朗日平流 / FEM 刚度装配 / SPH 邻居网格构建尚未做(见 §5.7.2);确定性回放(§5.6 S8)尚未做。
+> W7 是 W1–W6 之上的"总开关",把 GPU 从"仅自测"升级为"可运行时接管生产步进"。B 档 GPU 标量场 stencil / 半拉格朗日平流 / FEM 刚度装配 / SPH 邻居网格构建尚未做(见 §5.7.2);确定性回放(§5.6 S8)已落地(主机端,见下文 L2)。
 
 ### 5.7.5 不做项(明确排除)
 
@@ -321,7 +326,7 @@ pub trait GpuBackend {
 - 2026-08-07: 用户确认面向**通用科研/仿真**; 首期目标**完整可玩 Demo**; 数学库**由我推荐 → nalgebra 泛型**。
 - 2026-08-07: 精度选**泛型可切换 (RealField)**; Demo 形态选 **wgpu 3D**。
 - 2026-08-07: 用户扩展愿景至**流体 + 光学 + 其他物理规则**,目标**科研 + 游戏双用途、逼真模拟世界**。
-- 2026-08-07: 流体选 **SPH 粒子法**; 光学选 **双后端可切换**; 确定性/WASM **暂不做**(架构预留)。
+- 2026-08-07: 流体选 **SPH 粒子法**; 光学选 **双后端可切换**; 确定性/WASM 当时**暂不做**(架构预留)。→ 2026-08-10 S8 完成:确定性回放已落地(host 端 + wasm32 兼容),WASM 运行时接管仍为后续。
 - 2026-08-07: M2 完成。求解器采用**顺序冲量 + 累积冲量钳制 + Split-Impulse 伪速度位置修正**(避免抖动/能量注入); 接触 SAT 加 `sep_eps=-1e-6` 容差,使恰好接触(pen≈0)被判为相交,修复堆叠测试中下盒穿地。
 - 2026-08-08: M3 完成。Demo 因本机 MinGW 8.1 链接器对 wgpu 巨型依赖树崩溃(`corrupt .drectve`, `ld returned 5`),**从 wgpu 转向纯 Rust 软件光栅化方案**:`winit 0.30` + `softbuffer 0.4` 做窗口/帧缓冲呈现,自研 CPU 光栅化器(`raster.rs`:透视正确插值 + Z 缓冲 + 朗伯光照)渲染 `RigidWorld<f64>` 的盒/球实例。无需 GPU 后端,保证在任意 MinGW 工具链下可编译运行。交互:拖拽旋转、滚轮缩放、P 暂停、R 重置、G 加盒、B 加球、I 统计。
 - 2026-08-08: M5 完成。`phy-rigid` 新增 `Shape::contains_local` + `Body::to_local/to_world`; 新建 `phy-fluid` crate: Müller 2003 弱可压缩 SPH(Poly6 密度/Spiky 压力梯度/ViscLaplacian 粘性核) + 均匀空间哈希邻居搜索。默认 h=0.2,单粒子质量由晶格核求和反算(`lattice_mass`)保证静止密度收敛。双向刚体耦合 `couple_bodies`: 静态体作不可穿透边界(位置推回 + 法向速度阻尼),动态体受阿基米德浮力 `-ρf·V_sub·g` + 无滑阻力反作用冲量。`FluidSubsystem` 适配 `phy_core::Subsystem`。6 测试全过(密度收敛、溃坝不越界、粒子数守恒、静/动态刚体耦合)。注意: 浮力测试须关闭重力隔离纯上举力,否则自由下落流体的下拽耦合会掩盖浮力。
@@ -371,6 +376,11 @@ pub trait GpuBackend {
   (3) `phy-demo-web`(`gpu` feature)新增 `step_sph_gpu`/`step_granular_gpu`/`step_world_gpu`:GPU 算力/接触投影,主机侧做半隐式欧拉积分(velocity/pos 写回)+ 边界 clamp + 摩擦;GPU 接管后用 `get_mut` 循环(规避私有 `subsystems`)收集 `skip` 掩码再调 `step_skipping`。
   (4) `DemoApp` 改用 `Rc<RefCell<State>>` + `Rc<RefCell<Option<GpuContext>>>`,使 `frame_gpu` 的 `async` 未来具备 `'static` 以喂 `future_to_promise`;`index.html` 加 GPU 运行时切换开关 + `async` rAF 循环(`gpuMode` 时 `await app.frame_gpu()`)。
   **验证**:`gpu` 与默认两 wasm 构建均编译通过;`cargo test --workspace` 全过(0 失败);`step_skipping` 逻辑核对——跳过 CPU step 但 couple 全跑。浏览器内实时数值对比本环境无法跑(无 WebGPU 运行时),需真浏览器目测。
+- 2026-08-10: S8 完成(§5.6 / §5.8 L2)。**确定性回放(deterministic replay)**——原 §5.5 "暂不做"项,本次补齐主机端能力。`phy-core` 新增 `replay` 模块(无 `std` 平台依赖,可编译至 `wasm32`):
+  (1) `Rng`(SplitMix64)确定性伪随机源,跨平台逐位一致(`next_u64`/`next_f64`/`fork`);
+  (2) `World::step_seeded(dt, seed)` 把每帧种子写入世界,子系统经新增 `World::seed()` 取用本帧随机源;普通 `step` / `step_skipping` 以 `seed=0` 调用(`step_skipping_seeded` 为实际入口);
+  (3) `Replay::new(snapshot_json)` 录制初始世界快照(由 `phy-io` dump,`phy-core` 不反向依赖 `phy-io`)+ 逐帧 `(dt, seed)`,可 `to_json`/`from_json` 持久化与网络传输;`ReplayPlayer::replay(load, step)` 从同一快照重建世界并按序列重放,得逐位一致终态。
+  **验证**:`phy-core` 新增 4 单测(`rng_is_deterministic_and_portable`/`rng_next_f64_in_unit_interval`/`replay_reproduces_seed_driven_trajectory`/`replay_json_roundtrip`)全过;`phy-demo` 新增端到端 `s8_deterministic_replay_reproduces_trajectory`(变化 `dt`+每帧种子的多物理会话,回放终态解析存档值与录制终态完全相等);`cargo test --workspace` 全过(0 失败)。防战建模"同输入同输出"可复现硬门槛达成;WASM 回放复用同一机制。
 
 ---
 
@@ -391,11 +401,15 @@ pub trait GpuBackend {
 - 新增 `crates/phy-demo/tests/library_hardening.rs`:轻量默认回归 `diagnostics_api_reports_energy_and_momentum`(静止物体能量/动量≈0、2m/s 的 1kg 球 KE=2 / 动量=(2,0,0) 精确);其余 5 个守恒/稳定性/确定性重负载用例标记 `#[ignore]`,与既有 `regression_stability.rs` / `determinism.rs` 同约定,经 `cargo test --release -p phy-demo -- --ignored` 跑。
 - **价值**:除"无 NaN + 时钟单调"外,新增"动能有界不爆炸 / 下落物体收敛静止 / 同构造逐位一致 / 存档重放 1e-9 内一致"的可量化守恒断言,且把守恒量采样能力作为公共 API 暴露给业务层。
 
-### L2 【高】确定性(S8 数值确定性 / WASM 回放)
+### L2 【高】确定性(S8 数值确定性 / WASM 回放) ✅ 已落地
 - 固定步长驱动(`World::step(dt)` 用调用方给定 `dt`,引擎层不自行变步长;变步长控制器 S11 作为可选包装);或显式 `step_fixed(dt)`。
-- 确定性浮点:统一 `f64` 严格运算顺序(S7 已把颗粒 PBD 改 Jacobi + 固定索引 reduce 保确定性);新增 `is_deterministic` 集成测试——同初态跑两次 N 步,逐子系统状态差 `<1e-12`(复用 `phy-granular::parallel_solve_is_deterministic` 思路扩展到全 `World`)。
-- 存档读档 + 同种子重放:固定 RNG 种子(`fill_grid` / 撒布用可注入 `rng`),读档后重放得逐位一致结果。
-- **交付**:防战建模"同输入同输出"可复现硬门槛。
+- 确定性浮点:统一 `f64` 严格运算顺序(S7 已把颗粒 PBD 改 Jacobi + 固定索引 reduce 保确定性);`is_deterministic` 集成测试——同初态跑两次 N 步,逐子系统状态差 `<1e-12`(复用 `phy-granular::parallel_solve_is_deterministic` 思路扩展到全 `World`)。
+- 存档读档 + 同种子重放(核心):`phy-core` 新增 `replay` 模块——
+  - `Rng`(SplitMix64)确定性伪随机源,跨平台逐位一致;`World::step_seeded(dt, seed)` 把种子写入世界,子系统经 `World::seed()` 取用本帧随机源;普通 `step` 以 `seed=0` 调用。
+  - `Replay::new(snapshot_json)` 录制初始世界快照(由 `phy-io` dump,`phy-core` 不反向依赖 `phy-io`)+ 逐帧 `(dt, seed)`;可 `to_json`/`from_json` 持久化与网络传输。
+  - `ReplayPlayer::replay(load, step)` 从同一快照重建世界,按录制序列重放,得到逐位一致的终态。
+  - demo 端到端 `s8_deterministic_replay_reproduces_trajectory`:录制一段变化 `dt` + 每帧种子的多物理会话,回放终态的解析存档值与录制终态完全相等(逐位复现)。
+- **交付**:防战建模"同输入同输出"可复现硬门槛已达成;WASM 回放复用同一机制(`replay` 无 `std` 平台依赖,可编译至 `wasm32`)。
 
 ### L3 【高】C ABI 层(`phy-ffi` 新 crate) ✅ 已落地
 - 新建 `crates/phy-ffi`:`crate-type = ["cdylib", "rlib"]`,`cbindgen` 生成 C 头(`PhyWorldHandle *` 不透明柄,**纯 C 安全**:`World<double>` 模板语法已规避)。
