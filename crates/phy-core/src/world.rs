@@ -77,6 +77,51 @@ impl<T: RealField> Default for World<T> {
 
 impl<T: RealField> World<T> {
     /// 创建空世界。
+    ///
+    /// # 示例
+    ///
+    /// 挂一个自定义子系统,推进若干步并断言时间单调推进:
+    ///
+    /// ```
+    /// use phy_core::{World, Subsystem};
+    /// use std::any::Any;
+    ///
+    /// struct Clock { t: f64 }
+    /// impl Subsystem<f64> for Clock {
+    ///     fn as_any(&self) -> &dyn Any { self }
+    ///     fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    ///     fn step(&mut self, dt: &f64) { self.t += *dt; }
+    /// }
+    ///
+    /// let mut w: World<f64> = World::new();
+    /// w.add_subsystem(Box::new(Clock { t: 0.0 }));
+    /// for _ in 0..10 {
+    ///     w.step(0.1);
+    /// }
+    /// assert!((w.time() - 1.0).abs() < 1e-9);
+    /// ```
+    ///
+    /// 若业务要求数值必须有限,改用 [`World::step_checked`],它会逐子系统运行
+    /// [`Subsystem::validate`],遇到 NaN/Inf 立即返回 `Err`:
+    ///
+    /// ```
+    /// use phy_core::{World, Subsystem, WorldError};
+    /// use std::any::Any;
+    ///
+    /// struct Bad;
+    /// impl Subsystem<f64> for Bad {
+    ///     fn as_any(&self) -> &dyn Any { self }
+    ///     fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    ///     fn step(&mut self, _dt: &f64) {}
+    ///     fn validate(&self) -> Result<(), WorldError> {
+    ///         Err(WorldError::NonFinite { subsystem: "bad", field: "pos" })
+    ///     }
+    /// }
+    ///
+    /// let mut w: World<f64> = World::new();
+    /// w.add_subsystem(Box::new(Bad));
+    /// assert!(w.step_checked(0.1).is_err());
+    /// ```
     pub fn new() -> Self {
         Self {
             subsystems: Vec::new(),

@@ -10,7 +10,7 @@
 //! 编译产物:`cargo build -p phy-ffi --release` → `target/release/phy_ffi.{dll,so,dylib}`。
 //! C 头:`PHY_FFI_GEN_HEADER=1 cargo build -p phy-ffi` → `crates/phy-ffi/phy_ffi.h`。
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::panic::{self, AssertUnwindSafe};
 
 use phy_core::World;
@@ -143,6 +143,22 @@ fn build_coupled_world() -> World<f64> {
 // ---- 导出接口 ----------------------------------------------------------------
 
 /// 创建流体(溃坝)世界。返回不透明句柄(失败返回 NULL)。
+///
+/// # 示例(Rust 侧等价调用;实践中由 C/C++/Unity/C# 经 `phy_ffi.h` 调用)
+///
+/// ```
+/// use phy_ffi::{phy_world_create_fluid, phy_world_step_checked,
+///               phy_world_fluid_count, phy_world_destroy};
+///
+/// let w = phy_world_create_fluid();
+/// assert!(!w.is_null());
+/// // 推进并用看门狗保证数值有限;返回 0 表示健康。
+/// for _ in 0..50 {
+///     assert_eq!(phy_world_step_checked(w, 0.005), 0);
+/// }
+/// assert!(phy_world_fluid_count(w) > 0);
+/// phy_world_destroy(w); // 释放,空指针安全 no-op
+/// ```
 #[no_mangle]
 pub extern "C" fn phy_world_create_fluid() -> *mut PhyWorldHandle {
     guard(build_fluid_world)

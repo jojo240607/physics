@@ -446,6 +446,6 @@ pub trait GpuBackend {
 ### 当前测试力度盘点(2026-08-10,含 L1/L2 后)
 - 全 workspace 单测 ≈ 120+,全部绿灯,0 失败。分布:phy-core 12 / phy-demo 10(E2E 耦合) + 8(ignored 重负载回归) / phy-rigid ~50 / phy-soft 20 / phy-field ~23 / phy-fluid 18 / phy-granular 5 / phy-solid 4 / phy-io 3 / phy-optics 7 / phy-demo-web 1 / **phy-math 8(原 0)**。
 - 强项:每个里程碑带单测 + 端到端 `World` 耦合测试 + **L1 全局稳定性回归(无 NaN/子系统不丢/时钟单调)** + **L2 数值确定性(重复运行逐位一致 + 存档重放一致)**。
-- 缺口(剩余):① 文档/doc-test 近 0(对外可用性);② GPU 数值一致性仅完成 CPU 端路由验证 + 浏览器端手动核对步骤,缺自动化 CI(需真实 WebGPU adapter)。
-- 结论:作为 Rust 库**核心物理、耦合、稳定性、确定性、C ABI(L3)、性能基线(L4-1)、NaN 看门狗(L4-2)、W7 路由(L4-3)均已可信**,可对外(尤其非 Rust 业务)稳定供货;GPU 为 Web 限定/特定工具链可解锁的附加项。
+- 缺口(剩余):① GPU 数值一致性仅完成 CPU 端路由验证 + 浏览器端手动核对步骤,缺自动化 CI(需真实 WebGPU adapter)。
+- 结论:作为 Rust 库**核心物理、耦合、稳定性、确定性、C ABI(L3)、性能基线(L4-1)、NaN 看门狗(L4-2)、W7 路由(L4-3)、用户向文档/doctest(README + 4 处可运行示例)均已可信**,可对外(尤其非 Rust 业务)稳定供货;GPU 为 Web 限定/特定工具链可解锁的附加项。
 

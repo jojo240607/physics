@@ -45,6 +45,27 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> Default for RigidWorld<T> {
 }
 
 impl<T: RealField + Copy + num_traits::ToPrimitive> RigidWorld<T> {
+    /// 创建空刚体世界(默认重力沿 -Y)。
+    ///
+    /// # 示例
+    ///
+    /// 放一个静止地面 + 一个下落球,推进若干步,断言球未穿透地面:
+    ///
+    /// ```
+    /// use phy_rigid::{RigidWorld, Body, Shape};
+    /// use phy_math::Vec3 as V3;
+    /// use nalgebra::UnitQuaternion;
+    ///
+    /// let mut w = RigidWorld::<f64>::new();
+    /// w.add_body(Body { shape: Shape::Box { half: V3::new(20.0, 0.5, 20.0) },
+    ///                    pos: V3::new(0.0, -0.5, 0.0),
+    ///                    rot: UnitQuaternion::identity(), vel: V3::zeros(),
+    ///                    inv_mass: 0.0, ..Default::default() });
+    /// w.add_body(Body::new(Shape::Sphere { r: 1.0 }, V3::new(0.0, 5.0, 0.0), 0.5));
+    /// for _ in 0..200 { w.step(0.01); }
+    /// let ball = &w.bodies[1];
+    /// assert!(ball.pos.y > -0.5 + 1.0 - 1e-6); // 球心不低于 地面顶 + 半径
+    /// ```
     pub fn new() -> Self {
         Self {
             bodies: Vec::new(),

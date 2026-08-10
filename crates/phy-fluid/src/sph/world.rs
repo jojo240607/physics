@@ -75,6 +75,22 @@ impl<T: RealField + Copy + ToPrimitive> Clone for FluidWorld<T> {
 
 impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
     /// 以给定参数创建空世界(含核与网格)。
+    ///
+    /// # 示例
+    ///
+    /// 造一个含 100+ 粒子的初始长方体流体,推进若干步,断言全程无 NaN:
+    ///
+    /// ```
+    /// use phy_fluid::{FluidWorld, SphParams};
+    /// use phy_math::Vec3 as V3;
+    ///
+    /// let mut w = FluidWorld::<f64>::new(SphParams::<f64>::defaults());
+    /// w.fill_box(V3::new(-1.0, 1.0, -1.0), V3::new(1.0, 3.0, 1.0), 0.3, 0.1);
+    /// for _ in 0..30 { w.step(0.01); }
+    /// for p in w.particles.iter() {
+    ///     assert!(p.pos.x.is_finite() && p.pos.y.is_finite() && p.pos.z.is_finite());
+    /// }
+    /// ```
     pub fn new(params: SphParams<T>) -> Self {
         let h = params.h;
         Self {
