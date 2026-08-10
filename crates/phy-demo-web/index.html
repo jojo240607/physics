@@ -35,6 +35,14 @@
         </div>
         <pre id="gpu-out" style="white-space:pre-wrap; max-width:960px; background:#11151f; padding:8px; border-radius:6px;">点按钮运行 GPU 自测…</pre>
       </details>
+      <div id="gpu-rt" style="margin-top:8px; padding-top:8px; border-top:1px solid #2a3344;">
+        <button id="gpu-rt-toggle" style="padding:4px 10px;">运行时切换: 关闭</button>
+        <span id="gpu-rt-status" style="margin-left:8px; color:#8fa;">CPU 步进</span>
+        <div style="font-size:12px; color:#9aa; margin-top:4px;">
+          开启后流体 / 颗粒走 WebGPU compute 写回 World&lt;f64&gt;,其余子系统与耦合仍走 CPU。
+          仅 <code>--features gpu</code> 构建有效。
+        </div>
+      </div>
     </div>
   </div>
 
@@ -91,9 +99,31 @@
       });
       canvas.addEventListener('wheel', (e) => { e.preventDefault(); app.zoom(e.deltaY); }, { passive: false });
 
+      // 运行时切换(W6 扩展):GPU 模式下用 await frame_gpu() 驱动循环。
+      let gpuMode = false;
+      const rtToggle = document.getElementById('gpu-rt-toggle');
+      const rtStatus = document.getElementById('gpu-rt-status');
+      if (rtToggle && typeof app.set_gpu_mode === 'function') {
+        rtToggle.addEventListener('click', () => {
+          gpuMode = !gpuMode;
+          app.set_gpu_mode(gpuMode);
+          rtToggle.textContent = `运行时切换: ${gpuMode ? '开启' : '关闭'}`;
+          rtStatus.textContent = gpuMode ? 'GPU 步进 (WebGPU)' : 'CPU 步进';
+          rtStatus.style.color = gpuMode ? '#ffd479' : '#8fa';
+        });
+      } else if (rtToggle) {
+        rtToggle.disabled = true;
+        rtToggle.textContent = '运行时切换: 不可用(非 gpu 构建)';
+      }
+
       // 渲染循环
-      function loop() {
-        app.frame();
+      async function loop() {
+        if (gpuMode && typeof app.frame_gpu === 'function') {
+          try { await app.frame_gpu(); }
+          catch (e) { console.error('frame_gpu 失败:', e); }
+        } else {
+          app.frame();
+        }
         window.__rafId = requestAnimationFrame(loop);
       }
       status.textContent = '运行中 · 默认刚体模式,按 1-0/A 切换';

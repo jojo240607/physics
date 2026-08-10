@@ -31,9 +31,15 @@ struct State {
 
 #[wasm_bindgen]
 pub struct DemoApp {
-    state: State,
+    // 用 Rc<RefCell> 持有可变状态,使 `frame_gpu` 的异步 future 可持有 'static 副本
+    // (WebGPU step 必须在 async 内借可变 world,而 future_to_promise 要求 'static)。
+    state: std::rc::Rc<std::cell::RefCell<State>>,
     canvas: web_sys::HtmlCanvasElement,
     ctx: web_sys::CanvasRenderingContext2d,
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    gpu: std::rc::Rc<std::cell::RefCell<Option<crate::gpu::GpuContext>>>,
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    gpu_mode: bool,
 }
 
 #[wasm_bindgen]
@@ -56,28 +62,38 @@ impl DemoApp {
             fb: Framebuffer::new(w.max(1), h.max(1)),
             paused: false,
         };
-        Ok(DemoApp { state, canvas, ctx })
+        Ok(DemoApp {
+            state: std::rc::Rc::new(std::cell::RefCell::new(state)),
+            canvas,
+            ctx,
+            #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+            gpu: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+            gpu_mode: false,
+        })
     }
 
     /// 处理键盘事件(逻辑键名)。支持桌面版全部键位。
     pub fn key(&mut self, key: &str) {
+        let mut st = (*self.state).borrow_mut();
+        let st = &mut *st;
         match key {
-            "1" => self.state.scene.set_mode(DemoMode::Rigid),
-            "2" => self.state.scene.set_mode(DemoMode::Fluid),
-            "3" => self.state.scene.set_mode(DemoMode::Heat),
-            "4" => self.state.scene.set_mode(DemoMode::Soft),
-            "5" => self.state.scene.set_mode(DemoMode::Optics),
-            "6" => self.state.scene.set_mode(DemoMode::FluidHeat),
-            "7" => self.state.scene.set_mode(DemoMode::Em),
-            "8" => self.state.scene.set_mode(DemoMode::Grav),
-            "9" => self.state.scene.set_mode(DemoMode::Wave),
-            "0" => self.state.scene.set_mode(DemoMode::Acoustic),
-            "a" | "A" => self.state.scene.set_mode(DemoMode::All),
-            "p" | "P" => self.state.paused = !self.state.paused,
-            "r" | "R" => self.state.scene.reset(),
+            "1" => st.scene.set_mode(DemoMode::Rigid),
+            "2" => st.scene.set_mode(DemoMode::Fluid),
+            "3" => st.scene.set_mode(DemoMode::Heat),
+            "4" => st.scene.set_mode(DemoMode::Soft),
+            "5" => st.scene.set_mode(DemoMode::Optics),
+            "6" => st.scene.set_mode(DemoMode::FluidHeat),
+            "7" => st.scene.set_mode(DemoMode::Em),
+            "8" => st.scene.set_mode(DemoMode::Grav),
+            "9" => st.scene.set_mode(DemoMode::Wave),
+            "0" => st.scene.set_mode(DemoMode::Acoustic),
+            "a" | "A" => st.scene.set_mode(DemoMode::All),
+            "p" | "P" => st.paused = !st.paused,
+            "r" | "R" => st.scene.reset(),
             "o" | "O" => {
                 // 循环模式。
-                let next = match self.state.scene.mode {
+                let next = match st.scene.mode {
                     DemoMode::Rigid => DemoMode::Fluid,
                     DemoMode::Fluid => DemoMode::Heat,
                     DemoMode::Heat => DemoMode::Soft,
@@ -90,20 +106,20 @@ impl DemoApp {
                     DemoMode::Acoustic => DemoMode::All,
                     DemoMode::All => DemoMode::Rigid,
                 };
-                self.state.scene.set_mode(next);
+                st.scene.set_mode(next);
             }
             "i" | "I" => {
                 log(&format!(
                     "[demo] mode={} bodies={} steps={} paused={}",
-                    self.state.scene.mode.name(),
-                    self.state.scene.body_count(),
-                    self.state.scene.steps,
-                    self.state.paused
+                    st.scene.mode.name(),
+                    st.scene.body_count(),
+                    st.scene.steps,
+                    st.paused
                 ));
             }
             "F5" => {
                 // 存档到 localStorage(字符串 JSON)。
-                match self.state.scene.save_string() {
+                match st.scene.save_string() {
                     Ok(json) => match web_sys::window() {
                         Some(win) => match win.local_storage() {
                             Ok(store_opt) => match store_opt {
@@ -128,7 +144,7 @@ impl DemoApp {
                     .and_then(|s| s.get_item("world_save").ok())
                     .flatten();
                 match json_opt {
-                    Some(json) => match self.state.scene.load_string(&json) {
+                    Some(json) => match st.scene.load_string(&json) {
                         Ok(_) => log("[demo] 已读档 (world_save)"),
                         Err(e) => log(&format!("[demo] 读档失败: {}", e)),
                     },
@@ -141,55 +157,111 @@ impl DemoApp {
 
     /// 鼠标拖拽旋转。
     pub fn drag(&mut self, dx: f32, dy: f32) {
-        self.state.cam.yaw -= dx * 0.005;
-        self.state.cam.pitch += dy * 0.005;
+        let mut st = (*self.state).borrow_mut();
+        st.cam.yaw -= dx * 0.005;
+        st.cam.pitch += dy * 0.005;
         let lim = 1.5_f32;
-        self.state.cam.pitch = self.state.cam.pitch.clamp(-lim, lim);
+        st.cam.pitch = st.cam.pitch.clamp(-lim, lim);
     }
 
     /// 滚轮缩放。
     pub fn zoom(&mut self, delta: f32) {
-        self.state.cam.distance *= (1.0 + delta * 0.001).clamp(0.5, 2.0);
-        self.state.cam.distance = self.state.cam.distance.clamp(3.0, 200.0);
+        let mut st = (*self.state).borrow_mut();
+        st.cam.distance *= (1.0 + delta * 0.001).clamp(0.5, 2.0);
+        st.cam.distance = st.cam.distance.clamp(3.0, 200.0);
     }
 
     /// 推进一帧物理并渲染到 canvas。由 requestAnimationFrame 循环调用。
     pub fn frame(&mut self) {
-        if !self.state.paused {
-            self.state.scene.step();
+        let mut st = (*self.state).borrow_mut();
+        let st = &mut *st;
+        if !st.paused {
+            st.scene.step();
         }
-        self.state.fb.clear();
-        self.state
-            .scene
-            .render(&mut self.state.fb, &self.state.cam);
-        let bg = self.state.fb.pixels.first().copied().unwrap_or(0);
-        let non_bg = self
-            .state
+        st.fb.clear();
+        st.scene.render(&mut st.fb, &st.cam);
+        let bg = st.fb.pixels.first().copied().unwrap_or(0);
+        let non_bg = st
             .fb
             .pixels
             .iter()
             .filter(|&&p| p != bg)
             .count();
         // 诊断:统计 fb.pixels 中纯红(0xFFFF0000)和背景色的数量
-        let red_count = self.state.fb.pixels.iter().filter(|&&p| p == 0xFFFF0000u32).count();
-        let bg_count = self.state.fb.pixels.iter().filter(|&&p| p == bg).count();
+        let red_count = st.fb.pixels.iter().filter(|&&p| p == 0xFFFF0000u32).count();
+        let bg_count = st.fb.pixels.iter().filter(|&&p| p == bg).count();
         log(&format!(
             "[frame] mode={} non_bg={} red_px={} bg_px={} first={:08x}",
-            self.state.scene.mode.name(),
+            st.scene.mode.name(),
             non_bg,
             red_count,
             bg_count,
             bg
         ));
-        present(&self.canvas, &self.ctx, &self.state.fb);
+        present(&self.canvas, &self.ctx, &st.fb);
+    }
+
+    /// 设置运行时 GPU 切换开关(仅 wasm + gpu feature 构建有效)。
+    ///
+    /// 打开后 JS 端应使用 `await app.frame_gpu()` 驱动渲染循环(因为 GPU 步是异步的),
+    /// 关闭时继续用 `app.frame()`(纯 CPU 步进)。`Scene` 的其余子系统与全部 `couple`
+    /// 阶段始终走 CPU,跨子系统耦合矩阵保持完整。
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    pub fn set_gpu_mode(&mut self, on: bool) {
+        self.gpu_mode = on;
+    }
+
+    /// 查询当前 GPU 切换开关状态(仅 wasm + gpu feature 构建有效)。
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    pub fn get_gpu_mode(&self) -> bool {
+        self.gpu_mode
+    }
+
+    /// 异步帧:当 GPU 模式开启时,流体 / 颗粒子系统的力学 step 走 GPU compute 写回
+    /// `World<f64>`,其余子系统与 `couple` 走 CPU。由 JS 端 `await app.frame_gpu()` 驱动。
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    pub fn frame_gpu(&mut self) -> js_sys::Promise {
+        use wasm_bindgen::JsCast;
+        // 把可变状态克隆进 Rc,使 async future 拥有 'static 副本(future_to_promise 要求)。
+        let st_rc = std::rc::Rc::clone(&self.state);
+        let gpu_rc = std::rc::Rc::clone(&self.gpu);
+        let canvas = self.canvas.clone();
+        let ctx2d = self.ctx.clone();
+        let fut = async move {
+            // 惰性初始化 GPU 上下文(持久化在 Rc<RefCell> 中)。
+            if gpu_rc.borrow().is_none() {
+                *gpu_rc.borrow_mut() = Some(crate::gpu::GpuContext::init().await?);
+            }
+            let ctx_guard = gpu_rc.borrow();
+            let ctx = ctx_guard.as_ref().unwrap();
+            {
+                let mut st = (*st_rc).borrow_mut();
+                let st = &mut *st;
+                if !st.paused {
+                    crate::gpu::step_world_gpu(ctx, &mut st.scene.world, 1.0f32 / 60.0).await?;
+                }
+                st.fb.clear();
+                st.scene.render(&mut st.fb, &st.cam);
+                present(&canvas, &ctx2d, &st.fb);
+            }
+            Ok::<(), String>(())
+        };
+        wasm_bindgen_futures::future_to_promise(async move {
+            match fut.await {
+                Ok(_) => Ok(JsValue::NULL),
+                Err(e) => Err(js_sys::Error::new(&e).into()),
+            }
+        })
+        .unchecked_into()
     }
 
     /// 调试用:把整个 canvas 填成红色,验证 present 管线通。
     pub fn debug_fill(&mut self) {
-        for p in self.state.fb.pixels.iter_mut() {
+        let mut st = (*self.state).borrow_mut();
+        for p in st.fb.pixels.iter_mut() {
             *p = 0xFFFF0000u32; // ARGB red
         }
-        present(&self.canvas, &self.ctx, &self.state.fb);
+        present(&self.canvas, &self.ctx, &st.fb);
     }
 
     /// W1 验证入口(仅 wasm + gpu feature):跑 GPU compute 自测,返回 Promise<string>。

@@ -949,7 +949,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // 复刻 CPU 端 `compute_density_pressure` + `compute_forces`(含 power-law 非牛顿粘度)。
 // ===========================================================================
 
-use phy_fluid::SphFlatData;
+use phy_fluid::{FluidSubsystem, FluidWorld, SphFlatData};
+use phy_granular::subsystem::GranularSubsystem;
+use phy_granular::world::GranularWorld;
+use phy_core::World;
 use phy_granular::GranularFlatData;
 
 /// W4 主入口:GPU 算密度/压力 + 受力,返回 (rho_p 扁平, acc_mu 扁平),
@@ -1639,4 +1642,143 @@ pub async fn granular_self_test() -> Result<String, String> {
         overlaps,
         finite
     ))
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 运行时切换:完整 GPU step(替代 CPU `world.step`)
+//
+// 这些函数接收 f64 世界(Web Demo 的 `Scene::world: World<f64>` 内部子系统),
+// 把粒子副本缩成 f32 送 GPU compute,再把结果写回 f64 世界。与 CPU `step` 等价:
+// 流体 = 密度/压力/力(GPU) + 主机端半隐式积分 + 边界夹紧;
+// 颗粒 = 先预测(重力)再接触投影(GPU) + 速度回写 + 摩擦衰减。
+// `couple` 阶段仍由 `World::step_skipping` 走 CPU,跨子系统耦合矩阵保持完整。
+// ───────────────────────────────────────────────────────────────────────────
+
+/// f64 流体世界的完整一帧 GPU 步进,写回 `world.particles` 的 `pos/vel/rho/p`。
+pub async fn step_sph_gpu(
+    ctx: &GpuContext,
+    world: &mut FluidWorld<f64>,
+    dt: f32,
+) -> Result<(), String> {
+    if world.particles.is_empty() {
+        return Ok(());
+    }
+    // 喂邻居网格(GPU 密度/力内核依赖它)。
+    world.build_grid();
+    let flat = world.to_gpu_flat();
+    let (rho_p, acc) = render_sph_gpu(ctx, &flat).await?;
+    let n = world.particles.len();
+    let bm = world.params.bounds_min;
+    let bx = world.params.bounds_max;
+    for i in 0..n {
+        let a = acc[i];
+        let p = &mut world.particles[i];
+        // 半隐式欧拉(力内核已含重力 f_ext,不再叠加重力)。
+        let mut vx = p.vel.x + (a[0] as f64) * dt as f64;
+        let mut vy = p.vel.y + (a[1] as f64) * dt as f64;
+        let mut vz = p.vel.z + (a[2] as f64) * dt as f64;
+        let mut x = p.pos.x + vx * dt as f64;
+        let mut y = p.pos.y + vy * dt as f64;
+        let mut z = p.pos.z + vz * dt as f64;
+        // 边界夹紧(复刻 CPU enforce_bounds)。
+        if x < bm.x {
+            x = bm.x;
+            vx = 0.0;
+        } else if x > bx.x {
+            x = bx.x;
+            vx = 0.0;
+        }
+        if y < bm.y {
+            y = bm.y;
+            vy = 0.0;
+        } else if y > bx.y {
+            y = bx.y;
+            vy = 0.0;
+        }
+        if z < bm.z {
+            z = bm.z;
+            vz = 0.0;
+        } else if z > bx.z {
+            z = bx.z;
+            vz = 0.0;
+        }
+        p.vel.x = vx;
+        p.vel.y = vy;
+        p.vel.z = vz;
+        p.pos.x = x;
+        p.pos.y = y;
+        p.pos.z = z;
+        p.rho = rho_p[i][0] as f64;
+        p.p = rho_p[i][1] as f64;
+    }
+    Ok(())
+}
+
+/// f64 颗粒世界的完整一帧 GPU 步进,写回 `world.grains` 的 `pos/vel`。
+pub async fn step_granular_gpu(
+    ctx: &GpuContext,
+    world: &mut GranularWorld<f64>,
+    dt: f32,
+) -> Result<(), String> {
+    if world.grains.is_empty() {
+        return Ok(());
+    }
+    // 保存帧起点位置(用于投影后速度回写)。
+    let old: Vec<V3<f64>> = world.grains.iter().map(|g| g.pos).collect();
+    // 预测(复刻 CPU step 的前三步:old=pos, vel+=g*dt, pos+=vel*dt)。
+    for g in world.grains.iter_mut() {
+        g.vel = g.vel + world.gravity * dt as f64;
+        g.pos = g.pos + g.vel * dt as f64;
+    }
+    let flat = world.to_gpu_flat();
+    let pos = render_granular_gpu(ctx, &flat).await?;
+    let n = world.grains.len();
+    let friction = world.friction;
+    for i in 0..n {
+        let np = V3::new(pos[i][0] as f64, pos[i][1] as f64, pos[i][2] as f64);
+        // 速度 = (投影后位置 - 帧起点位置) / dt。
+        let mut v = (np - old[i]) * (1.0 / dt as f64);
+        // 摩擦衰减(复刻 CPU step 末行)。
+        v = v * (1.0 - friction * dt as f64);
+        world.grains[i].pos = np;
+        world.grains[i].vel = v;
+    }
+    Ok(())
+}
+
+/// 运行时切换入口:把 `World<f64>` 中流体 / 颗粒子系统的力学 step 路由到 GPU compute,
+/// 其余子系统(刚体 / 热 / ...)与全部 `couple` 阶段仍走 CPU,耦合矩阵保持完整。
+///
+/// 实现:先遍历子系统,对 `FluidSubsystem<f64>` / `GranularSubsystem<f64>` 调各自 GPU step
+/// (写回其 `world`),并把这些索引记入 `skip`;然后 `world.step_skipping(dt, &skip)` 跳过
+/// 它们的 CPU `step`,但照常执行 `couple`。
+pub async fn step_world_gpu(
+    ctx: &GpuContext,
+    world: &mut World<f64>,
+    dt: f32,
+) -> Result<(), String> {
+    let mut i = 0usize;
+    let mut skip: Vec<bool> = Vec::new();
+    loop {
+        let hit = match world.get_mut(i) {
+            Some(sub) => {
+                if let Some(fs) = sub.as_any_mut().downcast_mut::<FluidSubsystem<f64>>() {
+                    step_sph_gpu(ctx, &mut fs.world, dt).await?;
+                    true
+                } else if let Some(gs) =
+                    sub.as_any_mut().downcast_mut::<GranularSubsystem<f64>>()
+                {
+                    step_granular_gpu(ctx, &mut gs.world, dt).await?;
+                    true
+                } else {
+                    false
+                }
+            }
+            None => break,
+        };
+        skip.push(hit);
+        i += 1;
+    }
+    world.step_skipping(dt as f64, &skip);
+    Ok(())
 }

@@ -739,3 +739,40 @@ impl FluidWorld<f32> {
         }
     }
 }
+
+// 运行时切换:f64 世界导出 GPU 扁平数据(Web Demo 把 f64 世界副本送 GPU compute 写回 World<f64>)。
+impl FluidWorld<f64> {
+    /// f64 世界导出 GPU 友好扁平数据(等价为 f32 版,字段经 `as f32` 缩小精度)。
+    ///
+    /// 调用前需 `build_grid`(或先 `step` 过),否则邻居网格为空、GPU 内核找不到邻居。
+    pub fn to_gpu_flat(&self) -> super::gpu_flat::SphFlatData {
+        let f = |x: f64| -> f32 { x as f32 };
+        let n = self.particles.len();
+        let mut pos = Vec::with_capacity(n);
+        let mut vel = Vec::with_capacity(n);
+        let mut scalar = Vec::with_capacity(n);
+        for p in &self.particles {
+            pos.push([f(p.pos.x), f(p.pos.y), f(p.pos.z), 0.0]);
+            vel.push([f(p.vel.x), f(p.vel.y), f(p.vel.z), 0.0]);
+            scalar.push([f(p.rho), f(p.p), f(p.mass), p.material as f32]);
+        }
+        let flat: super::grid::FlatGrid<f64> = self.grid.to_flat();
+        super::gpu_flat::SphFlatData {
+            n,
+            pos,
+            vel,
+            scalar,
+            cell_start: flat.cell_start,
+            sorted: flat.sorted,
+            grid_min: [flat.min_i, flat.min_j, flat.min_k],
+            nc: [flat.ncx, flat.ncy, flat.ncz],
+            h: f(self.params.h),
+            rest_density: f(self.params.rest_density),
+            stiffness: f(self.params.stiffness),
+            visc_k: self.params.visc_k.iter().map(|x| *x as f32).collect(),
+            visc_n: self.params.visc_n.iter().map(|x| *x as f32).collect(),
+            shear_min: f(self.params.shear_min),
+            gravity: [f(self.params.gravity.x), f(self.params.gravity.y), f(self.params.gravity.z)],
+        }
+    }
+}

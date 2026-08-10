@@ -129,14 +129,21 @@ impl<T: RealField> World<T> {
     /// 内部可经 `world.get_mut(j)` 安全可变访问其他子系统,而无别名冲突。
     ///
     /// 事件序列(每个 step):首次 step 前发 `SimStart` → 各 subsystem `step` →
-    /// 各 subsystem `couple`(子系统可在其中经 `world.bus` 发布自定义事件)→
-    /// 发 `Step{t,dt}` → `bus.flush()` 把本步累积的事件统一分发给订阅者。
-    pub fn step(&mut self, dt: T) {
+    /// 推进一个时间步 `dt`,但跳过 `skip[i] == true` 的子系统的 CPU `step`
+    /// (其力学推进改由外部 GPU 路径完成)。`couple` 阶段对所有子系统照常执行,
+    /// 以便热浮力 / 刚体碰撞等跨子系统耦合不被跳过。
+    ///
+    /// 通常用于 Web 演示的「运行时切换」:把流体 / 颗粒子系统的力学 step 路由到
+    /// GPU compute,其余子系统仍走 CPU,耦合矩阵保持完整。
+    pub fn step_skipping(&mut self, dt: T, skip: &[bool]) {
         if !self.started {
             self.started = true;
             self.bus.publish_world(WorldEvent::SimStart);
         }
-        for s in self.subsystems.iter_mut() {
+        for (i, s) in self.subsystems.iter_mut().enumerate() {
+            if skip.get(i).copied().unwrap_or(false) {
+                continue;
+            }
             s.step(&dt);
         }
         let n = self.subsystems.len();
@@ -148,6 +155,19 @@ impl<T: RealField> World<T> {
         self.t += dt.clone();
         self.bus.publish_world(WorldEvent::Step { t: self.t.clone(), dt });
         self.bus.flush();
+    }
+
+    /// 推进一个时间步 `dt`:先 step 后 couple,再发 Step 事件并 flush,最后累加时间。
+    ///
+    /// 耦合阶段对第 `i` 个子系统临时 `remove` 出 `subsystems`,以 `&mut World`
+    /// (不含自身)为参数调用其 `couple`,结束再 `insert` 回原位。这样 `couple`
+    /// 内部可经 `world.get_mut(j)` 安全可变访问其他子系统,而无别名冲突。
+    ///
+    /// 事件序列(每个 step):首次 step 前发 `SimStart` → 各 subsystem `step` →
+    /// 各 subsystem `couple`(子系统可在其中经 `world.bus` 发布自定义事件)→
+    /// 发 `Step{t,dt}` → `bus.flush()` 把本步累积的事件统一分发给订阅者。
+    pub fn step(&mut self, dt: T) {
+        self.step_skipping(dt, &[]);
     }
 }
 
