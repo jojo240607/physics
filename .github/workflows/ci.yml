@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  host:
+    name: Host build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build workspace
+        run: cargo build --workspace --all-targets
+      - name: Test workspace (default, fast unit tests)
+        run: cargo test --workspace
+      - name: Test release + ignored (heavy numerical regression)
+        run: cargo test --release -p phy-demo -- --ignored
+
+  wasm:
+    name: WASM cross-compile guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Cross-compile Web crates to wasm32
+        run: python3 wasm-cross-check.py --all

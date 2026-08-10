@@ -104,13 +104,7 @@ fn l1_dropped_ball_settles() {
     }
     for _ in 0..100 {
         w.step_checked(dt).unwrap();
-        let s = w.get(0).unwrap();
-        let rs = s
-            .as_any()
-            .downcast_ref::<RigidSubsystem<f64>>()
-            .unwrap();
-        let v = rs.world.bodies[1].vel.norm();
-        max_speed_after_settle = max_speed_after_settle.max(v);
+        max_speed_after_settle = max_speed_after_settle.max(ball_vy(&w).abs());
     }
     // 稳定后小球应趋于静止(与地面的接触耗散了能量),速度不应持续高位飞行。
     assert!(

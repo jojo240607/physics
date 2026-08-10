@@ -462,6 +462,11 @@ pub trait GpuBackend {
 - 完整数值回归(确定性 + 稳定性)用 release + ignored 运行:
   `cargo test --release -p phy-demo -- --ignored`
   (release 下 SPH 提速约 10–50×,整套 < 1 分钟)。
+- **实测基线(2026-08-10, Win32 cmd.exe + rustc 1.78 release,`--test-threads=1`)**:整套 13 项(确定性 3 + 稳定性 5 + 库硬化 5)全过、0 失败,总耗时 ≈ **39s**——
+  - `determinism.rs` 3 项 ≈ 19.7s(`repeat_run_is_deterministic` / `rigid_fluid_replay_is_deterministic` / `save_reload_replay_is_deterministic`);
+  - `regression_stability.rs` 5 项 ≈ 16.8s(`fluid_dam_break_stable_200_steps` / `fluid_heat_couple_stable_200_steps` / `optics_scene_stable_100_steps` / `rigid_fluid_buoyancy_stable_200_steps` / `soft_cloth_stable_200_steps`);
+  - `library_hardening.rs` 5 项 ≈ 2.6s(`l1_dropped_ball_settles` / `l1_kinetic_energy_bounded_no_explosion` / `l1_no_nan_over_long_run` / `l2_json_roundtrip_preserves_trajectory` / `l2_same_construction_stepwise_identical`)。
+  - 该基线现已接入 CI(`.github/workflows/ci.yml` 的 `host` job: `cargo test --release -p phy-demo -- --ignored`),任何数值回归会被即时捕获。
 
 ### 当前测试力度盘点(2026-08-10,含 L1/L2 后)
 - 全 workspace 单测 ≈ 120+,全部绿灯,0 失败。分布:phy-core 12 / phy-demo 10(E2E 耦合) + 8(ignored 重负载回归) / phy-rigid ~50 / phy-soft 20 / phy-field ~23 / phy-fluid 18 / phy-granular 5 / phy-solid 4 / phy-io 3 / phy-optics 7 / phy-demo-web 1 / **phy-math 8(原 0)**。
@@ -469,4 +474,5 @@ pub trait GpuBackend {
 - 缺口(剩余):① GPU 数值一致性仅完成 CPU 端路由验证 + 浏览器端手动核对步骤,缺自动化 CI(需真实 WebGPU adapter)。
 - 结论:作为 Rust 库**核心物理、耦合、稳定性、确定性、C ABI(L3)、性能基线(L4-1)、NaN 看门狗(L4-2)、W7 路由(L4-3)、用户向文档/doctest(README + 4 处可运行示例)均已可信**,可对外(尤其非 Rust 业务)稳定供货;GPU 为 Web 限定/特定工具链可解锁的附加项。
 - **WASM 交叉编译护栏已落地(2026-08-10)**:新增 `wasm-cross-check.py`,对 `phy-core`(S8 replay / L2 WASM 回放核心)与 `phy-demo-web`(W1–W7 Web 消费端,默认 + `--gpu`)交叉编译至 `wasm32-unknown-unknown`,确保 S8/L2/W7 的 "wasm32 兼容" 声明不被后续改动静默破坏(`phy-ffi` 为 `cdylib`,桌面专用,故意排除)。已实跑通过:`phy-core` 与 `phy-demo-web` 默认构建均成功产出 wasm。
+- **CI + 回归基线 + 警告清理(2026-08-10)**:① 新增 `.github/workflows/ci.yml`,`host` job 跑 `cargo build --workspace --all-targets` + `cargo test --workspace` + `cargo test --release -p phy-demo -- --ignored`(重数值回归),`wasm` job 跑 `python3 wasm-cross-check.py --all`(含 gpu feature),把 WASM 兼容与数值回归纳入自动守卫;② 实测 release ignored 全量 ≈39s(确定性 19.7s / 稳定性 16.8s / 库硬化 2.6s)并写入 §5.8 基线;③ 清理 `phy-demo/src/raster.rs` 的无效 `mut x1/y1` 警告,删除 `w7_routing.rs` 未用的 `std::any::Any` 导入,并把 `library_hardening.rs` 的死 `ball_vy` 辅助函数复用到 `l1_dropped_ball_settles`(消除 dead_code 警告且强化 L1 断言)。其余警告(phy-optics/phy-solid/phy-fluid 内部)属既有范围外,未动。
 

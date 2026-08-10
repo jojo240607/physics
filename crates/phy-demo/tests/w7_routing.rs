@@ -20,7 +20,6 @@ use phy_core::World;
 use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
 use phy_math::Vec3 as V3;
 use phy_rigid::{Body, RigidSubsystem, RigidWorld, Shape};
-use std::any::Any;
 
 fn coupled_world() -> World<f64> {
     let params = SphParams::<f64>::defaults();

@@ -86,8 +86,8 @@ impl Framebuffer {
         &mut self,
         mut x0: i32,
         mut y0: i32,
-        mut x1: i32,
-        mut y1: i32,
+        x1: i32,
+        y1: i32,
         depth: f32,
         color: [u8; 3],
     ) {
