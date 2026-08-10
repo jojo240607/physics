@@ -10,7 +10,7 @@
 //! 编译产物:`cargo build -p phy-ffi --release` → `target/release/phy_ffi.{dll,so,dylib}`。
 //! C 头:`PHY_FFI_GEN_HEADER=1 cargo build -p phy-ffi` → `crates/phy-ffi/phy_ffi.h`。
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::panic::{self, AssertUnwindSafe};
 
 use phy_core::World;
@@ -425,6 +425,7 @@ fn nonnull_slice<'a>(ptr: *mut f64, len: usize) -> Option<&'a mut [f64]> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::CString;
     use super::*;
 
     #[test]

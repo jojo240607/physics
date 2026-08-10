@@ -14,3 +14,6 @@ patch_impls.py
 # Web 自测截图产物
 crates/phy-demo-web/shot_*.png
 build_tmp.txt  
+
+# 打包产物(build_package.py 输出,非源码)
+/pkg
