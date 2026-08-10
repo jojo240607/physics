@@ -23,6 +23,7 @@ This script is host-only (desktop C ABI). For the Web/WASM build, see
 wasm-cross-check.py (phy-ffi is intentionally excluded there).
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -58,6 +59,53 @@ def detect_lib_ext(target):
     if "apple" in target or "darwin" in target:
         return ".dylib", None
     return ".so", None
+
+
+def _find_llvm_tool(name):
+    """Locate an LLVM tool (llvm-dlltool / llvm-lib) on PATH or common dirs."""
+    on_path = shutil.which(name)
+    if on_path:
+        return on_path
+    candidates = [
+        r"D:\soft\llvm\bin",
+        r"C:\soft\llvm\bin",
+        r"C:\Program Files\LLVM\bin",
+        os.path.expandvars(r"%USERPROFILE%\.rustup\toolchains"),
+    ]
+    for base in candidates:
+        if not os.path.isdir(base):
+            continue
+        for root, _dirs, files in os.walk(base):
+            if name in files:
+                return os.path.join(root, name)
+    return None
+
+
+def gen_msvc_implib(dll_path, out_dir):
+    """Generate an MSVC-compatible import library `phy_ffi.lib` from the cdylib.
+
+    Parses the cbindgen header for `phy_*` exports, writes a .def, then invokes
+    `llvm-dlltool -d phy_ffi.def -l phy_ffi.lib`. Returns the .lib path or None.
+    """
+    header = os.path.join(ROOT, "crates", "phy-ffi", "phy_ffi.h")
+    if not os.path.exists(header):
+        return None
+    with open(header, "r", encoding="utf-8") as f:
+        text = f.read()
+    names = sorted(set(re.findall(r"\b(phy_[A-Za-z0-9_]+)\s*\(", text)))
+    if not names:
+        return None
+    dlltool = _find_llvm_tool("llvm-dlltool.exe") or _find_llvm_tool("llvm-dlltool")
+    if dlltool is None:
+        print("  (skip) llvm-dlltool not found; cannot generate phy_ffi.lib", flush=True)
+        return None
+    def_path = os.path.join(out_dir, "phy_ffi.def")
+    with open(def_path, "w", encoding="utf-8") as f:
+        f.write("LIBRARY phy_ffi.dll\nEXPORTS\n")
+        f.write("".join(n + "\n" for n in names))
+    lib_path = os.path.join(out_dir, "phy_ffi.lib")
+    run([dlltool, "-d", def_path, "-l", lib_path])
+    return lib_path if os.path.exists(lib_path) else None
 
 
 def main():
@@ -139,6 +187,16 @@ def main():
         shutil.copy2(src_header, os.path.join(out_dir, "phy_ffi.h"))
         copied.append("phy_ffi.h")
 
+    # 3b) MSVC import library (Windows only): parse exports from the header and
+    #     generate phy_ffi.lib via llvm-dlltool so MSVC/Unity(P/Invoke) can link.
+    is_windows = (TARGET is None and sys.platform == "win32") or (
+        TARGET is not None and "windows" in TARGET
+    )
+    if is_windows and os.path.exists(src_cdylib):
+        lib = gen_msvc_implib(src_cdylib, out_dir)
+        if lib:
+            copied.append("phy_ffi.lib")
+
     # 4) Write a short USAGE note next to the artifacts.
     usage = f"""# Physics Engine — redistributable package ({PROFILE})
 
@@ -146,15 +204,20 @@ Built: {PROFILE} profile{(' for target ' + TARGET) if TARGET else ''}.
 
 ## Contents
   phy_ffi.h            C/C++/Unity/Unreal header (cbindgen-generated, do not edit by hand)
-  phy_ffi{ cdylib_ext }            Dynamic library (link at runtime / load via dlopen)
-  libphy_ffi.dll.a     MinGW import library (Windows, if present)
+  phy_ffi{ cdylib_ext }            Dynamic library (place next to your executable / on runtime PATH)
+  libphy_ffi.dll.a     MinGW import library (Windows, link with MinGW/GCC/Clang toolchains)
+  phy_ffi.lib          MSVC import library (Windows, link with MSVC / Unity C# P/Invoke / Unreal)
   libphy_ffi.rlib      Rust static lib (for Rust consumers: `phy-ffi` as a normal crate dep)
-  phy_ffi.lib          MSVC import library (Windows, if present)
+  phy_ffi.def          Plain export definition (handy for other toolchains)
 
 ## C/C++/Unity/Unreal
   1. Include `phy_ffi.h`.
-  2. Link against the dynamic library (add the .dll to your runtime PATH / bundle it).
-  3. Call `phy_world_create_*`, step with `phy_world_step` / `phy_world_step_checked`,
+  2. Link the matching import library for your toolchain:
+     - MSVC / Unity(P/Invoke) / Unreal : `phy_ffi.lib`
+     - MinGW / GCC / Clang             : `libphy_ffi.dll.a`
+     - Other                           : use `phy_ffi.def` directly.
+  3. Ship `phy_ffi.dll` alongside your executable (or on the runtime PATH).
+  4. Call `phy_world_create_*`, step with `phy_world_step` / `phy_world_step_checked`,
      pull state with `phy_world_get_fluid_positions` / `phy_world_get_rigid_transforms`,
      and free with `phy_world_destroy`.
 

@@ -21,6 +21,10 @@ version = "0.1.0"
 edition = "2021"
 authors = ["physics-engine"]
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/physics-engine/physics"
+description = "A modular multi-physics engine (rigid, SPH fluid, soft/cloth, granular, FEM, fields, optics) with deterministic replay and C/WASM bindings."
+readme = "README.md"
+rust-version = "1.74"
 
 [workspace.dependencies]
 nalgebra = { version = "0.33", features = ["serde"] }

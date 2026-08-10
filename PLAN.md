@@ -477,3 +477,40 @@ pub trait GpuBackend {
 - **一键编译打包脚本(2026-08-10)**:新增 `build_package.py`,`python3 build_package.py [--debug|--check|--no-header|--target=TRIPLE]` 产出可分发目录 `pkg/<profile>/`(含 `phy_ffi.<dll|so|dylib>` 动态库、`libphy_ffi.dll.a` 导入库、`phy_ffi.h` cbindgen 头、`libphy_ffi.rlib` Rust 静态库、`USAGE.md` 使用说明),头文件经 `PHY_FFI_GEN_HEADER=1` 自动重新生成以匹配当前 FFI 表面;`--check` 会先跑 `cargo test --workspace` + release ignored 回归再打包。已实跑通过:`pkg/release/` 含 dll(2.6MB)+ dll.a + rlib + phy_ffi.h + USAGE.md。同步清理 `phy-ffi` 的 `CString` 误导入(仅测试用),`phy-ffi` 现零警告;`pkg/` 已加入 `.gitignore`。
 - **CI + 回归基线 + 警告清理(2026-08-10)**:① 新增 `.github/workflows/ci.yml`,`host` job 跑 `cargo build --workspace --all-targets` + `cargo test --workspace` + `cargo test --release -p phy-demo -- --ignored`(重数值回归),`wasm` job 跑 `python3 wasm-cross-check.py --all`(含 gpu feature),把 WASM 兼容与数值回归纳入自动守卫;② 实测 release ignored 全量 ≈39s(确定性 19.7s / 稳定性 16.8s / 库硬化 2.6s)并写入 §5.8 基线;③ 清理 `phy-demo/src/raster.rs` 的无效 `mut x1/y1` 警告,删除 `w7_routing.rs` 未用的 `std::any::Any` 导入,并把 `library_hardening.rs` 的死 `ball_vy` 辅助函数复用到 `l1_dropped_ball_settles`(消除 dead_code 警告且强化 L1 断言)。其余警告(phy-optics/phy-solid/phy-fluid 内部)属既有范围外,未动。
 
+---
+
+# 阶段二:生产级物理引擎路线图(2026-08-10 起)
+
+> 现状(2026-08-10):工程已实现 M1–M27 全部物理模型、L1/L2 稳定性与确定性回归、L3 C ABI、L4 性能基线/NaN 看门狗/W7 路由、S8 确定性回放,并具备 Rust/cdylib/WASM 三种供货形态 + `build_package.py` 一键打包 + CI 守卫。**已可作为"研究/原型/中小规模仿真"用途交付。**
+> 但要达到"成熟生产级"(商用游戏/海量实体/稳定 ABI 契约/MSVC 集成),仍缺以下项。本节为落地计划。
+
+## 差距清单(代码实测依据)
+| 编号 | 差距 | 现状实证 | 能否本机实现 | 优先级 |
+|------|------|---------|-------------|--------|
+| P1 | 无语义化版本 / 未发 crates.io | 所有 crate 无 version tag,滚动 main 主干 | ✅ 纯流程 | 高 |
+| P2 | 无 MSVC 导入库 `.lib` | 仅产出 MinGW `libphy_ffi.dll.a`;Windows 游戏引擎/Unity(P/Invoke)多需 MSVC `.lib` | ✅ 脚本补 | 高 |
+| P3 | FFI 仅 f64 | `phy-ffi/src/lib.rs` 全文 `World<f64>`;数学层(nalgebra `RealField`)已支持 f32,`phy-fluid` GPU 扁平缓冲已是 f32 | ✅ 中 | 中 |
+| P4 | 颗粒/场 O(n²) | `phy-granular/world.rs` 朴素 O(n²)(几千内足够);`phy-core/src/spatial.rs` 已有 `SpatialGrid`(M15)可复用;**SPH 流体已是线性空间哈希(`phy-fluid/sph/grid.rs`),不受影响** | ✅ 中 | 高 |
+| P5 | GPU 数值一致性未实测 | W1–W7 CPU 路由有;WebGPU 内核未真实 adapter 验证 | ⚠️ 需 WGPU 运行时 | 中 |
+| P6 | 残余 ~30 编译警告 | phy-optics/phy-solid/phy-fluid 未用导入等 | ✅ 低 | 低 |
+| P7 | 无 API 稳定性契约 | 无 `#[non_exhaustive]`/deprecation/MSRV 声明 | ✅ 流程+注解 | 中 |
+
+## 分阶段计划
+- **阶段 A(最低门槛,先做)**:P1 语义化版本 + `CHANGELOG.md` + 各 crate `Cargo.toml` 补 `license`/`repository`/`description`;P2 `build_package.py` 在 Windows 可用 `lib.exe`/`llvm-lib` 时额外生成 `phy_ffi.lib` 并打包,`USAGE.md` 标注 MSVC/MinGW 两种链接。
+- **阶段 B(性能/规模)**:P4 颗粒复用 `SpatialGrid` 改造为桶查询(从几千撑到数万/十万),加 1k→50k 规模守恒回归;P3 FFI 增加 `phy_world_create_*_f32` 系列 / `set_precision`(默认 f64,可选 f32 构建)。
+- **阶段 C(交付质量)**:P6 警告清零(`cargo build --workspace` 目标零警告);P7 对外 crate 加 `#[non_exhaustive]`/deprecation 周期/README 声明 MSRV(如 Rust 1.74+);P5 在带 WGPU 环境对比 CPU vs GPU 数值误差,补 §5.8 缺口① 验收证据。
+
+## 执行顺序
+`A(P1→P2)` → `B(P4→P3)` → `C(P6→P7→P5)`
+> P1–P4/P6/P7 均可在本机实现,无需外部运行时;P5 依赖 WebGPU 运行时,仅增强项,不影响核心库供货。
+
+## 落地进度
+- [x] 2026-08-10:计划写入 PLAN(本节)。
+- [x] **P1**(2026-08-10):统一 workspace 语义化 `version`(`[workspace.package]` 0.1.0),补齐 `repository`/`description`/`readme`/`rust-version`(MSRV 1.74),理顺 `phy-demo-web`/`phy-soft` 两处内联版本;新增 `CHANGELOG.md`(Keep a Changelog 格式,记录 0.1.0 已落地能力与已知限制)。
+- [x] **P2**(2026-08-10):`build_package.py` 在 Windows 目标下从头文件解析 `phy_*` 导出、生成 `phy_ffi.def` 并经 `llvm-dlltool` 额外产出 MSVC 导入库 `phy_ffi.lib`(已实跑通过,`pkg/release/` 现含 `libphy_ffi.dll.a` + `phy_ffi.lib` 双导入库);`USAGE.md` 区分 MinGW/MSVC/Unity(P/Invoke)/Unreal 链接方式。
+- [ ] **P3**:FFI f32/f64 双精度入口。
+- [ ] **P4**:颗粒空间哈希化 + 规模回归。
+- [ ] **P5**:GPU 数值一致性验收。
+- [ ] **P6**:警告清零。
+- [ ] **P7**:API 稳定性契约 + MSRV。
+
