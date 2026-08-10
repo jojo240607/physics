@@ -24,7 +24,7 @@ impl<T: RealField + Copy> GranularSubsystem<T> {
     }
 }
 
-impl<T: RealField + Copy> Subsystem<T> for GranularSubsystem<T> {
+impl<T: RealField + Copy + num_traits::Float> Subsystem<T> for GranularSubsystem<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -35,6 +35,25 @@ impl<T: RealField + Copy> Subsystem<T> for GranularSubsystem<T> {
 
     fn step(&mut self, dt: &T) {
         self.world.step(*dt);
+    }
+
+    /// 颗粒看门狗:扫描所有颗粒的位置/速度是否有限。
+    fn validate(&self) -> Result<(), phy_core::WorldError> {
+        for g in self.world.grains.iter() {
+            if !g.pos.x.is_finite() || !g.pos.y.is_finite() || !g.pos.z.is_finite() {
+                return Err(phy_core::WorldError::NonFinite {
+                    subsystem: "granular",
+                    field: "pos",
+                });
+            }
+            if !g.vel.x.is_finite() || !g.vel.y.is_finite() || !g.vel.z.is_finite() {
+                return Err(phy_core::WorldError::NonFinite {
+                    subsystem: "granular",
+                    field: "vel",
+                });
+            }
+        }
+        Ok(())
     }
 
     fn name(&self) -> &'static str {

@@ -184,6 +184,30 @@ pub extern "C" fn phy_world_step(w: *mut PhyWorldHandle, dt: f64) -> i32 {
     guard(|| world.step(dt)).map(|_| 0).unwrap_or(-1)
 }
 
+/// 带看门狗的步进(数值健康度保护)。
+///
+/// 返回值:
+/// - `0` : 步进成功且全部子系统数值有限(NaN/Inf 检查通过);
+/// - `-1`: 空指针或内部 panic;
+/// - `2` : 检测到非有限值(NaN/Inf),世界停在该帧(见 [`phy_core::WorldError::NonFinite`]);
+/// - `3` : 某子系统一帧内未推进时间(卡死/被跳过)。
+///
+/// 业务(游戏/防战建模)在“数据必须有限才能喂给渲染或下游模型”时优先用本接口,
+/// 失败后可调用 `phy_world_destroy` 释放并用最后已知良好状态回滚。
+#[no_mangle]
+pub extern "C" fn phy_world_step_checked(w: *mut PhyWorldHandle, dt: f64) -> i32 {
+    let world = match as_world(w) {
+        Some(w) => w,
+        None => return -1,
+    };
+    match guard(|| world.step_checked(dt)) {
+        Some(Ok(())) => 0,
+        Some(Err(phy_core::WorldError::NonFinite { .. })) => 2,
+        Some(Err(phy_core::WorldError::Stalled { .. })) => 3,
+        None => -1,
+    }
+}
+
 /// 当前仿真时间。空指针返回 NaN。
 #[no_mangle]
 pub extern "C" fn phy_world_time(w: *mut PhyWorldHandle) -> f64 {
@@ -442,5 +466,19 @@ mod tests {
         assert!(phy_world_time(std::ptr::null_mut()).is_nan());
         assert_eq!(phy_world_fluid_count(std::ptr::null_mut()), 0);
         phy_world_destroy(std::ptr::null_mut()); // 安全 no-op
+    }
+
+    #[test]
+    fn ffi_checked_step_reports_health() {
+        let w = phy_world_create_fluid();
+        assert!(!w.is_null());
+        // 健康世界:200 步后看门狗应始终返回 0(有限值)。
+        for _ in 0..200 {
+            let rc = phy_world_step_checked(w, 0.005);
+            assert_eq!(rc, 0, "流体世界不应触发看门狗");
+        }
+        // 空指针返回 -1。
+        assert_eq!(phy_world_step_checked(std::ptr::null_mut(), 0.01), -1);
+        phy_world_destroy(w);
     }
 }

@@ -158,7 +158,8 @@ where
         + DeserializeOwned
         + Default
         + nalgebra::Scalar
-        + num_traits::ToPrimitive,
+        + num_traits::ToPrimitive
+        + num_traits::Float,
 {
     let mut world = World::new();
     world.set_time(arch.time);
@@ -190,7 +191,8 @@ where
         + DeserializeOwned
         + Default
         + nalgebra::Scalar
-        + num_traits::ToPrimitive,
+        + num_traits::ToPrimitive
+        + num_traits::Float,
 {
     let arch = archive_world(world);
     serde_json::to_string_pretty(&arch).expect("serialize world archive")
@@ -205,7 +207,8 @@ where
         + DeserializeOwned
         + Default
         + nalgebra::Scalar
-        + num_traits::ToPrimitive,
+        + num_traits::ToPrimitive
+        + num_traits::Float,
 {
     let arch: WorldArchive<T> =
         serde_json::from_str(json).expect("deserialize world archive");
@@ -221,7 +224,8 @@ where
         + DeserializeOwned
         + Default
         + nalgebra::Scalar
-        + num_traits::ToPrimitive,
+        + num_traits::ToPrimitive
+        + num_traits::Float,
 {
     let json = save_world_json(world);
     std::fs::write(path, json)
@@ -236,7 +240,8 @@ where
         + DeserializeOwned
         + Default
         + nalgebra::Scalar
-        + num_traits::ToPrimitive,
+        + num_traits::ToPrimitive
+        + num_traits::Float,
 {
     let json = std::fs::read_to_string(path).expect("read archive file");
     load_world_json(&json)

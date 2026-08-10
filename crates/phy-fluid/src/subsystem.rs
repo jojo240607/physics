@@ -55,7 +55,9 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> FluidSubsystem<T> {
     }
 }
 
-impl<T: RealField + Copy + num_traits::ToPrimitive> Subsystem<T> for FluidSubsystem<T> {
+impl<T: RealField + Copy + num_traits::ToPrimitive + num_traits::Float> Subsystem<T>
+    for FluidSubsystem<T>
+{
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -66,6 +68,25 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> Subsystem<T> for FluidSubsys
 
     fn step(&mut self, dt: &T) {
         self.world.step(*dt);
+    }
+
+    /// 流体看门狗:扫描所有 SPH 粒子的位置/速度是否有限。
+    fn validate(&self) -> Result<(), phy_core::WorldError> {
+        for p in self.world.particles.iter() {
+            if !p.pos.x.is_finite() || !p.pos.y.is_finite() || !p.pos.z.is_finite() {
+                return Err(phy_core::WorldError::NonFinite {
+                    subsystem: "fluid",
+                    field: "pos",
+                });
+            }
+            if !p.vel.x.is_finite() || !p.vel.y.is_finite() || !p.vel.z.is_finite() {
+                return Err(phy_core::WorldError::NonFinite {
+                    subsystem: "fluid",
+                    field: "vel",
+                });
+            }
+        }
+        Ok(())
     }
 
     fn couple(&mut self, world: &mut World<T>, dt: &T) {

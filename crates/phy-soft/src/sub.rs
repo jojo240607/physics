@@ -47,7 +47,9 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> SoftSubsystem<T> {
     }
 }
 
-impl<T: RealField + Copy + num_traits::ToPrimitive> Subsystem<T> for SoftSubsystem<T> {
+impl<T: RealField + Copy + num_traits::ToPrimitive + num_traits::Float> Subsystem<T>
+    for SoftSubsystem<T>
+{
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -58,6 +60,31 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> Subsystem<T> for SoftSubsyst
 
     fn step(&mut self, dt: &T) {
         self.body.step(*dt);
+    }
+
+    /// 软体看门狗:扫描所有质点的位置/速度/受力是否有限。
+    fn validate(&self) -> Result<(), phy_core::WorldError> {
+        for p in self.body.particles.iter() {
+            if !p.pos.x.is_finite() || !p.pos.y.is_finite() || !p.pos.z.is_finite() {
+                return Err(phy_core::WorldError::NonFinite {
+                    subsystem: "soft",
+                    field: "pos",
+                });
+            }
+            if !p.vel.x.is_finite() || !p.vel.y.is_finite() || !p.vel.z.is_finite() {
+                return Err(phy_core::WorldError::NonFinite {
+                    subsystem: "soft",
+                    field: "vel",
+                });
+            }
+            if !p.force.x.is_finite() || !p.force.y.is_finite() || !p.force.z.is_finite() {
+                return Err(phy_core::WorldError::NonFinite {
+                    subsystem: "soft",
+                    field: "force",
+                });
+            }
+        }
+        Ok(())
     }
 
     /// 软体↔刚体 / 软体↔流体 双向耦合。

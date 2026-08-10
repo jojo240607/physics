@@ -45,7 +45,9 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> RigidSubsystem<T> {
     }
 }
 
-impl<T: RealField + Copy + num_traits::ToPrimitive> Subsystem<T> for RigidSubsystem<T> {
+impl<T: RealField + Copy + num_traits::ToPrimitive + num_traits::Float> Subsystem<T>
+    for RigidSubsystem<T>
+{
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -56,6 +58,38 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> Subsystem<T> for RigidSubsys
 
     fn step(&mut self, dt: &T) {
         self.world.step(*dt);
+    }
+
+    /// 刚体看门狗:扫描所有刚体的位置/速度/角速度/姿态四元数是否有限。
+    fn validate(&self) -> Result<(), phy_core::WorldError> {
+        for b in self.world.bodies.iter() {
+            if !b.pos.x.is_finite() || !b.pos.y.is_finite() || !b.pos.z.is_finite() {
+                return Err(phy_core::WorldError::NonFinite {
+                    subsystem: "rigid",
+                    field: "pos",
+                });
+            }
+            if !b.vel.x.is_finite() || !b.vel.y.is_finite() || !b.vel.z.is_finite() {
+                return Err(phy_core::WorldError::NonFinite {
+                    subsystem: "rigid",
+                    field: "vel",
+                });
+            }
+            if !b.ang_vel.x.is_finite() || !b.ang_vel.y.is_finite() || !b.ang_vel.z.is_finite() {
+                return Err(phy_core::WorldError::NonFinite {
+                    subsystem: "rigid",
+                    field: "ang_vel",
+                });
+            }
+            let q = b.rot.quaternion();
+            if !q.w.is_finite() || !q.i.is_finite() || !q.j.is_finite() || !q.k.is_finite() {
+                return Err(phy_core::WorldError::NonFinite {
+                    subsystem: "rigid",
+                    field: "quat",
+                });
+            }
+        }
+        Ok(())
     }
 
     /// 刚体↔热场 / 刚体↔电磁场 / 刚体↔引力场 双向耦合。

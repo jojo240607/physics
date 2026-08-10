@@ -31,6 +31,19 @@ PhyWorldHandle *phy_world_create_coupled(void);
 // 推进仿真 `dt` 秒。返回 0 成功,-1 失败(空指针或 panic)。
 int32_t phy_world_step(PhyWorldHandle *w, double dt);
 
+// 带看门狗的步进(数值健康度保护)。
+//
+// 返回值:
+// - `0` : 步进成功且全部子系统数值有限(NaN/Inf 检查通过);
+// - `-1`: 空指针或内部 panic;
+// - `2` : 检测到非有限值(NaN/Inf),世界停在该帧(见 [`phy_core::WorldError::NonFinite`]);
+// - `3` : 某子系统一帧内未推进时间(卡死/被跳过)。
+//
+// 业务(游戏/防战建模)在“数据必须有限才能喂给渲染或下游模型”时优先用本接口,
+// 失败后可调用 `phy_world_destroy` 释放并用最后已知良好状态回滚。
+int32_t phy_world_step_checked(PhyWorldHandle *w,
+                               double dt);
+
 // 当前仿真时间。空指针返回 NaN。
 double phy_world_time(PhyWorldHandle *w);
 

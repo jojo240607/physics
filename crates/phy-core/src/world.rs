@@ -43,6 +43,18 @@ pub trait Subsystem<T: RealField>: Any {
     fn name(&self) -> &'static str {
         "subsystem"
     }
+
+    /// 健康度自检:报告本子系统当前状态是否包含非有限数值(NaN / Inf)。
+    ///
+    /// 默认实现返回 `Ok(())`(不参与看门狗);数值积分类子系统(流体/刚体/颗粒/软体)
+    /// 应覆写本方法,在自身 `pos`/`vel`/`rot`/`ang_vel` 等字段中扫描非有限值。
+    ///
+    /// 仅在 `World::step_checked` / `step_skipping_checked` 中被调用,不影响普通
+    /// `step` 的零开销路径。
+    fn validate(&self) -> Result<(), crate::WorldError> {
+        let _ = self;
+        Ok(())
+    }
 }
 
 /// 仿真世界:统一驱动所有已注册子系统的多物理场容器。
@@ -169,6 +181,25 @@ impl<T: RealField> World<T> {
     pub fn step(&mut self, dt: T) {
         self.step_skipping(dt, &[]);
     }
+
+    /// 带看门狗的步进:先完成 `step_skipping` 的全部动作,再对全部子系统执行
+    /// `validate` 数值自检。任一对返回 `Err` 即短路返回首个 [`WorldError`],
+    /// 不再继续(世界已停在该帧,便于调用方 dump 现场)。
+    ///
+    /// 普通 `step` 路径零开销、不调用 `validate`;看门狗为可选显式入口,
+    /// 适合业务对“数值必须有限”有强约束的场景(如库化后给游戏/防战建模喂数据)。
+    pub fn step_skipping_checked(&mut self, dt: T, skip: &[bool]) -> Result<(), crate::WorldError> {
+        self.step_skipping(dt, skip);
+        for s in self.subsystems.iter() {
+            s.validate()?;
+        }
+        Ok(())
+    }
+
+    /// [`World::step`] 的看门狗版本。
+    pub fn step_checked(&mut self, dt: T) -> Result<(), crate::WorldError> {
+        self.step_skipping_checked(dt, &[])
+    }
 }
 
 #[cfg(test)]
@@ -238,5 +269,45 @@ mod tests {
         w.bus.publish_custom(MyEvent { tag: 42 });
         w.bus.flush();
         assert_eq!(*seen.borrow(), 42);
+    }
+
+    /// 看门狗:含 NaN 的子系统在 `step_checked` 中应短路返回 `WorldError::NonFinite`。
+    struct NanSub;
+    impl Subsystem<f64> for NanSub {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+        fn step(&mut self, _dt: &f64) {}
+        fn validate(&self) -> Result<(), crate::WorldError> {
+            Err(crate::WorldError::NonFinite {
+                subsystem: "nansub",
+                field: "pos",
+            })
+        }
+    }
+
+    #[test]
+    fn step_checked_detects_nonfinite_and_short_circuits() {
+        let mut w: World<f64> = World::new();
+        w.add_subsystem(Box::new(NanSub));
+        // 第一步即触发看门狗。
+        let err = w.step_checked(0.1).unwrap_err();
+        assert_eq!(
+            err,
+            crate::WorldError::NonFinite {
+                subsystem: "nansub",
+                field: "pos"
+            }
+        );
+    }
+
+    #[test]
+    fn step_checked_ok_for_finite_world() {
+        let mut w: World<f64> = World::new();
+        w.add_subsystem(Box::new(DummySub { steps: 0 }));
+        assert!(w.step_checked(0.1).is_ok());
     }
 }

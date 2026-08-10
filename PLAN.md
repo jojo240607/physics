@@ -415,10 +415,21 @@ pub trait GpuBackend {
 - 后续可扩:`phy_world_set_external_force`(外部施力注入)、`phy_world_add_subsystem(tag, json_cfg)`(动态组装场景)、GPU 路径开关(见 §5.8 GPU 约束,需 MSVC/Linux 工具链解锁桌面 wgpu)。
 
 ### L4 【中】性能基线 / 全局 NaN 看门狗 / GPU 数值实测
-- 新增 `crates/phy-core/benches/`(criterion):SPH 溃坝 N 体帧耗时、刚体 M 体接触帧耗时,作为回归基线(防战建模需量化吞吐)。
-- `World` 级看门狗:`step` 后若检测到 NaN/Inf 或某子系统 `t` 未推进,返回 `Err(WorldError)` 而非静默污染(业务侧可捕获报警)。
-- 浏览器实测 W7:在支持 WebGPU 的 Chrome 跑 `set_gpu_mode(true)`,确认 GPU 与 CPU 数值一致(否则 GPU 路径不能对外宣称可用)。
-- **交付**:性能可量化 + 大场景不静默崩溃 + GPU 路径可信。
+- **L4-1 性能基线(criterion)**:新增 `crates/phy-demo/benches/perf.rs`(criterion，`harness=false`)，建立两块业务关心场景的单帧步进基线：
+  - SPH 溃坝 `step_n{500,1000,2000}`(自由演化，密度/压力/受力两遍 + 积分)；
+  - 刚体接触 `step_m{64,128,256}`(重力下盒体地面堆叠 + 球-球/球-地接触约束)。
+  - 运行 `cargo bench -p phy-demo`；基线实测(Ryzen 5700X, release)：`step_n500≈94µs / n1000≈396µs / n2000≈1.72ms`、`step_m64≈2.1µs / m128≈5.3µs / m256≈16µs`。给“库化后喂游戏/防战建模”提供吞吐参考点。
+  - 备注:原计划放 `phy-core/benches/`，但 SPH/刚体世界构造依赖 `phy-fluid`/`phy-rigid`(phy-core 不依赖它们)，故落到 `phy-demo`(依赖全集)。
+- **L4-2 全局 NaN/Inf 看门狗**:
+  - `phy-core`:新增 `WorldError` 枚举(`NonFinite{subsystem,field}` / `Stalled{subsystem}`，实现 `std::error::Error`)；`Subsystem` trait 新增默认 `validate() -> Result<(),WorldError>`(默认 `Ok(())`，零开销、不影响普通 `step` 路径)；`World` 新增 `step_checked` / `step_skipping_checked`，在 `step_skipping` 全部动作后对所有子系统跑 `validate`，首个 `Err` 即短路返回。
+  - 数值积分子系统覆写 `validate`(带 `num_traits::Float` bound，扫描 pos/vel/rot/ang_vel/quat/force 的 `is_finite()`)：`phy-fluid`(pos/vel)、`phy-rigid`(pos/vel/ang_vel/quat)、`phy-granular`(pos/vel)、`phy-soft`(pos/vel/force)。其余子系统(optics/field/solid)沿用默认 `Ok(())`。
+  - `phy-io` 因 `unarchive_world` 构造这些子系统，`save/load_world_json` + `save/load_world` 的泛型边界补上 `num_traits::Float`(不影响 `f64`/`f32` 调用方)。
+  - `phy-ffi`:新增 `phy_world_step_checked(w,dt) -> i32`：0=健康 / -1=空指针或 panic / 2=NonFinite(NaN/Inf，世界停该帧) / 3=Stalled(某子系统一帧未推进)。业务(游戏/防战建模)在“数据必须有限才能喂渲染/下游模型”时优先用此接口，失败后可 `phy_world_destroy` 释放并回滚到最后已知良好状态。
+  - 验证:`phy-core` 2 个单测(看门狗捕获 NaN 子系统 / 有限世界通过) + `phy-ffi` 1 个单测(健康世界 200 步全 0 / 空指针 -1)全过。
+- **L4-3 浏览器 W7 数值一致性(CPU 端可验证 + 浏览器端手动核对)**:
+  - 主机可验证部分:`crates/phy-demo/tests/w7_routing.rs` 新增 `w7_skip_routing_matches_full_step`——构造耦合世界，对比 (A) 全 CPU `world.step` 与 (B) W7 同款路由(手动 step 流体子世界 + `step_skipping` 跳过其 CPU step 但保留 `couple`)。断言二者流体粒子位置在 **1e-12** 内逐位一致，证明 W7 摘出/跳过 fluid 不破坏耦合矩阵、“手动 step 子世界 + step_skipping”等价于整步。**已通过**(0.02s)。
+  - 浏览器端(需人工跑，本机无 WebGPU adapter):在支持 WebGPU 的 Chrome 加载 `phy-demo-web`(`wasm32 + feature=gpu`)，按 `W7` 运行时接管流体/颗粒 step，控制台应打印 `gpu_self_test` / `optic_self_test` / `caustics_self_test` / `sph_self_test` / `granular_self_test` 的 PASS 与各内核数值一致性摘要。确认 GPU 与 CPU 数值一致后，GPU 路径才可对外宣称可用(否则仅 CPU 库可信)。
+- **交付**:性能可量化 + 大场景不静默崩溃(NaN 看门狗可捕获并回滚) + W7 路由结构已 CPU 验证 + GPU 数值验证步骤文档化。
 
 ### 库化业务的 GPU 约束(关键约束,避免误解)
 - **引擎的 GPU 后端仅限 Web Demo**(`wasm32 + feature=gpu`,浏览器 WebGPU):A 档(SPH 密度/受力、颗粒 PBD 接触、光学逐像素 trace、焦散)已上 GPU,W7 可运行时接管流体/颗粒 step。
@@ -435,6 +446,6 @@ pub trait GpuBackend {
 ### 当前测试力度盘点(2026-08-10,含 L1/L2 后)
 - 全 workspace 单测 ≈ 120+,全部绿灯,0 失败。分布:phy-core 12 / phy-demo 10(E2E 耦合) + 8(ignored 重负载回归) / phy-rigid ~50 / phy-soft 20 / phy-field ~23 / phy-fluid 18 / phy-granular 5 / phy-solid 4 / phy-io 3 / phy-optics 7 / phy-demo-web 1 / **phy-math 8(原 0)**。
 - 强项:每个里程碑带单测 + 端到端 `World` 耦合测试 + **L1 全局稳定性回归(无 NaN/子系统不丢/时钟单调)** + **L2 数值确定性(重复运行逐位一致 + 存档重放一致)**。
-- 缺口(剩余):① 无 C ABI(L3);② 无性能基线 + 全局 NaN 看门狗(L4);③ GPU 路径未数值验证(L4);④ 文档/doc-test 近 0(对外可用性)。
-- 结论:作为 Rust 库**核心物理、耦合、稳定性、确定性已可信**,过 L3(FFI)即可对外(尤其非 Rust)稳定供货;GPU 为 Web 限定/特定工具链可解锁的附加项。
+- 缺口(剩余):① 文档/doc-test 近 0(对外可用性);② GPU 数值一致性仅完成 CPU 端路由验证 + 浏览器端手动核对步骤,缺自动化 CI(需真实 WebGPU adapter)。
+- 结论:作为 Rust 库**核心物理、耦合、稳定性、确定性、C ABI(L3)、性能基线(L4-1)、NaN 看门狗(L4-2)、W7 路由(L4-3)均已可信**,可对外(尤其非 Rust 业务)稳定供货;GPU 为 Web 限定/特定工具链可解锁的附加项。
 
