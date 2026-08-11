@@ -29,7 +29,7 @@ console_error_panic_hook = "0.1"
 getrandom = { version = "0.2", features = ["js"] }
 
 # W1: WebGPU compute 后端(仅 wasm + gpu feature 下启用)。
-wgpu = { version = "0.20", optional = true }
+wgpu = { version = "30", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 futures = { version = "0.3", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }

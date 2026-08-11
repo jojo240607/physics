@@ -1,0 +1,58 @@
+HTTP_OK:8123
+PID:27304
+CDP_OK:Chrome/151.0.7922.109
+PAGE_LOADED
+C:[frame] mode=Rigid non_bg=361610 red_px=0 bg_px=118390 first=ff0d121a
+C:Failed to load resource: the server responded with a status of 404 (File not found)
+C:[frame] mode=Rigid non_bg=361610 red_px=0 bg_px=118390 first=ff0d121a
+APP_READY:True
+RUN_adapter_info
+C:[frame] mode=Rigid non_bg=361610 red_px=0 bg_px=118390 first=ff0d121a
+C:The powerPreference option is currently ignored when calling requestAdapter() on Windows. See https://crbug.com/369219127
+C:[frame] mode=Rigid non_bg=361611 red_px=0 bg_px=118389 first=ff0d121a
+CHECK_adapter_info: {"ok":true,"name":"","vendor":"0","device":"0","device_type":"Other","driver":"","driver_info":"","backend":"BrowserWebGpu"}
+RUN_gpu_self_test
+C:The powerPreference option is currently ignored when calling requestAdapter() on Windows. See https://crbug.com/369219127
+C:[frame] mode=Rigid non_bg=361611 red_px=0 bg_px=118389 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361614 red_px=0 bg_px=118386 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361614 red_px=0 bg_px=118386 first=ff0d121a
+CHECK_gpu_self_test: W1 gpu self-test ok=true out=[1.0,4.0,9.0,16.0,25.0]
+RUN_optic_self_test
+C:[frame] mode=Rigid non_bg=361614 red_px=0 bg_px=118386 first=ff0d121a
+C:The powerPreference option is currently ignored when calling requestAdapter() on Windows. See https://crbug.com/369219127
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+CHECK_optic_self_test: W2 optic ok: center=(0.962,0.963,0.964) bg=(0.050,0.070,0.100)
+RUN_caustics_self_test
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:The powerPreference option is currently ignored when calling requestAdapter() on Windows. See https://crbug.com/369219127
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+CHECK_caustics_self_test: W3 caustics ok: grid_n=16 max=0.0000 sum=0.000
+RUN_sph_self_test
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:The powerPreference option is currently ignored when calling requestAdapter() on Windows. See https://crbug.com/369219127
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+CHECK_sph_self_test: W4 sph ok: n=125 mean_rho=0.000 rest=1000.000 ratio=0.000 finite=true acc0=(0.000,-9.810,0.000)
+RUN_granular_self_test
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:The powerPreference option is currently ignored when calling requestAdapter() on Windows. See https://crbug.com/369219127
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:[frame] mode=Rigid non_bg=361615 red_px=0 bg_px=118385 first=ff0d121a
+C:Calling [ComputePassEncoder "gran_pass"].DispatchWorkgroups with a workgroup count of 0 is unusual.
+CHECK_granular_self_test: W5 granular ok: n=27 npairs=0 min_gap=0.0100 overlaps=0 finite=true
+VERDICT:PASS

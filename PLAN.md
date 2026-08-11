@@ -449,6 +449,14 @@ pub trait GpuBackend {
 - **L4-3 浏览器 W7 数值一致性(CPU 端可验证 + 浏览器端手动核对)**:
   - 主机可验证部分:`crates/phy-demo/tests/w7_routing.rs` 新增 `w7_skip_routing_matches_full_step`——构造耦合世界，对比 (A) 全 CPU `world.step` 与 (B) W7 同款路由(手动 step 流体子世界 + `step_skipping` 跳过其 CPU step 但保留 `couple`)。断言二者流体粒子位置在 **1e-12** 内逐位一致，证明 W7 摘出/跳过 fluid 不破坏耦合矩阵、“手动 step 子世界 + step_skipping”等价于整步。**已通过**(0.02s)。
   - 浏览器端(需人工跑，本机无 WebGPU adapter):在支持 WebGPU 的 Chrome 加载 `phy-demo-web`(`wasm32 + feature=gpu`)，按 `W7` 运行时接管流体/颗粒 step，控制台应打印 `gpu_self_test` / `optic_self_test` / `caustics_self_test` / `sph_self_test` / `granular_self_test` 的 PASS 与各内核数值一致性摘要。确认 GPU 与 CPU 数值一致后，GPU 路径才可对外宣称可用(否则仅 CPU 库可信)。
+- **M1 真实 WebGPU adapter 验收**:
+  - **本机实测结论(2026-08-11)**:本机**已安装官方 Chrome 151**(`C:\Program Files\Google\Chrome\Application\chrome.exe`)与定制 `chromex.exe`。但**自动化验收在本机跑不通**,根因有两层:① Chrome 有 **"Input redirection is not supported"** 保护——一旦 stdin 被管道接管(Playwright 默认行为)就立即退出进程;用 `subprocess(stdin=DEVNULL) + --remote-debugging-port + connect_over_cdp` 可绕过此保护、Chrome 正常起来(已实测 CDP_OK:Chrome/151.0.7922.109);② 但本机当前是**无显示桌面/GPU 适配器的会话**(命令行/远程 shell),Windows 上 WebGPU 需要真实 GPU + 显示会话才能初始化后端——绕过后 `navigator.gpu` 仍为 `undefined`(headless / `--headless=new`+SwiftShader / 非 headless+SwiftShader 三种配置均实测 `gpu:false`)。Linux 带 GPU 的会话可用 SwiftShader 软件渲染拿到 adapter,Windows 头less 不行。
+  - **真机验收唯一可靠路径 = 手动在桌面版 Chrome 打开页面**(你正连着这台机器用的是有 GPU 的桌面 Chrome 会话,原生支持 WebGPU):
+    1. 构建带 gpu 的 wasm 包(已生成 `pkg/`):`cd crates/phy-demo-web && python build_gpu.py`。
+    2. 在桌面 Chrome 地址栏打开:`file:///d:/project/game/physics/crates/phy-demo-web/index.html`(或 `python -m http.server 8000` 后开 `http://localhost:8000/index.html`)。
+    3. F12 打开 Console,整段粘贴运行 `m1_console_check.js`(见同目录),自动跑 `adapter_info()` + W1–W5 五个自测,全部 `ok=true` 且 adapter 为真实(`name` 非空、`backend` 非空)才输出 `M1 验收结果: PASS`。
+  - **自动化脚本(仅在有 GPU 桌面的真机可用)**:`m1_webgpu_accept.py` 默认驱动 Playwright 自帶 Chromium;若用系统 Chrome/Edge 需加 `--browser msedge` 或 `--executable "C:/path/to/chrome.exe`——但注意上述 stdin 保护会杀掉 Playwright 启动的系统 Chrome,该脚本更适合 Linux 带 GPU 的 CI 或本机用 Playwright 自带 Chromium 且有 GPU 的环境。
+  - **判定**:`requestAdapter` 返回真实 adapter 且五内核在真机上创建 ShaderModule/ComputePipeline 并执行回读正确,即证明"WebGPU compute 全链路在真实 adapter 跑通"。注意 wgpu 0.20 曾因发送已移除的 `maxInterStageShaderComponents` limit 在真机 `requestDevice` 报错,已通过升级 wgpu 22 + limits 从 `adapter.limits()` 派生修复。
 - **交付**:性能可量化 + 大场景不静默崩溃(NaN 看门狗可捕获并回滚) + W7 路由结构已 CPU 验证 + GPU 数值验证步骤文档化。
 
 ### 库化业务的 GPU 约束(关键约束,避免误解)

@@ -20,27 +20,37 @@ pub struct GpuContext {
 impl GpuContext {
     /// 异步申请 adapter/device/queue。浏览器里必须走 async(await navigator.gpu.requestAdapter)。
     pub async fn init() -> Result<GpuContext, String> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::BROWSER_WEBGPU,
-            ..Default::default()
-        });
-        // wgpu 0.20: request_adapter 返回 Option<Adapter>(无 adapter 时 None)，不是 Result。
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                ..Default::default()
             })
             .await
-            .ok_or_else(|| "request_adapter 返回 None(无可用 WebGPU adapter)".to_string())?;
+            .map_err(|e| format!("request_adapter 失败: {:?}", e))?;
+        // 关键:M1 验收在真实浏览器发现 wgpu 0.20 的 `Limits::default()` /
+        // `downlevel_defaults()` 会把 `max_inter_stage_shader_components` 等字段设成
+        // 非 None 值,而浏览器端 WebGPU 规范已移除/重命名该 limit,`requestDevice`
+        // 直接报错 "limit ... is not recognized",导致整条 GPU 路径在真机上崩。
+        // wgpu 30 已彻底移除该废弃字段,故直接用 adapter 的 limits 基线即可。
+        let mut limits = adapter.limits().clone();
+        // 我们的 compute 内核用到 storage buffer / 大 binding,确保下限即可。
+        limits.max_storage_buffers_per_shader_stage =
+            limits.max_storage_buffers_per_shader_stage.max(8);
+        limits.max_buffer_size = limits.max_buffer_size.max(1 << 24);
+        limits.max_storage_buffer_binding_size =
+            limits.max_storage_buffer_binding_size.max(1 << 24);
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_defaults(),
+                    required_limits: limits,
                     label: Some("phy-gpu"),
+                    memory_hints: wgpu::MemoryHints::MemoryUsage,
+                    ..Default::default()
                 },
-                None,
             )
             .await
             .map_err(|e| format!("request_device 失败: {:?}", e))?;
@@ -89,8 +99,9 @@ impl GpuContext {
                 label: Some("square_pipe"),
                 layout: None,
                 module: &shader,
-                entry_point: "main",
+                entry_point: Some("main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
             });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("square_bg"),
@@ -134,7 +145,8 @@ impl GpuContext {
         rx.await
             .map_err(|e| format!("map 通道失败: {:?}", e))?
             .map_err(|e| format!("map_async 失败: {:?}", e))?;
-        let view = buf_slice.get_mapped_range();
+        let view = buf_slice.get_mapped_range()
+            .map_err(|e| format!("get_mapped_range 失败: {:?}", e))?;
         let out: Vec<f32> = bytemuck::cast_slice(&view).to_vec();
         drop(view);
         read_buf.unmap();
@@ -156,6 +168,35 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     outp[i] = inp[i] * inp[i];
 }
 "#;
+
+/// M1 验收:真实 WebGPU adapter 申请 + 返回适配器身份字符串。
+///
+/// 直接走 `request_adapter`(不 fallback),成功则调用 `adapter.info()` 取回
+/// 真实 vendor / architecture / device / description,序列化成一个可读 JSON。
+/// 这是"真实 WebGPU adapter 验收"的核心证据:无 adapter 时返回 Err(不会假装通过)。
+/// 浏览器侧 `app.adapter_info().then(s => console.log(s))` 应看到:
+/// `{"ok":true,"vendor":"...","architecture":"...","device":"...","description":"..."}`
+pub async fn adapter_info() -> Result<String, String> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+            ..Default::default()
+        })
+        .await
+        .map_err(|e| {
+            format!("request_adapter 失败(无可用 WebGPU adapter, M1 验收失败): {:?}", e)
+        })?;
+    // wgpu: adapter.get_info() 返回 AdapterInfo { name, vendor, device,
+    // device_type, driver, driver_info, backend }(vendor/device 为 u32,其余为 String/枚举)。
+    let info = adapter.get_info();
+    Ok(format!(
+        "{{\"ok\":true,\"name\":\"{}\",\"vendor\":\"{}\",\"device\":\"{}\",\"device_type\":\"{:?}\",\"driver\":\"{}\",\"driver_info\":\"{}\",\"backend\":\"{:?}\"}}",
+        info.name, info.vendor, info.device, info.device_type, info.driver, info.driver_info, info.backend
+    ))
+}
 
 /// 高层自测:构造 [1,2,3,4,5],跑 square_self_test,返回结果字符串。
 /// 验证链路通:device 申请成功 + kernel 正确执行 + 回读准确。
@@ -306,11 +347,12 @@ pub async fn render_camera_gpu(
     let pipeline = ctx
         .device
         .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("optic_pipe"),
+                label: Some("optic_pipe"),
             layout: None,
             module: &shader,
-            entry_point: "main",
+            entry_point: Some("main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
         });
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("optic_bg"),
@@ -356,7 +398,8 @@ pub async fn render_camera_gpu(
     rx.await
         .map_err(|e| format!("map 通道失败: {:?}", e))?
         .map_err(|e| format!("map_async 失败: {:?}", e))?;
-    let view = slice.get_mapped_range();
+    let view = slice.get_mapped_range()
+        .map_err(|e| format!("get_mapped_range 失败: {:?}", e))?;
     let rgba: &[f32] = bytemuck::cast_slice(&view);
     for i in 0..px {
         buf[i] = V3::new(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]);
@@ -478,7 +521,7 @@ fn intersect2(ro: vec3<f32>, rd: vec3<f32>) -> Hit {
         let n_world = quat_rot(q, n_local);
         if (t_local < best_t) { best_t = t_local; best_n = n_world; best_i = f32(idx); }
     }
-    return Hit(t: best_t, n: best_n, idx: best_i);
+    return Hit(best_t, best_n, best_i);
 }
 
 fn in_shadow(p: vec3<f32>, light_dir: vec3<f32>) -> bool {
@@ -544,11 +587,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let x = idx % width;
     let y = idx / width;
     let eye = cam.eye_tanw.xyz;
-    let target = cam.target_tanh.xyz;
+    let tgt = cam.target_tanh.xyz;
     let up = cam.up_aspect.xyz;
     let tan_w = cam.eye_tanw.w;
     let tan_h = cam.target_tanh.w;
-    var fwd = target - eye;
+    var fwd = tgt - eye;
     let fl = length(fwd);
     if (fl > 1e-12) { fwd = fwd / fl; } else { fwd = vec3<f32>(0.0,0.0,-1.0); }
     var right = cross(fwd, up);
@@ -675,11 +718,12 @@ pub async fn render_caustics_gpu(
     let pipeline = ctx
         .device
         .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("caustic_pipe"),
+                label: Some("caustic_pipe"),
             layout: None,
             module: &shader,
-            entry_point: "main",
+            entry_point: Some("main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
         });
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("caustic_bg"),
@@ -725,7 +769,8 @@ pub async fn render_caustics_gpu(
     rx.await
         .map_err(|e| format!("map 通道失败: {:?}", e))?
         .map_err(|e| format!("map_async 失败: {:?}", e))?;
-    let view = slice.get_mapped_range();
+    let view = slice.get_mapped_range()
+        .map_err(|e| format!("get_mapped_range 失败: {:?}", e))?;
     let out: Vec<f32> = bytemuck::cast_slice(&view).to_vec();
     drop(view);
     read_buf.unmap();
@@ -870,7 +915,7 @@ fn intersect2(ro: vec3<f32>, rd: vec3<f32>) -> Hit {
         let n_world = quat_rot(q, n_local);
         if (t_local < best_t) { best_t = t_local; best_n = n_world; best_i = f32(idx); }
     }
-    return Hit(t: best_t, n: best_n, idx: best_i);
+    return Hit(best_t, best_n, best_i);
 }
 
 fn f0_of(n_from: f32, n_to: f32) -> f32 {
@@ -1067,21 +1112,116 @@ pub async fn render_sph_gpu(
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(SPH_WGSL)),
         });
     let module = &shader;
+    let sph_bgl = ctx
+        .device
+        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("sph_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+    let sph_pl = ctx
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sph_pl"),
+            bind_group_layouts: &[Some(&sph_bgl)],
+            immediate_size: 0,
+        });
     let layout = |entry: &str| -> wgpu::ComputePipeline {
         ctx.device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(entry),
-                layout: None,
+                layout: Some(&sph_pl),
                 module,
-                entry_point: entry,
+                entry_point: Some(entry),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
             })
     };
     let p_dens = layout("density_main");
     let p_force = layout("force_main");
-    let bind = |p: &wgpu::ComputePipeline| ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+    let bind = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("sph_bg"),
-        layout: &p.get_bind_group_layout(0),
+        layout: &sph_bgl,
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: uni_buf.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: pos_buf.as_entire_binding() },
@@ -1093,7 +1233,7 @@ pub async fn render_sph_gpu(
             wgpu::BindGroupEntry { binding: 7, resource: acc_mu_buf.as_entire_binding() },
         ],
     });
-    let bg = bind(&p_dens);
+    let bg = &bind;
 
     let mut encoder =
         ctx.device
@@ -1107,7 +1247,7 @@ pub async fn render_sph_gpu(
             ..Default::default()
         });
         pass.set_pipeline(&p_dens);
-        pass.set_bind_group(0, &bg, &[]);
+        pass.set_bind_group(0, bg, &[]);
         pass.dispatch_workgroups(((n + 63) / 64) as u32, 1, 1);
     }
     // force pass(读 density 写的 rho_p)
@@ -1117,7 +1257,7 @@ pub async fn render_sph_gpu(
             ..Default::default()
         });
         pass.set_pipeline(&p_force);
-        pass.set_bind_group(0, &bg, &[]);
+        pass.set_bind_group(0, bg, &[]);
         pass.dispatch_workgroups(((n + 63) / 64) as u32, 1, 1);
     }
     encoder.copy_buffer_to_buffer(&rho_p_buf, 0, &rho_p_read, 0, rho_p_buf.size());
@@ -1144,7 +1284,8 @@ async fn read_gpu_vec(
     rx.await
         .map_err(|e| format!("map 通道失败: {:?}", e))?
         .map_err(|e| format!("map_async 失败: {:?}", e))?;
-    let view = slice.get_mapped_range();
+    let view = slice.get_mapped_range()
+        .map_err(|e| format!("get_mapped_range 失败: {:?}", e))?;
     let out: Vec<[f32; 4]> = bytemuck::cast_slice(&view).to_vec();
     drop(view);
     buf.unmap();
@@ -1495,11 +1636,16 @@ pub async fn render_granular_gpu(
             contents: bytemuck::cast_slice(&flat.inv_mass),
             usage: wgpu::BufferUsages::STORAGE,
         });
+    let pairs_bytes: Vec<u8> = if flat.pairs.is_empty() {
+        vec![0u8; 16]
+    } else {
+        bytemuck::cast_slice(&flat.pairs).to_vec()
+    };
     let pairs_buf = ctx
         .device
         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("gran_pairs"),
-            contents: bytemuck::cast_slice(&flat.pairs),
+            contents: &pairs_bytes,
             usage: wgpu::BufferUsages::STORAGE,
         });
     let deltas_buf = ctx.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1516,24 +1662,91 @@ pub async fn render_granular_gpu(
             label: Some("gran_wgsl"),
             source: wgpu::ShaderSource::Wgsl(GRANULAR_WGSL.into()),
         });
+    // 显式 bind group layout:auto-layout 只会包含各 entry point 实际用到的
+    // binding(clear_main 只用 deltas=>仅 binding4),导致共用 bind group 失败。
+    let bgl = ctx
+        .device
+        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("gran_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+    let pl = ctx
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("gran_pl"),
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
+        });
     let mk = |entry: &str| {
         ctx.device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(entry),
-                layout: None,
+                layout: Some(&pl),
                 module: &module,
-                entry_point: entry,
+                entry_point: Some(entry),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
             })
     };
     let p_clear = mk("clear_main");
     let p_contact = mk("contact_main");
     let p_apply = mk("apply_main");
-    let bind = |p: &wgpu::ComputePipeline| {
+    let bind = |_: &wgpu::ComputePipeline| {
         ctx.device
             .create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("gran_bg"),
-                layout: &p.get_bind_group_layout(0),
+                layout: &bgl,
                 entries: &[
                     wgpu::BindGroupEntry { binding: 0, resource: uni_buf.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 1, resource: pos_buf.as_entire_binding() },
@@ -1587,7 +1800,8 @@ pub async fn render_granular_gpu(
     rx.await
         .map_err(|e| format!("gran map 通道失败: {:?}", e))?
         .map_err(|e| format!("gran map_async 失败: {:?}", e))?;
-    let view = slice.get_mapped_range();
+    let view = slice.get_mapped_range()
+        .map_err(|e| format!("get_mapped_range 失败: {:?}", e))?;
     let out: Vec<[f32; 4]> = bytemuck::cast_slice(&view).to_vec();
     drop(view);
     read_buf.unmap();

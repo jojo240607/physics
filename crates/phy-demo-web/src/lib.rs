@@ -272,6 +272,22 @@ impl DemoApp {
         present(&self.canvas, &self.ctx, &st.fb);
     }
 
+    /// M1 验收入口(仅 wasm + gpu feature):申请真实 WebGPU adapter 并返回其身份。
+    /// 浏览器里 `app.adapter_info().then(s => console.log(s))` 应看到
+    /// `{"ok":true,"vendor":"...","architecture":"...","device":"...","description":"..."}`。
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    pub fn adapter_info(&self) -> js_sys::Promise {
+        use wasm_bindgen::JsCast;
+        let fut = async move { crate::gpu::adapter_info().await };
+        wasm_bindgen_futures::future_to_promise(async move {
+            match fut.await {
+                Ok(s) => Ok(js_sys::JsString::from(s.as_str()).into()),
+                Err(e) => Err(js_sys::Error::new(&e).into()),
+            }
+        })
+        .unchecked_into()
+    }
+
     /// W1 验证入口(仅 wasm + gpu feature):跑 GPU compute 自测,返回 Promise<string>。
     /// 浏览器里 `app.gpu_self_test().then(s => console.log(s))` 应看到
     /// "W1 gpu self-test ok=true out=[1.0,4.0,9.0,16.0,25.0]"。
