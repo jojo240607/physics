@@ -9,8 +9,8 @@ readme.workspace = true
 description = "场物理层:标量/向量场、源项与采样接口。"
 
 [dependencies]
-phy-core = { path = "../phy-core" }
-phy-math = { path = "../phy-math" }
+phy-core = { path = "../phy-core", version = "0.1.0" }
+phy-math = { path = "../phy-math", version = "0.1.0" }
 nalgebra.workspace = true
 serde.workspace = true
 num-traits = "0.2"

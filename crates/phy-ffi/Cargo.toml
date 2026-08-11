@@ -14,16 +14,16 @@ description = "C ABI layer for the physics engine (cdylib for C/C++/Unity/Unreal
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-phy-core = { path = "../phy-core" }
-phy-math = { path = "../phy-math" }
-phy-rigid = { path = "../phy-rigid" }
-phy-fluid = { path = "../phy-fluid" }
-phy-granular = { path = "../phy-granular" }
-phy-field = { path = "../phy-field" }
-phy-soft = { path = "../phy-soft" }
-phy-solid = { path = "../phy-solid" }
-phy-optics = { path = "../phy-optics" }
-phy-io = { path = "../phy-io" }
+phy-core = { path = "../phy-core", version = "0.1.0" }
+phy-math = { path = "../phy-math", version = "0.1.0" }
+phy-rigid = { path = "../phy-rigid", version = "0.1.0" }
+phy-fluid = { path = "../phy-fluid", version = "0.1.0" }
+phy-granular = { path = "../phy-granular", version = "0.1.0" }
+phy-field = { path = "../phy-field", version = "0.1.0" }
+phy-soft = { path = "../phy-soft", version = "0.1.0" }
+phy-solid = { path = "../phy-solid", version = "0.1.0" }
+phy-optics = { path = "../phy-optics", version = "0.1.0" }
+phy-io = { path = "../phy-io", version = "0.1.0" }
 
 nalgebra.workspace = true
 serde.workspace = true

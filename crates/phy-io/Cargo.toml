@@ -9,15 +9,15 @@ readme.workspace = true
 description = "序列化/反序列化层:场景与状态的多格式导入导出。"
 
 [dependencies]
-phy-core = { path = "../phy-core" }
-phy-math = { path = "../phy-math" }
-phy-rigid = { path = "../phy-rigid" }
-phy-soft = { path = "../phy-soft" }
-phy-solid = { path = "../phy-solid" }
-phy-granular = { path = "../phy-granular" }
-phy-fluid = { path = "../phy-fluid" }
-phy-field = { path = "../phy-field" }
-phy-optics = { path = "../phy-optics" }
+phy-core = { path = "../phy-core", version = "0.1.0" }
+phy-math = { path = "../phy-math", version = "0.1.0" }
+phy-rigid = { path = "../phy-rigid", version = "0.1.0" }
+phy-soft = { path = "../phy-soft", version = "0.1.0" }
+phy-solid = { path = "../phy-solid", version = "0.1.0" }
+phy-granular = { path = "../phy-granular", version = "0.1.0" }
+phy-fluid = { path = "../phy-fluid", version = "0.1.0" }
+phy-field = { path = "../phy-field", version = "0.1.0" }
+phy-optics = { path = "../phy-optics", version = "0.1.0" }
 nalgebra.workspace = true
 serde.workspace = true
 serde_json = "1.0"

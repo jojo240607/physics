@@ -499,7 +499,7 @@ pub trait GpuBackend {
 #### 🟡 交付与生态(影响"敢不敢用")
 | 编号 | 缺口 | 说明 |
 |---|---|---|
-| **C1** | `cargo publish` 到 crates.io + 发布节奏 | P1 已加版本号未 publish |
+| **C1** | `cargo publish` 到 crates.io + 发布节奏 | ✅ **发布准备完成**(2026-08-12):12 个可发布 crate(phy-demo/phy-demo-web 为 publish=false)全部给内部 path 依赖补 `version="0.1.0"`(cargo publish 要求,path 会换成 crates.io 版本引用),`phy-math` 已验证 `cargo package`(带 verify 编译)通过;发布顺序脚本 `scripts/publish_all.sh`(依赖拓扑,从 phy-math→phy-sdk)就绪;**实际发布待 crates.io 凭据**(`cargo login`)后执行 |
 | **C2** | Unity / Unreal 官方集成示例 + 预编译二进制分发 | ✅ 已完成(2026-08-11):`crates/phy-ffi/unity/PhysicsFFI.cs`(C# P/Invoke 绑定 + `RigidTransform` 解析)、`crates/phy-ffi/unreal/PhysicsFFI.h`(C++ 声明 + `PhyToUnrealTransform`)+ `PhysicsFFI.Build.cs`(UE 模块接入示例);`build_package.py` 现已把 `glue/unity` 与 `glue/unreal` 一并打进发行包 |
 | **C3** | 运行时 **profiler / 帧级 profile hook** | ✅ 已完成(2026-08-11):`phy-rigid` 新增 `profile` 模块 + `RigidWorld::step_with_profile`,返回分阶段 `StepProfile`(broad/narrow、velocity、advance、position、sleep、total 纳秒),`profiler` feature 门控零开销,默认 `step` 签名不变 |
 | **C4** | 文档站点(docs.rs + 游戏 quickstart + 迁移指南) | ✅ 游戏 quickstart 已完成(2026-08-11):README 新增"刚体游戏快速上手"小节,以关卡 JSON DSL(B3)+ 触发器(B2)+ 碰撞层(B5)+ 帧计时(C3)串起典型游戏接入路径;docs.rs 由 `cargo doc` 自动产出,迁移指南随 API 注释持续补充 |

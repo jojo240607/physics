@@ -9,7 +9,7 @@ readme.workspace = true
 description = "核心抽象:误差类型、确定性重放、子系统注册与统一句柄取回接口。"
 
 [dependencies]
-phy-math = { path = "../phy-math" }
+phy-math = { path = "../phy-math", version = "0.1.0" }
 nalgebra.workspace = true
 thiserror.workspace = true
 num-traits.workspace = true

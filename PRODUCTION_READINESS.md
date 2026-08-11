@@ -118,7 +118,7 @@
 - [x] **G6 数值门禁落地**:`perf_sweep --check` 比对 `docs/perf_baseline.csv`(±20%),CI host job 接入。
 - [x] 发布流程骨架 `release.yml`(tag 触发,发布前全量验证,保守不自动 publish)。
 - [x] **基准回归数值门禁(G6 已完成)**:`perf_sweep` 新增 `--csv` 输出 `docs/perf_baseline.csv`(受版本控制)与 `--check` 比对模式(逐场景单帧 ms 超 ±20% 即 exit 1)。CI `ci.yml` 的 host job 接入 `--check` 门禁步骤,PR 卡点防"悄然变慢/变不准"。本地 `--check` 自测 5/5 场景通过。
-- [ ] 启用 `cargo publish`(需配置 registry token + 审阅节奏)。
+- [ ] 启用 `cargo publish`(发布准备 2026-08-12 已完成:12 个可发布 crate 全部内部 path 依赖补 `version="0.1.0"`,`phy-math` 验证 `cargo package` 通过,顺序脚本 `scripts/publish_all.sh` 就绪;剩余:配置 registry token 即 `cargo login` + 审阅节奏)。
 - **交付物**:`.github/workflows/ci.yml` + `.github/workflows/release.yml`(已落地,待数值门禁)。
 - [ ] 基准结果纳入 PR 卡点(性能回归报警)。
 - **交付物**:`.github/workflows/` + 发布 runbook。

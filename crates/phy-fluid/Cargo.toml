@@ -9,10 +9,10 @@ readme.workspace = true
 description = "SPH 流体子系统:不可压/弱可压光滑粒子流体动力学求解。"
 
 [dependencies]
-phy-math = { path = "../phy-math" }
-phy-rigid = { path = "../phy-rigid" }
-phy-core = { path = "../phy-core" }
-phy-field = { path = "../phy-field" }
+phy-math = { path = "../phy-math", version = "0.1.0" }
+phy-rigid = { path = "../phy-rigid", version = "0.1.0" }
+phy-core = { path = "../phy-core", version = "0.1.0" }
+phy-field = { path = "../phy-field", version = "0.1.0" }
 serde.workspace = true
 nalgebra.workspace = true
 num-traits = "0.2"

@@ -118,6 +118,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   numbers shown. Full table in `docs/perf_gpu_baseline.md`. This means real-time
   multi-ten-thousand-entity simulation is feasible on the GPU path (browser WebGPU /
   MSVC native wgpu).
+- **crates.io publish readiness (C1, commercial-readiness plan §11)**: all 12 publishable
+  crates (`phy-demo` / `phy-demo-web` are `publish = false`) now declare
+  `version = "0.1.0"` on every internal `path` dependency, which `cargo publish` requires
+  (the path is rewritten to a crates.io version reference at publish time; locally the path
+  still wins). `phy-math` verified with `cargo package` (incl. verify build). A release-order
+  script `scripts/publish_all.sh` encodes the dependency-topology order (phy-math → phy-core
+  → phy-field → phy-rigid → phy-fluid/solid/granular/optics → phy-soft → phy-io →
+  phy-ffi/phy-sdk). Actual publishing still requires `cargo login` (crates.io token) and is
+  intentionally not executed here.
 - **Scene description DSL / prefab (B3, commercial-readiness plan §11)**: new
   `scene.rs` module with `SceneDesc<T>` (gravity + bodies + joints, reusing the
   already-serde `Body`/`JointConstraint` so the description is isomorphic to the
