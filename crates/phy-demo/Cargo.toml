@@ -2,6 +2,9 @@
 name = "phy-demo"
 edition.workspace = true
 version.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 phy-math = { path = "../phy-math" }

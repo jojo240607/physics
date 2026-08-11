@@ -9,9 +9,12 @@
 //!    逐种子用"半空间裁剪(Sutherland–Hodgman 在凸多面面上)"迭代求交得到碎片多面体。
 //! 3. 碎片质心/体积由凸多面体散度定理(体积积分)求得,质量 = 母体质心质量 × 体积比。
 //!
-//! 关键:本引擎刚体未建模角速度(见 M20 决策),故碎片只继承母体质心的线速度,
-//! 不引入角动力学 —— 与车辆、布料一致保持最小侵入。碎片初速来自 `shatter_impulse`:
-//! 沿"碎片质心相对母体质心方向 × 冲量"线性注入(径向爆裂),保持总动量守恒。
+//! 关键:本引擎刚体**已具备完整角动力学**(`Body` 含 `rot`/`ang_vel`/`inv_inertia_local`,
+//! `world.advance` 用四元数导数积分姿态,`solver` 接触含角冲量)。故碎片:
+//! 1) 通过 `set_inertia_from_shape()` 基于自身 Convex 几何计算惯性张量(让角动力学生效);
+//! 2) 继承母本 `ang_vel`(自由旋转母体碎裂后碎片带自旋);
+//! 3) 径向飞散时,偏心冲量经 `apply_impulse_at` 注入真实角自旋(角动量守恒)。
+//! 与"最小侵入回避角动力学"的旧实现不同(见 PLAN §11 阶段 0 清理)。
 //!
 //! `fracture_body` 不修改 `RigidWorld`,只返回新 `Body` 列表(含局部→世界变换后的
 //! 顶点),由调用方(如 `RigidWorld::shatter`)加入世界,避免热路径耦合。
@@ -266,34 +269,59 @@ pub fn fracture_body<T: RealField + Copy + NumCast>(
         };
         // 碎片局部质心 → 世界。
         let cl_world = body.rot * cl + body.pos;
-        // 碎片初速:继承母体质心速度 + 径向飞散。
-        let mut vel = body.vel;
-        if radial > T::zero() {
-            let dir = cl_world - body_centroid_world;
-            let len = dir.norm();
-            if len > T::from_f64(1e-9).unwrap() {
-                vel += dir / len * radial;
-            }
-        }
         // 碎片形状顶点:相对碎片质心的局部坐标(旋转继承母体,已含世界方向)。
         let shape_verts: Vec<Vec3<T>> = cell_verts
             .iter()
             .map(|v| body.rot * (v - cl))
             .collect();
-        frags.push(Body {
+        // 构造碎片体:先按自身几何算惯性张量(角动力学生效),再继承母本自旋。
+        let mut frag = Body {
             shape: Shape::Convex {
                 vertices: shape_verts,
                 faces: cell_faces,
             },
             pos: cl_world,
-            rot: body.rot, // 继承母朝向(碎片不自转)。
-            vel,
+            rot: body.rot, // 继承母朝向。
+            vel: body.vel, // 继承母体质心线速度。
+            ang_vel: body.ang_vel, // 继承母本角速度(碎片带自旋)。
             inv_mass,
-        
             ..Default::default()
-        });
+        };
+        frag.set_inertia_from_shape(); // 基于 Convex 几何写入 inv_inertia_local。
+        // 径向飞散:线速度沿"碎片质心相对母体质心方向"注入;角自旋由碎面不对称扭力
+        // 产生 —— 用相对碎片质心的确定性偏心(r_offset)经 `apply_impulse_at` 注入角动量,
+        // 幅度正比于 radial 与碎片尺度(物理上:碎裂瞬间相邻碎块挤压给碎片一个扭转冲量)。
+        if radial > T::zero() {
+            let dir = cl_world - body_centroid_world;
+            let len = dir.norm();
+            if len > T::from_f64(1e-9).unwrap() {
+                let ndir = dir / len;
+                frag.vel += ndir * radial; // 过质心线冲量 → 纯平移飞散。
+                // 确定性偏心:由碎片包围盒半长派生一个与径向正交的偏置向量(非 0)。
+                let half = frag_inertia_half(&cell_verts);
+                let r_offset = Vec3::new(half.y, half.z, half.x) * T::from_f64(0.25).unwrap();
+                // 角冲量方向取径向与偏置的叉积(产生绕碎片质心的自转)。
+                let jt = ndir.cross(&r_offset).normalize() * (radial * inv_mass);
+                frag.apply_impulse_at(jt, r_offset); // r_offset 非 0 → 产生角自旋。
+            }
+        }
+        frags.push(frag);
     }
     frags
+}
+
+/// 由碎片局部顶点求包围盒半长(惯性张量对角估计用)。
+fn frag_inertia_half<T: RealField + Copy + NumCast>(verts: &[Vec3<T>]) -> Vec3<T> {
+    if verts.is_empty() {
+        return Vec3::zeros();
+    }
+    let mut h = Vec3::new(T::zero(), T::zero(), T::zero());
+    for v in verts {
+        h.x = if v.x.abs() > h.x { v.x.abs() } else { h.x };
+        h.y = if v.y.abs() > h.y { v.y.abs() } else { h.y };
+        h.z = if v.z.abs() > h.z { v.z.abs() } else { h.z };
+    }
+    h
 }
 
 /// 把任意 `Body` 转为局部凸顶点 + 三角面。
@@ -554,5 +582,58 @@ mod tests {
             "碎片体积之和应≈8,得 {}",
             total
         );
+    }
+
+    #[test]
+    fn fragment_inherits_parent_spin() {
+        // 母本带角速度 → 碎片应继承非零 ang_vel(角动力学已具备)。
+        use phy_math::na;
+        let mut body = Body {
+            shape: Shape::Box {
+                half: Vec3::new(1.0, 1.0, 1.0),
+            },
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            rot: na::one(),
+            vel: Vec3::zeros(),
+            inv_mass: 1.0,
+            ..Default::default()
+        };
+        body.set_inertia_from_shape();
+        body.ang_vel = Vec3::new(0.0, 5.0, 0.0); // 母本绕 y 轴自旋。
+        let frags = fracture_body(&body, 6, None, 0.0);
+        assert!(!frags.is_empty(), "应切出碎片");
+        for f in &frags {
+            // 碎片应继承母本角速度(非零),且惯性张量已被写入(可响应角冲量)。
+            assert!(
+                f.ang_vel.norm() > 1e-6,
+                "碎片应继承母本自旋,得 {:?}",
+                f.ang_vel
+            );
+            assert!(
+                f.inv_inertia_local.norm() > 1e-9,
+                "碎片应已计算惯性张量,得 {:?}",
+                f.inv_inertia_local
+            );
+        }
+    }
+
+    #[test]
+    fn radial_shatter_imparts_angular_spin() {
+        // 径向飞散:偏心冲量应给静止碎片注入非零角速度(角动量守恒,而非纯平移)。
+        let body = Body {
+            shape: Shape::Box {
+                half: Vec3::new(1.0, 1.0, 1.0),
+            },
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            rot: na::one(),
+            vel: Vec3::zeros(),
+            ang_vel: Vec3::zeros(), // 母本不自转。
+            inv_mass: 1.0,
+            ..Default::default()
+        };
+        let frags = fracture_body(&body, 6, None, 2.0);
+        // 至少应有一部分碎片获得非零角速度(偏心碎片)。
+        let spun = frags.iter().any(|f| f.ang_vel.norm() > 1e-6);
+        assert!(spun, "径向碎裂应让偏心碎片获得角自旋");
     }
 }

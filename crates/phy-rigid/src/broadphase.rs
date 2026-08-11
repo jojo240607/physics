@@ -67,7 +67,6 @@ mod tests {
             rot: na::UnitQuaternion::identity(),
             vel: Vec3::zeros(),
             inv_mass: 1.0,
-        
             ..Default::default()
         }
     }

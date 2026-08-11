@@ -199,6 +199,22 @@ pub struct Body<T: RealField + Copy> {
     pub inv_inertia_local: Mat3<T>,
     /// 反质量(0 = 静态/无限质量)。
     pub inv_mass: T,
+    /// 休眠标志(B1):动能长期低于阈值后由 `RigidWorld::step` 置位,
+    /// 置位后跳过速度积分/推进(零 CPU),直到被邻近运动体唤醒。
+    pub sleeping: bool,
+    /// 已持续"低动能"的累计时间(B1),超过 `SolverParams::sleep_time` 即休眠。
+    pub sleep_time: T,
+    /// B5 碰撞层(bitmask):本 body 所属的层。仅当双方 `layers & 对方 mask` 均非零时才碰撞。
+    pub layers: u32,
+    /// B5 碰撞掩码(bitmask):本 body 允许与哪些层碰撞。默认 `u32::MAX`(与所有层互通)。
+    pub collision_mask: u32,
+    /// B2 运动学体标志:不受重力/接触冲量驱动(求解器视其有效反质量为 0),
+    /// 但由用户每帧设定 `vel` 主动移动,并推开动态体(角色控制器/传送带/移动平台基础)。
+    pub kinematic: bool,
+    /// B2 传感器/触发器标志:参与窄相碰撞检测,但【不】产生接触约束(不施加冲量、
+    /// 不阻止穿透),仅在 `RigidWorld::sensor_contacts` 中报告重叠事件(拾取道具/触发区域/
+    /// 角色进入判定等)。传感器仍受碰撞层(B5)过滤与休眠唤醒(B1)影响。
+    pub is_sensor: bool,
 }
 
 impl<T: RealField + Copy> Default for Body<T> {
@@ -216,6 +232,12 @@ impl<T: RealField + Copy> Default for Body<T> {
             ang_vel: Vec3::zeros(),
             inv_inertia_local: Mat3::zeros(),
             inv_mass: T::zero(),
+            sleeping: false,
+            sleep_time: T::zero(),
+            layers: u32::MAX,
+            collision_mask: u32::MAX,
+            kinematic: false,
+            is_sensor: false,
         }
     }
 }
@@ -234,6 +256,12 @@ impl<T: RealField + Copy> Body<T> {
             ang_vel: Vec3::zeros(),
             inv_inertia_local: Mat3::zeros(),
             inv_mass,
+            sleeping: false,
+            sleep_time: T::zero(),
+            layers: u32::MAX,
+            collision_mask: u32::MAX,
+            kinematic: false,
+            is_sensor: false,
         };
         b.set_inertia_from_shape();
         b
@@ -282,9 +310,28 @@ impl<T: RealField + Copy> Body<T> {
 
     /// 在接触点 `r`(相对质心的世界向量)施加冲量 `j`,更新线速度与角速度。
     pub fn apply_impulse_at(&mut self, j: Vec3<T>, r: Vec3<T>) {
+        if self.kinematic {
+            return; // B2:运动学体不接受任何冲量(由用户直接设定 vel)。
+        }
         self.vel += j * self.inv_mass;
         let torque_imp = r.cross(&j);
         self.ang_vel += self.inv_inertia_world() * torque_imp;
+    }
+
+    /// B5 碰撞过滤:仅当双方层位与掩码均匹配时才发生碰撞。
+    /// 规则:`a.layers & b.collision_mask != 0 && b.layers & a.collision_mask != 0`。
+    /// 默认 `layers==collision_mask==u32::MAX` 时恒为 `true`(与现有行为一致)。
+    pub fn can_collide_with(&self, other: &Body<T>) -> bool {
+        (self.layers & other.collision_mask) != 0 && (other.layers & self.collision_mask) != 0
+    }
+
+    /// B2 有效反质量:运动学体返回 0(求解器不对其施加接触冲量,但按自身 `vel` 主动移动)。
+    pub fn eff_inv_mass(&self) -> T {
+        if self.kinematic {
+            T::zero()
+        } else {
+            self.inv_mass
+        }
     }
 
     /// 由质量与几何计算并写入体坐标逆惯性张量(球体/盒/凸多面体的主惯量近似)。

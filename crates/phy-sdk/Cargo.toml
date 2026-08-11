@@ -1,23 +1,25 @@
 [package]
 name = "phy-sdk"
-version = "0.1.0"
-edition = "2021"
-authors = ["physics-engine"]
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "集成 SDK:统一重导出 phy-* 子系统 + 开箱即用 PhysicsBuilder + 教程 doctest,屏蔽多 crate 拼装细节。"
-repository = "https://github.com/physics-engine/physics"
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
 
 [dependencies]
-phy-core   = { path = "../phy-core", version = "0.1.0" }
-phy-math   = { path = "../phy-math", version = "0.1.0" }
-phy-rigid  = { path = "../phy-rigid", version = "0.1.0" }
-phy-fluid  = { path = "../phy-fluid", version = "0.1.0" }
-phy-granular = { path = "../phy-granular", version = "0.1.0" }
-phy-soft   = { path = "../phy-soft", version = "0.1.0" }
-phy-field  = { path = "../phy-field", version = "0.1.0" }
-phy-optics = { path = "../phy-optics", version = "0.1.0" }
-phy-solid  = { path = "../phy-solid", version = "0.1.0" }
-phy-io     = { path = "../phy-io", version = "0.1.0" }
+phy-core   = { path = "../phy-core" }
+phy-math   = { path = "../phy-math" }
+phy-rigid  = { path = "../phy-rigid" }
+phy-fluid  = { path = "../phy-fluid" }
+phy-granular = { path = "../phy-granular" }
+phy-soft   = { path = "../phy-soft" }
+phy-field  = { path = "../phy-field" }
+phy-optics = { path = "../phy-optics" }
+phy-solid  = { path = "../phy-solid" }
+phy-io     = { path = "../phy-io" }
 
 nalgebra = { workspace = true }
 serde = { workspace = true }

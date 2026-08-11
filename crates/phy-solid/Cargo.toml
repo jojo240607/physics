@@ -3,6 +3,10 @@ name = "phy-solid"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "固体/形变子系统:弹性体与有限元(FEM)基础。"
 
 [dependencies]
 phy-core = { path = "../phy-core" }

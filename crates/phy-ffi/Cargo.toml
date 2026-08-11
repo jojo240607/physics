@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
 description = "C ABI layer for the physics engine (cdylib for C/C++/Unity/Unreal linking)."
 
 [lib]

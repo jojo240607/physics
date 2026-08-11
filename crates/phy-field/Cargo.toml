@@ -3,6 +3,10 @@ name = "phy-field"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "场物理层:标量/向量场、源项与采样接口。"
 
 [dependencies]
 phy-core = { path = "../phy-core" }

@@ -19,11 +19,23 @@ pub struct SolverParams<T: RealField> {
     pub restitution: T,
     /// 摩擦系数。
     pub friction: T,
-    /// 速度求解迭代次数。
+    /// 速度求解**法向**迭代次数。
     pub iterations: usize,
+    /// 速度求解**摩擦**迭代次数(B1:摩擦收敛独立于法向,避免堆叠时摩擦欠收敛)。
+    /// 设为 0 时回退到与 `iterations` 相同。
+    pub friction_iterations: usize,
+    /// 位置修正允许的残余穿透容差(slop,米)。B1:静止堆叠时不为每帧微小穿透
+    /// 全部修正,避免"过度弹开"抖动。仅修正 `depth - slop` 部分。
+    pub position_slop: T,
     /// CCD 子步上限(连续碰撞检测:每步把位置积分拆成至多这么多个子步以避免隧穿)。
     /// 设 0 关闭 CCD(退化为离散碰撞,高速会隧穿)。
     pub ccd_max_substeps: usize,
+    /// B1 休眠:线速度平方阈值(低于此且角速度也低视为"近静止")。
+    pub sleep_lin_vel2: T,
+    /// B1 休眠:角速度平方阈值(rad²/s²)。
+    pub sleep_ang_vel2: T,
+    /// B1 休眠:持续近静止达此时长(秒)后置 sleeping=true。
+    pub sleep_time: T,
 }
 
 impl<T: RealField> Default for SolverParams<T> {
@@ -32,7 +44,12 @@ impl<T: RealField> Default for SolverParams<T> {
             restitution: T::from_f64(0.0).unwrap(),
             friction: T::from_f64(0.5).unwrap(),
             iterations: 20,
+            friction_iterations: 20,
+            position_slop: T::from_f64(1e-3).unwrap(), // 1mm 残余穿透容差
             ccd_max_substeps: 8,
+            sleep_lin_vel2: T::from_f64(1e-2).unwrap(), // 线速 ~0.1 m/s
+            sleep_ang_vel2: T::from_f64(1e-2).unwrap(), // 角速 ~0.1 rad/s
+            sleep_time: T::from_f64(0.5).unwrap(),      // 持续 0.5s 静止即休眠
         }
     }
 }
@@ -74,25 +91,17 @@ pub fn solve_velocity<T: RealField + Copy>(
     let e = params.restitution;
     let mu = params.friction;
 
+    // B1: 法向求解在主迭代中完成。
     for _ in 0..params.iterations {
         for c in constraints.iter_mut() {
-            if std::env::var("PHY_DEBUG").is_ok() && c.contact.depth > T::from_f64(0.0).unwrap() {
-                eprintln!(
-                    "[SOLVER] a={} b={} n=({:.3},{:.3},{:.3}) depth={:.3} va=({:.3},{:.3},{:.3}) vb=({:.3},{:.3},{:.3})",
-                    c.a, c.b,
-                    c.contact.normal.x, c.contact.normal.y, c.contact.normal.z,
-                    c.contact.depth,
-                    bodies[c.a].vel.x, bodies[c.a].vel.y, bodies[c.a].vel.z,
-                    bodies[c.b].vel.x, bodies[c.b].vel.y, bodies[c.b].vel.z,
-                );
-            }
             let n = c.contact.normal;
             let ia = bodies[c.a].inv_inertia_world();
             let ib = bodies[c.b].inv_inertia_world();
             let ra = c.contact.point - bodies[c.a].pos;
             let rb = c.contact.point - bodies[c.b].pos;
-            // 有效质量(法向): m_eff = 1 / (invMa + invMb + nᵀ(Ia⁻¹(ra×n)×ra + Ib⁻¹(rb×n)×rb))
-            let inv_sum = bodies[c.a].inv_mass + bodies[c.b].inv_mass;
+            // 有效质量(法向): m_eff = 1 / (effInvMa + effInvMb + nᵀ(Ia⁻¹(ra×n)×ra + Ib⁻¹(rb×n)×rb))
+            // B2: 运动学体 eff_inv_mass=0,不被接触冲量驱动(但按自身 vel 主动移动并推开动态体)。
+            let inv_sum = bodies[c.a].eff_inv_mass() + bodies[c.b].eff_inv_mass();
             if inv_sum <= T::zero() {
                 continue;
             }
@@ -124,8 +133,32 @@ pub fn solve_velocity<T: RealField + Copy>(
             let imp = n * applied;
             bodies[c.a].apply_impulse_at(-imp, ra);
             bodies[c.b].apply_impulse_at(imp, rb);
+        }
+    }
 
-            // ---- 摩擦(切向, 受库仑锥限制) ----
+    // B1: 摩擦独立子迭代(收敛上限 = friction_iterations)。法向冲量已固定,
+    // 此阶段只调整切向冲量使其收敛到库仑锥,不回写体速度之外的新法向分量。
+    let fiter = if params.friction_iterations == 0 {
+        params.iterations
+    } else {
+        params.friction_iterations
+    };
+    for _ in 0..fiter {
+        for c in constraints.iter_mut() {
+            let n = c.contact.normal;
+            let ia = bodies[c.a].inv_inertia_world();
+            let ib = bodies[c.b].inv_inertia_world();
+            let ra = c.contact.point - bodies[c.a].pos;
+            let rb = c.contact.point - bodies[c.b].pos;
+            let inv_sum = bodies[c.a].eff_inv_mass() + bodies[c.b].eff_inv_mass();
+            if inv_sum <= T::zero() {
+                continue;
+            }
+            let angular_term = |r: Vec3<T>, inv: Mat3<T>| -> T {
+                let rn = r.cross(&n);
+                let t = inv * rn;
+                rn.dot(&t)
+            };
             let va = bodies[c.a].vel + bodies[c.a].ang_vel.cross(&ra);
             let vb = bodies[c.b].vel + bodies[c.b].ang_vel.cross(&rb);
             let rel_v = vb - va;
@@ -143,7 +176,7 @@ pub fn solve_velocity<T: RealField + Copy>(
                 } else {
                     T::zero()
                 };
-                // 库仑摩擦: |λ_t| <= μ * λ_n
+                // 库仑摩擦: |λ_t| <= μ * λ_n(法向冲量已在此阶段固定)
                 let max_lt = mu * c.normal_impulse;
                 let cur_lt = c.tangent_impulse.norm();
                 let new_lt = if cur_lt + dlt.abs() > max_lt {
@@ -176,6 +209,7 @@ pub fn solve_position<T: RealField + Copy>(
     pseudo: &mut [Vec3<T>],
     ang_pseudo: &mut [Vec3<T>],
     beta_over_dt: T,
+    slop: T,
 ) {
     // 位置层独立累积冲量
     let mut lambda: Vec<T> = vec![T::zero(); constraints.len()];
@@ -187,7 +221,7 @@ pub fn solve_position<T: RealField + Copy>(
             let ib = bodies[c.b].inv_inertia_world();
             let ra = c.contact.point - bodies[c.a].pos;
             let rb = c.contact.point - bodies[c.b].pos;
-            let inv_sum = bodies[c.a].inv_mass + bodies[c.b].inv_mass;
+            let inv_sum = bodies[c.a].eff_inv_mass() + bodies[c.b].eff_inv_mass();
             if inv_sum <= T::zero() {
                 continue;
             }
@@ -205,8 +239,14 @@ pub fn solve_position<T: RealField + Copy>(
             let vb = pseudo[c.b] + ang_pseudo[c.b].cross(&rb);
             let rel_p = vb - va;
             let vn = rel_p.dot(&n);
-            // 目标:相对伪速度应等于 beta*depth/dt(正值表示分离)
-            let target = beta_over_dt * c.contact.depth;
+            // 目标:相对伪速度应等于 beta*(depth - slop)/dt(正值表示分离)。
+            // B1: 残余穿透 < slop 的不修正,避免静止堆叠逐帧过度弹开而抖动。
+            let corr = if c.contact.depth > slop {
+                c.contact.depth - slop
+            } else {
+                T::zero()
+            };
+            let target = beta_over_dt * corr;
             let dlambda = (target - vn) / denom;
             let new_lambda = if lambda[idx] + dlambda > T::zero() {
                 lambda[idx] + dlambda
@@ -216,9 +256,9 @@ pub fn solve_position<T: RealField + Copy>(
             let applied = new_lambda - lambda[idx];
             lambda[idx] = new_lambda;
             let imp = n * applied;
-            // 线伪速度
-            pseudo[c.a] -= imp * bodies[c.a].inv_mass;
-            pseudo[c.b] += imp * bodies[c.b].inv_mass;
+            // 线伪速度(B2:运动学体 eff_inv_mass=0,不参与穿透修正,位置只由自身 vel 决定)
+            pseudo[c.a] -= imp * bodies[c.a].eff_inv_mass();
+            pseudo[c.b] += imp * bodies[c.b].eff_inv_mass();
             // 角伪速度: ω̃ += I⁻¹ (r × imp)
             let ta = ia * ra.cross(&(-imp));
             let tb = ib * rb.cross(&imp);

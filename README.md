@@ -113,6 +113,66 @@ for _ in 0..30 { world.step(1.0 / 60.0); }
 
 `PhysicsBuilder` 支持 `.fluid() / .rigid() / .granular() / .soft() / .field() / .optics() / .solid()` 任意组合;句柄经 `get_as::<T>(&world, idx)` / `get_as_mut::<T>(&mut world, idx)` 取回(类型不符或越界返回 `None`,不 panic)。详见 `cargo doc -p phy-sdk`。
 
+### 刚体游戏快速上手(关卡 / 触发器 / 帧计时)
+
+`phy-rigid` 面向游戏工程化,直接提供**关卡描述 DSL、触发器(传感器)、碰撞层、帧级计时**等开箱即用能力。
+
+```toml
+# Cargo.toml
+[dependencies]
+phy-rigid = { path = "crates/phy-rigid" }
+```
+
+```rust
+use phy_rigid::{RigidWorld, Body, Shape, StepProfile};
+
+// ── 1) 用 JSON 场景描述直接重建一关(地面 + 可拾取道具 + 触发区)──
+//    gravity 缺省为 (0,-9.81,0);bodies/joints 缺省分别为空 / 空。
+let scene = r#"
+{
+  "gravity": [0, -9.81, 0],
+  "bodies": [
+    { "shape": { "Box": { "half": [10, 0.5, 10] } }, "pos": [0, -0.5, 0], "inv_mass": 0 },
+    { "shape": { "Sphere": { "r": 0.5 } },           "pos": [0, 5, 0],   "inv_mass": 1 },
+    { "shape": { "Sphere": { "r": 1 } },             "pos": [0, 2, 0],   "inv_mass": 0,
+      "is_sensor": true, "layers": 2 }
+  ]
+}
+"#;
+let mut world = RigidWorld::<f64>::new();
+world.load_scene_json(scene).expect("场景 JSON 合法");
+
+// ── 2) 碰撞层(B5):让道具只与"玩家层(层 1)"交互,不与触发区(层 2)产生物理阻挡──
+//    仅当双方 layers & 对方 collision_mask 均非零才碰撞。
+world.bodies[1].layers = 1;          // 道具属层 1
+world.bodies[2].collision_mask = 4;  // 触发区只关心层 3(示例),避免与道具发生物理接触
+
+// ── 3) 主循环:step 推进,并用 step_with_profile 取帧级分阶段耗时──
+let dt = 1.0 / 60.0;
+let mut acc = StepProfile::default();
+for _ in 0..600 {
+    let (_contacts, prof) = world.step_with_profile(dt);
+    // 默认构建(profiler feature 关)下 prof 全 0;开启 feature 后累加真实耗时:
+    acc.broad_narrow_ns += prof.broad_narrow_ns;
+    acc.velocity_ns     += prof.velocity_ns;
+    acc.position_ns     += prof.position_ns;
+}
+
+// ── 4) 触发器(B2):只读"重叠事件",不施加冲量,用于拾取 / 进入区域判定──
+let picked = world.sensor_contacts().iter().any(|c| {
+    let (a, b) = (c.a, c.b);
+    (a == 1 && b == 2) || (a == 2 && b == 1)   // 道具落入触发区
+});
+assert!(picked || !world.bodies[1].sleeping, "道具应已落trigger区或被检测");
+```
+
+要点:
+
+- **场景 DSL(B3)**:`RigidWorld::load_scene_json` / `to_scene_json` 支持关卡存档与程序化生成互通;`SceneDesc` 字段均 `#[serde(default)]`,可只写差异字段。
+- **触发器(B2)**:`body.is_sensor = true` 的体参与窄相检测但**不生成接触约束**(不阻止穿透),重叠在 `sensor_contacts()` 中报告,适合拾取 / 伤害区 / 触发门。
+- **碰撞层(B5)**:`layers` / `collision_mask` 位掩码,二者与运算非零才碰撞,可把触发器、角色、地形分成不同层互不阻挡。
+- **帧计时(C3)**:`step_with_profile` 返回各管线阶段(粗筛+窄相、速度、位置、休眠)纳秒耗时;`profiler` cargo feature 关闭时零开销(默认 `step` 签名不变)。
+
 ### 性能基线
 
 ```bash

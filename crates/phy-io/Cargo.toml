@@ -3,6 +3,10 @@ name = "phy-io"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "序列化/反序列化层:场景与状态的多格式导入导出。"
 
 [dependencies]
 phy-core = { path = "../phy-core" }

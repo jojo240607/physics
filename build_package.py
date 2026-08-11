@@ -232,6 +232,25 @@ Regenerate the header after any FFI change:
         f.write(usage)
     copied.append("USAGE.md")
 
+    # 3c) Engine glue code (C2): ship Unity C# P/Invoke + Unreal C++/Build.cs bindings
+    #     so consumers get drop-in integration samples alongside the binaries.
+    ffi_root = os.path.join(ROOT, "crates", "phy-ffi")
+    glue_src = {
+        "unity": os.path.join(ffi_root, "unity"),
+        "unreal": os.path.join(ffi_root, "unreal"),
+    }
+    glue_dst = os.path.join(out_dir, "glue")
+    for name, src in glue_src.items():
+        if not os.path.isdir(src):
+            continue
+        dst = os.path.join(glue_dst, name)
+        os.makedirs(dst, exist_ok=True)
+        for fn in os.listdir(src):
+            if fn.startswith("."):
+                continue
+            shutil.copy2(os.path.join(src, fn), os.path.join(dst, fn))
+            copied.append(f"glue/{name}/{fn}")
+
     print(f"\nPackage ready in: {out_dir}")
     for c in copied:
         print(f"  + {c}")

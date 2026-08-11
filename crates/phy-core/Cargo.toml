@@ -3,6 +3,10 @@ name = "phy-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "核心抽象:误差类型、确定性重放、子系统注册与统一句柄取回接口。"
 
 [dependencies]
 phy-math = { path = "../phy-math" }

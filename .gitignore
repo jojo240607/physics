@@ -15,6 +15,12 @@ patch_impls.py
 crates/phy-demo-web/shot_*.png
 build_tmp.txt  
 
+# 临时构建/日志产物
+b4_build.txt
+b4_ws.txt
+build_err.txt
+build_log.txt
+
 # 打包产物(build_package.py 输出,非源码)
 /pkg
 *.log  

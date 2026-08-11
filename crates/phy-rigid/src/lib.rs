@@ -19,6 +19,9 @@ pub mod raycast;
 pub mod subsystem;
 pub mod vehicle;
 pub mod fracture;
+pub mod islands;
+pub mod scene;
+pub mod profile;
 pub mod world;
 
 pub use shape::{Body, Shape};
@@ -31,7 +34,9 @@ pub use raycast::{ray_cast, RayHit};
 pub use subsystem::RigidSubsystem;
 pub use vehicle::{Vehicle, Wheel};
 pub use fracture::{fracture_body, fracture_convex, convex_volume_centroid};
+pub use scene::SceneDesc;
 pub use world::RigidWorld;
+pub use profile::StepProfile;
 
 #[cfg(test)]
 mod tests {

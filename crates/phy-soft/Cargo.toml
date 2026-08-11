@@ -3,6 +3,10 @@ name = "phy-soft"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "软体/布料子系统:质点-弹簧与位置动力学(PBD)求解。"
 
 [dependencies]
 phy-math = { path = "../phy-math" }

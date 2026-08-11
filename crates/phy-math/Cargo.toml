@@ -3,6 +3,10 @@ name = "phy-math"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "数学基础层:向量/矩阵/四元数与通用物理标量类型,供所有 phy-* 子系统共享。"
 
 [dependencies]
 nalgebra.workspace = true

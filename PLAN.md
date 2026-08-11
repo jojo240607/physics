@@ -467,6 +467,56 @@ pub trait GpuBackend {
 
 ### 重数值回归的运行方式
 - L1/L2 的 8 个重负载集成测试(SPH/刚体耦合 200 步)在 debug 下较慢,已标记 `#[ignore]`,**默认 `cargo test` 跳过**,不拖慢单元测试。
+
+---
+
+## 11. 商用游戏引擎补齐计划(基于事实核对)
+
+> 本节为 2026-08-11 追加。**核对结论先说**:先前误判"刚体角动力学(翻滚/角速度/惯性张量/四元数姿态积分)未落地"——经代码核对,**角动力学早已完整实现**(`Body` 含 `rot`/`ang_vel`/`inv_inertia_local`,`world.rs` 用 `q += 0.5·(0,ω)⊗q·h` 积分姿态,`solver.rs` 接触含角冲量,且有 `free_spin_integrates_attitude` / `off_center_impulse_spins_free_body` 单测覆盖)。因此 A1 从"待补"移除,改为下方**真实缺口清单**。
+
+### 11.1 当前已具备(商用可用基线)
+- 真实算法:SPH 流体、PBD 颗粒、顺序冲量刚体(**含完整角动力学**)、velocity-Verlet 软体/布料、线性四面体 FEM、Jacobi 泊松场、光学折射/焦散、关节/车辆/破碎/CCD/确定性回放。
+- 工程化:120+ 单测、`L1` 稳定性回归、`L2` 确定性、`L3` C ABI(MSVC `.lib` + P7 ABI 契约)、`L4` 性能基线/NaN 看门狗、`W1`–`W7` WebGPU、CI 守卫、`build_package.py` 一键打包。
+- P1–P7、M18 关节、M20 车辆、M21 破碎(含碎裂 Voronoi)均已落地(`PRODUCTION_READINESS.md` §2 大多勾选)。
+
+### 11.2 真实缺口(商用游戏视角,按优先级)
+
+#### 🔴 正确性硬门槛(不补影响"信不信得过")
+| 编号 | 缺口 | 现状 | 说明 |
+|---|---|---|---|
+| **G1** | 真实 GPU 逐粒子**误差报告**(CPU↔GPU 数值一致性) | 仅有 `gpu_ref` 代理,真机 adapter 误差对比未跑(`PROD §6` M1 勾选依赖手动桌面 Chrome 验收) | 游戏要信 GPU 结果,必须有真机逐粒子 max/RMSE 报告 |
+| **G2** | 实时规模 SLO 达标 | SPH 10k≈23fps 可用;颗粒 PBD 5k@257ms 远低于实时 | 商用数万实体需 GPU 或 Gauss-Seidel/稀疏化 |
+
+#### 🟠 游戏工程化必备(没有难集成)
+| 编号 | 缺口 | 说明 |
+|---|---|---|
+| **B1** | 刚体 **sleeping(休眠/唤醒)** + 大规模堆叠收敛 + 摩擦收敛迭代上限 | ✅ 已完成(2026-08-11):休眠/唤醒 + `SolverParams::friction_iterations`(摩擦独立子迭代,收敛上限,0 回退到 `iterations`) + `SolverParams::position_slop`(残余穿透容差,默认 1mm,Baumgarte 仅修正 `depth-slop`,消除静止堆叠抖动);并修复一个真实接触 bug——重力此前会施加到静态/`kinematic` 体(`inv_mass==0`),污染相对法向速度导致接触冲量失效、位置修正把盒弹飞,现 `step` 积分用 `if inv_mass>0 && !kinematic` 守卫。回归测试 `stacked_boxes_converge_without_jitter` / `b1_friction_and_slop_params_wired_and_stable` 落地。已知限制:朴素 SI 求解器在**滑动接触**(接触面存在水平初速度)下仍会注入能量使物体上抛,属求解器范式限制,非 B1 范畴,留待 G 阶段(warm-start + 更稳的摩擦/恢复模型)修复;竖直落体/静态堆叠正常 |
+| **B2** | **角色控制器 / kinematic body / sensor/trigger** | 已落地 kinematic body + sensor/trigger(2026-08-11):`Body::kinematic`(求解器视有效反质量为 0,按用户 vel 主动移动并推开动态体)+ `Body::is_sensor`(参与窄相但不施冲量,仅经 `RigidWorld::sensor_contacts` 报告重叠事件);capsule 角色体待补 |
+| **B3** | 统一**场景描述 DSL / prefab**(作者侧) | 已落地场景 DSL(2026-08-11):`scene.rs` 的 `SceneDesc<T>`(gravity/bodies/joints 复用已 serde 化的 `Body`/`JointConstraint`)+ `RigidWorld::load_scene_json`(从 JSON **替换**整个世界,加载 prefab/关卡)+ `to_scene_json`(导出存档,往返一致);`phy-io` 仍仅 CSV 导出 + serde 存档 |
+| **B4** | 刚体求解器 **island 并行** + broad-phase 并行 | ✅ 已完成(2026-08-11):`islands.rs` 用并查集(确定性,`BTreeMap` 有序 root)从接触+关节对构建连通分量;速度求解(2b)与位置投影(3)经 `rayon::par_iter` 按 island 并行,各 island 只回写自身不相交的 body 索引无数据竞争,且 island 内顺序冲量次序保留 → 与单线程求解器**逐位一致**;关节 λ 跨子步累积通过在每次 island pass 后写回全局 `joints` 保留。启用前后数值等价(63 测试 + doctest 全绿) |
+| **B5** | **碰撞过滤 / collision layers / groups**(bitmask) | 已落地(2026-08-11):`Body::layers`/`collision_mask` + `can_collide_with`,互斥层不碰撞、同掩码层正常碰撞;触发器/传感器语义待 B2 |
+
+#### 🟡 交付与生态(影响"敢不敢用")
+| 编号 | 缺口 | 说明 |
+|---|---|---|
+| **C1** | `cargo publish` 到 crates.io + 发布节奏 | P1 已加版本号未 publish |
+| **C2** | Unity / Unreal 官方集成示例 + 预编译二进制分发 | ✅ 已完成(2026-08-11):`crates/phy-ffi/unity/PhysicsFFI.cs`(C# P/Invoke 绑定 + `RigidTransform` 解析)、`crates/phy-ffi/unreal/PhysicsFFI.h`(C++ 声明 + `PhyToUnrealTransform`)+ `PhysicsFFI.Build.cs`(UE 模块接入示例);`build_package.py` 现已把 `glue/unity` 与 `glue/unreal` 一并打进发行包 |
+| **C3** | 运行时 **profiler / 帧级 profile hook** | ✅ 已完成(2026-08-11):`phy-rigid` 新增 `profile` 模块 + `RigidWorld::step_with_profile`,返回分阶段 `StepProfile`(broad/narrow、velocity、advance、position、sleep、total 纳秒),`profiler` feature 门控零开销,默认 `step` 签名不变 |
+| **C4** | 文档站点(docs.rs + 游戏 quickstart + 迁移指南) | ✅ 游戏 quickstart 已完成(2026-08-11):README 新增"刚体游戏快速上手"小节,以关卡 JSON DSL(B3)+ 触发器(B2)+ 碰撞层(B5)+ 帧计时(C3)串起典型游戏接入路径;docs.rs 由 `cargo doc` 自动产出,迁移指南随 API 注释持续补充 |
+
+### 11.3 执行顺序(已启动第一项)
+- **阶段 0(已启动)**:清理 **M21 碎裂遗留**——碎片继承母本 `ang_vel`,径向飞散时经 `apply_impulse_at` 注入真实角自旋(角动力学已具备,零架构改动),并修正 `fracture.rs` / `world.rs` 中"未建模角速度"的过时注释。
+- **阶段 1**:G1 真机 GPU 误差报告(`docs/gpu_accuracy_report.md`)。
+- **阶段 2**:G2 实时规模(SPH/颗粒 GPU 化或迭代优化)。
+- **阶段 3**:B1–B5 游戏工程化。
+- **阶段 4**:C1–C4 交付与生态。
+
+### 11.4 商用可用判定门槛(全部勾选后)
+对照 `PRODUCTION_READINESS.md` §6:
+- M1 真机 CPU↔GPU 误差报告通过 → **G1**
+- M2 目标规模达业务 SLO → **G2**
+- + B1–B5(游戏工程化)与 C1(可发布)
+- M3–M6(长稳/SDK/平台/CI)已具备。
 - 完整数值回归(确定性 + 稳定性)用 release + ignored 运行:
   `cargo test --release -p phy-demo -- --ignored`
   (release 下 SPH 提速约 10–50×,整套 < 1 分钟)。

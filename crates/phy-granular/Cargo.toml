@@ -3,6 +3,10 @@ name = "phy-granular"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "颗粒物质子系统:离散元(DEM)接触求解。"
 
 [dependencies]
 phy-core = { path = "../phy-core" }
