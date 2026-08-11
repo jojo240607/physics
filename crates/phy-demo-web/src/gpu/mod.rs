@@ -1,13 +1,12 @@
 //! W1: Web Demo GPU 加速后端(§5.7.4)。
 //!
-//! 仅 `#[cfg(all(target_arch = "wasm32", feature = "gpu"))]` 下编译。
-//! 桌面端即使误开 `gpu` feature 也不会进入本模块(见根 lib.rs 的 target_arch 门控),
-//! 因此不拉入 wgpu,避开 MinGW 链接崩溃(M3 决策)。
+//! `#[cfg(feature = "gpu")]` 下编译:wasm32(浏览器 WebGPU)是正式路径;native(桌面 wgpu
+//! 原生后端驱动真实 adapter)在 G1 真机验证中使用,需 MSVC 工具链(MinGW 链接 wgpu 崩溃 M3)。
+//! 原生回读须在 `map_async` 后 `device.poll(PollType::Wait)` 触发回调,否则死锁/超时。
 //!
-//! 本文件只做一件事:打通 **WebGPU compute 全链路** 的最小原型 ——
-//! 申请 device/queue → 上传一组 f32 → 一个把每个元素平方的 wgsl kernel → dispatch → 回读,
-//! 用 `gpu_self_test` 返回结果供浏览器 console 校验。后续 W2–W5 的算法内核
-//! (光学逐像素 / 焦散逐射线 / SPH 逐粒子 / 颗粒 PBD)都在此上下文之上叠加。
+//! 本文件打通 **WebGPU compute 全链路**:申请 device/queue → 上传 → wgsl kernel →
+//! dispatch → 回读。W1 最小原型(square)、W2 光学逐像素、W3 焦散、W4 SPH 逐粒子、W5 颗粒
+//! PBD 都在此上下文之上叠加。
 
 use wgpu::util::DeviceExt;
 
@@ -142,6 +141,8 @@ impl GpuContext {
         buf_slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
+        // 原生(桌面)wgpu 需 poll 才触发 map_async 回调。
+        let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
         rx.await
             .map_err(|e| format!("map 通道失败: {:?}", e))?
             .map_err(|e| format!("map_async 失败: {:?}", e))?;
@@ -395,6 +396,8 @@ pub async fn render_camera_gpu(
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
+    // 原生(桌面)wgpu 需 poll 才触发 map_async 回调。
+    let _ = ctx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     rx.await
         .map_err(|e| format!("map 通道失败: {:?}", e))?
         .map_err(|e| format!("map_async 失败: {:?}", e))?;
@@ -766,6 +769,8 @@ pub async fn render_caustics_gpu(
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
+    // 原生(桌面)wgpu 需 poll 才触发 map_async 回调。
+    let _ = ctx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     rx.await
         .map_err(|e| format!("map 通道失败: {:?}", e))?
         .map_err(|e| format!("map_async 失败: {:?}", e))?;
@@ -1272,7 +1277,7 @@ pub async fn render_sph_gpu(
 
 /// 辅助:map 一个 storage read buffer 为 Vec<[f32;4]>。
 async fn read_gpu_vec(
-    _ctx: &GpuContext,
+    ctx: &GpuContext,
     buf: &wgpu::Buffer,
     _n: usize,
 ) -> Result<Vec<[f32; 4]>, String> {
@@ -1281,6 +1286,9 @@ async fn read_gpu_vec(
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
+    // 原生(桌面)wgpu:map_async 回调须在 device.poll 时触发;wasm 下浏览器事件循环自行推进。
+    // poll(PollType::Wait) 阻塞直到全部提交工作完成并回调,保证 native 下 rx 一定收到结果。
+    let _ = ctx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     rx.await
         .map_err(|e| format!("map 通道失败: {:?}", e))?
         .map_err(|e| format!("map_async 失败: {:?}", e))?;
@@ -1407,9 +1415,10 @@ fn density_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (i >= arrayLength(&pos)) { return; }
     let h = u.hp_shear.x;
     let pi = pos[i].xyz;
-    let ci = i32(floor((pi.x - u.gmin.x) / h));
-    let cj = i32(floor((pi.y - u.gmin.y) / h));
-    let ck = i32(floor((pi.z - u.gmin.z) / h));
+    // 格子 key = floor(pi/h)(cell==h);cell_idx 内部用 u.gmin 作为偏移基准。
+    let ci = i32(floor(pi.x / h));
+    let cj = i32(floor(pi.y / h));
+    let ck = i32(floor(pi.z / h));
     var rho = 0.0;
     for (var di = -1; di <= 1; di = di + 1) {
         for (var dj = -1; dj <= 1; dj = dj + 1) {
@@ -1447,9 +1456,10 @@ fn force_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ki = u.visc_k[u32(mat)];
     let ni = u.visc_n[u32(mat)];
     let shear_min = u.hp_shear.w;
-    let ci = i32(floor((pi.x - u.gmin.x) / h));
-    let cj = i32(floor((pi.y - u.gmin.y) / h));
-    let ck = i32(floor((pi.z - u.gmin.z) / h));
+    // 格子 key = floor(pi/h)(cell==h);cell_idx 内部用 u.gmin 作为偏移基准。
+    let ci = i32(floor(pi.x / h));
+    let cj = i32(floor(pi.y / h));
+    let ck = i32(floor(pi.z / h));
     var press = vec3<f32>(0.0);
     var visc = vec3<f32>(0.0);
     var shear = 0.0; // 局部应变率代理(非牛顿幂律用)
@@ -1468,7 +1478,7 @@ fn force_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let r2 = dot(d, d);
                     if (r2 <= 0.0 || r2 >= h * h) { continue; }
                     let r = sqrt(r2);
-                    let dir = (pj - pi) / r; // 由 i 指向 j(对称压力式:把 i 推离 j)
+                    let dir = (pi - pj) / r; // 由 j 指向 i,乘以正 fpress → 把 i 推离 j(与 CPU 生产一致)
                     let rho_j = rho_p[j].x;
                     let p_j = rho_p[j].y;
                     let mj = scl[j].z;
@@ -1476,9 +1486,9 @@ fn force_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let fpress = spiky_grad(r, h);
                     let coef = mi * mj * (p_i / (rho_i * rho_i) + p_j / (rho_j * rho_j));
                     press = press + dir * (coef * fpress);
-                    // 粘性(原始项, μ 在外层乘)
+                    // 粘性(原始项, μ 在外层乘;含 m_i, 与 CPU 生产 compute_forces 一致)
                     let fvisc = visc_lap(r, h);
-                    visc = visc + (vj - vi) * (mj / rho_j * fvisc);
+                    visc = visc + (vj - vi) * (mi * mj / rho_j * fvisc);
                     // 局部应变率代理(CPU 同款): Σ |v_j-v_i|/(r+ε)·(m_j/ρ_j)
                     let dv = length(vj - vi);
                     shear = shear + dv / (r + 1.0e-4) * (mj / rho_j);
@@ -1801,6 +1811,8 @@ pub async fn render_granular_gpu(
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
+    // 原生(桌面)wgpu 需 poll 才触发 map_async 回调。
+    let _ = ctx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     rx.await
         .map_err(|e| format!("gran map 通道失败: {:?}", e))?
         .map_err(|e| format!("gran map_async 失败: {:?}", e))?;

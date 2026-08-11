@@ -12,8 +12,9 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-# 仅 Web Demo 的 GPU 加速路径(§5.7.4 W1):通过 WebGPU(wasm32 目标)在浏览器内跑 compute。
-# 桌面构建即使打开此 feature 也不会拉入 wgpu(见 src/gpu 的 target_arch 门控),避开 MinGW 链接崩溃(M3)。
+# Web Demo 的 GPU 加速路径(§5.7.4 W1):wasm32(浏览器 WebGPU)是正式路径。
+# G1 真机验证(2026-08-11):gpu 模块已放开到 native 编译(wgpu 原生后端驱动真实 adapter),
+# 但桌面原生必须用 MSVC 工具链(`cargo +stable-msvc ...`),MinGW 链接 wgpu 崩溃(M3)。
 # 注:phy-fluid / phy-granular 为非可选依赖——它们的 FlatData 类型被非门控的 gpu_ref 模块(host 端
 # P5 验收测试)引用,且二者均为纯 CPU 计算 crate(不拉 wgpu),对桌面/host 构建无副作用。
 gpu = ["dep:wgpu", "dep:bytemuck", "dep:futures", "dep:wasm-bindgen-futures", "dep:phy-optics", "dep:phy-rigid"]
@@ -39,3 +40,14 @@ wasm-bindgen-futures = { version = "0.4", optional = true }
 # W2/W3: GPU 渲染需要物理场景类型(仅 gpu feature 下引用)。
 phy-optics = { path = "../phy-optics", optional = true }
 phy-rigid = { path = "../phy-rigid", optional = true }
+
+[dev-dependencies]
+pollster = "0.3"
+
+[[example]]
+name = "probe_adapter"
+required-features = ["gpu"]
+
+[[example]]
+name = "real_gpu_error"
+required-features = ["gpu"]

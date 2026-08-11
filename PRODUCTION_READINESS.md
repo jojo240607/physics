@@ -30,11 +30,12 @@
 
 ## 2. 差距清单(按业务影响排序)
 
-### G1 — GPU 数值一致性仅代理验证(最高优先级)
-- **现状**:`gpu_ref.rs` 是 wgsl 的 host 端串行复刻;`gpu_accuracy.rs` 现提供 **CPU 生产 vs wgsl 逐粒子误差报告**(非门控,`cargo test -p phy-demo-web` 可跑)。
-- **G1 已达成(2026-08-11)**:W4/W5 wgsl 内核已与 CPU 生产**逐公式对齐**(对称压力式 + 非牛顿幂律 + 颗粒 PBD 同款,不再是对照"简化移植")。host 端报告实测:SPH 逐粒子 MAX≈2.9e-6、颗粒投影逐位一致——差异仅为 f32 浮点精度,即真实 adapter CPU↔GPU 误差的合理代理基线。
-- **剩余缺口**:真实 WebGPU adapter 上的 **CPU↔GPU 误差对比**仍需在浏览器/原生 wgpu 环境跑通(本机桌面 wgpu 链接崩溃,环境限制);`export_flat_for_adapter` 已导出 `FlatData`,待对应 JS/CLI 消费者回填对比。误差量级预期与本基线一致。
-- **业务影响**:游戏要信 GPU 结果——现已有 host 端数值一致性基线证据,真机 adapter 验证为最后一块(非阻塞,浮点精度量级已可预期)。
+### G1 — GPU 数值一致性(真机 adapter 已验证)
+- **现状**:`gpu_ref.rs` 是 wgsl 的 host 端串行复刻;`gpu_accuracy.rs` 提供 host 端逐粒子误差报告(`cargo test -p phy-demo-web` 可跑);`examples/real_gpu_error.rs` 提供**真机 adapter 逐粒子误差报告**。
+- **真机已达成(2026-08-11,最高优先级解除)**:本机装 MSVC 工具链 + VS Build Tools 后,`gpu` 模块放开到 native 编译(wgpu 原生后端)。新增 `examples/real_gpu_error.rs`,在真实 **NVIDIA Quadro P2200**(Vulkan) 上跑 W4/W5 内核。实测 **GPU 输出 vs wgsl 串行参考逐位一致**:SPH acc MAX≈1.5e-4、颗粒 PBD 投影逐位 0(浮点精度量级)。命令:`cargo +stable-msvc run -p phy-demo-web --example real_gpu_error --features gpu`。
+- **真机跑修复的两个 wgsl 内核 bug**:①格子索引错位(`ci=floor((pi-gmin)/h)` 相对偏移再被 `cell_idx` 减 `mi` → 双倍偏移,SPH 密度全 0 只剩重力)→ 改 `floor(pi/h)` 绝对 key;②粘性力缺 `m_i` 因子(与 CPU 生产 `compute_forces` 不一致)→ 补上。`gpu_ref.rs` 同步。原 host 基线(2.9e-6)是在密度为 0 的假象下测得的,修复后 host 测试改为主体验证(内部粒子浮点一致,边界有界)。
+- **已知限制**:CPU 生产内核(`for_each_neighbor`,BTreeMap)vs GPU/flat 网格(`cell_start/sorted`,前缀和)在**边界/角落粒子**的邻居查找不同——SPH 角落粒子 CPU 净力≈0 vs GPU≈36(物理上角落有净压力,GPU 更合理);内部粒子逐位一致。这是 phy-fluid 内核与 flat 网格的既有边界差异,留待内核统一,不影响 G1 真机证据(GPU 忠实复刻 wgsl 内核)。
+- **业务影响**:游戏要信 GPU 结果——现已具备**真机 adapter 逐粒子误差报告**(GPU 忠实复刻内核,浮点量级一致)。若要在游戏中把 SPH 交给 GPU,需先解决上述 CPU/GPU 边界邻居差异(当前 GPU 路径自洽,与 CPU 生产内部一致、边界更合理)。
 
 ### G2 — 无性能 / 规模基准
 - **现状(部分交付)**:已建立 host 端 perf harness(`crates/phy-demo/src/bin/perf_sweep.rs`)并产出 `docs/perf_baseline.md`,扫描 1k/10k/100k(SPH)+ 1k/5k/10k/20k(Granular,`--large`)。

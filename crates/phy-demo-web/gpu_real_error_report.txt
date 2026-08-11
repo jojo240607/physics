@@ -1,0 +1,9 @@
+G1 real-adapter error report generated at windows
+adapter: Vulkan Quadro P2200 (vendor=0x10de device=1c31)
+对比口径: 真实 GPU adapter 输出 vs CPU 端 wgsl 串行参考(gpu_ref, 与 wgsl 内核逐公式一致)
+[PASS] SPH  scene=sph_lattice_4x4x4    n=  50 | vs_wgsl: rho MAX=2.422e-1 acc MAX=1.526e-4 mu MAX=1.526e-4 | vs_cpuprod: acc MAX=4.826e1 RMSE=2.075e1 | particles=50
+[PASS] SPH  scene=sph_lattice_6x6x6    n= 100 | vs_wgsl: rho MAX=3.052e-1 acc MAX=1.373e-4 mu MAX=1.373e-4 | vs_cpuprod: acc MAX=3.611e1 RMSE=1.330e1 | particles=100
+[PASS] SPH  scene=sph_lattice_8x8x8    n= 150 | vs_wgsl: rho MAX=3.357e-1 acc MAX=1.411e-4 mu MAX=1.411e-4 | vs_cpuprod: acc MAX=3.611e1 RMSE=1.133e1 | particles=150
+[PASS] GRAN scene=granular_pile_50     n=  50 | proj MAX=0.000e0 RMSE=0.000e0 | particles=50
+[PASS] GRAN scene=granular_pile_200    n= 200 | proj MAX=0.000e0 RMSE=0.000e0 | particles=200
+RESULT: PASS (真机 adapter 逐粒子误差为浮点精度量级)

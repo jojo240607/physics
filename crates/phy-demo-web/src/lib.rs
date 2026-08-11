@@ -19,8 +19,10 @@ pub mod gpu_ref;
 // 为真实 WebGPU adapter 的 CPU↔GPU 误差对比建立浮点精度基线 + 数据导出接口。
 pub mod gpu_accuracy;
 
-// W1: 仅 wasm + gpu feature 下编译 WebGPU 后端;其余构建忽略。
-#[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+// W1: WebGPU compute 后端。wasm(浏览器)+gpu feature 是正式路径;native(桌面 wgpu 原生后端,
+// 需 MSVC 工具链而非 MinGW,规避 M3 的 corrupt .drectve 崩溃)在 gpu feature 下也编译,
+// 用于真机 adapter 的 CPU↔GPU 逐粒子误差对比(G1 验收)。其余构建忽略。
+#[cfg(feature = "gpu")]
 pub mod gpu;
 
 // 用 console 输出 + panic hook,便于浏览器调试。

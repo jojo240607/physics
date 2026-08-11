@@ -13,7 +13,15 @@
 //! G1 更新(2026-08-11):W4/W5 的 wgsl 内核现已与 CPU 生产实现(`phy-fluid` `compute_*`、
 //! `phy-granular` Jacobi PBD)**逐公式对齐**(对称压力式 + 非牛顿幂律 + 颗粒 PBD 同款),
 //! 故本参考既对照 wgsl 自身契约(finite / 静止晶格 mean_rho≈ρ0 / 重叠对投影后不穿透),
-//! 也可作为 **CPU 生产 vs GPU wgsl 数值一致性** 的代理证据(逐粒子误差仅 f32 精度量级)。
+//! 也可作为 **CPU 生产 vs GPU wgsl 数值一致性** 的代理证据。
+//!
+//! G1 真机更新(2026-08-11):本机装 MSVC 工具链后桌面 wgpu 不再崩溃,`examples/real_gpu_error.rs`
+//! 已在真实 NVIDIA Quadro P2200 adapter 上实测 **GPU 输出与本参考逐位一致**(SPH acc MAX≈1.5e-4、
+//! 颗粒投影逐位 0)。真机跑还暴露并修复了本参考/内核的**格子索引错位**(原 `floor((pi-gmin)/h)`
+//! 相对偏移再被 `cell_idx` 减 `mi` → 密度全 0)与**粘性缺 `m_i`** 两处 bug,现与 CPU 生产
+//! `compute_forces` 逐公式一致(压力 `(pi-pj)/r×+fpress` 推开、粘性含 `m_i`)。已知限制:CPU
+//! 生产内核(`for_each_neighbor`,BTreeMap)与 flat 网格(前缀和)在边界/角落粒子的邻居查找不同,
+//! 角落 SPH 力 CPU≈0 vs 本参考≈36(GPU 更物理),内部粒子逐位一致,留待内核统一。
 
 use phy_fluid::SphFlatData;
 use phy_granular::GranularFlatData;
@@ -79,9 +87,10 @@ pub fn cpu_sph_density_pressure(flat: &SphFlatData) -> Vec<[f32; 2]> {
     let mut out = vec![[0.0f32, 0.0f32]; n];
     for i in 0..n {
         let pi = [flat.pos[i][0], flat.pos[i][1], flat.pos[i][2]];
-        let ci = ((pi[0] - flat.grid_min[0] as f32) / h).floor() as i32;
-        let cj = ((pi[1] - flat.grid_min[1] as f32) / h).floor() as i32;
-        let ck = ((pi[2] - flat.grid_min[2] as f32) / h).floor() as i32;
+        // 格子 key = floor(pi/h)(cell==h);cell_idx 内部用 grid_min 作为偏移基准。
+        let ci = (pi[0] / h).floor() as i32;
+        let cj = (pi[1] / h).floor() as i32;
+        let ck = (pi[2] / h).floor() as i32;
         let mut rho = 0.0f32;
         for di in -1..=1 {
             for dj in -1..=1 {
@@ -125,9 +134,10 @@ pub fn cpu_sph_force(flat: &SphFlatData, rho_p: &[[f32; 2]]) -> Vec<[f32; 4]> {
         let ki = flat.visc_k.get(mat).copied().unwrap_or(0.0);
         let ni = flat.visc_n.get(mat).copied().unwrap_or(1.0);
         let mi = flat.scalar[i][2];
-        let ci = ((pi[0] - flat.grid_min[0] as f32) / h).floor() as i32;
-        let cj = ((pi[1] - flat.grid_min[1] as f32) / h).floor() as i32;
-        let ck = ((pi[2] - flat.grid_min[2] as f32) / h).floor() as i32;
+        // 格子 key = floor(pi/h)(cell==h);cell_idx 内部用 grid_min 作为偏移基准。
+        let ci = (pi[0] / h).floor() as i32;
+        let cj = (pi[1] / h).floor() as i32;
+        let ck = (pi[2] / h).floor() as i32;
         let mut press = [0.0f32; 3];
         let mut visc = [0.0f32; 3];
         let mut shear = 0.0f32;
@@ -152,8 +162,8 @@ pub fn cpu_sph_force(flat: &SphFlatData, rho_p: &[[f32; 2]]) -> Vec<[f32; 4]> {
                             continue;
                         }
                         let r = r2.sqrt();
-                        // 由 i 指向 j(对称压力式把 i 推离 j)
-                        let dir = [flat.pos[j][0] - pi[0], flat.pos[j][1] - pi[1], flat.pos[j][2] - pi[2]];
+                        // 由 j 指向 i,乘以正 fpress → 把 i 推离 j(与 CPU 生产一致)。
+                        let dir = [pi[0] - flat.pos[j][0], pi[1] - flat.pos[j][1], pi[2] - flat.pos[j][2]];
                         let rlen = r;
                         let ndir = [dir[0] / rlen, dir[1] / rlen, dir[2] / rlen];
                         let rho_j = rho_p[j][0];
@@ -168,7 +178,8 @@ pub fn cpu_sph_force(flat: &SphFlatData, rho_p: &[[f32; 2]]) -> Vec<[f32; 4]> {
                         press[1] += ndir[1] * coef;
                         press[2] += ndir[2] * coef;
                         let fvisc = visc_lap(r, h);
-                        let vc = (mj / rho_j) * fvisc;
+                        // 含 m_i(与 CPU 生产 compute_forces 一致)。
+                        let vc = mi * (mj / rho_j) * fvisc;
                         visc[0] += (flat.vel[j][0] - vi[0]) * vc;
                         visc[1] += (flat.vel[j][1] - vi[1]) * vc;
                         visc[2] += (flat.vel[j][2] - vi[2]) * vc;

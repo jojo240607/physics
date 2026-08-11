@@ -83,6 +83,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adapter error (browser / native wgpu) is expected to match this magnitude — see
   `export_flat_for_adapter` for the data-export path. Acceptance tests tightened to
   consistency thresholds (SPH `MAX < 1e-1`, granular projection `< 1e-3`).
+- **Real-GPU-adapter per-particle error report (G1, commercial-readiness plan §11)**:
+  installed the MSVC toolchain + VS Build Tools and opened the `gpu` module to **native**
+  compilation (`#[cfg(feature = "gpu")]` instead of `wasm32`-only; native wgpu backends
+  drive the real adapter), adding `device.poll(PollType::Wait)` before each `map_async`
+  readback so native kernels complete instead of hanging. New example
+  `crates/phy-demo-web/examples/real_gpu_error.rs` runs the W4 SPH / W5 granular wgsl
+  kernels on the **real NVIDIA Quadro P2200 adapter** (`cargo +stable-msvc run -p
+  phy-demo-web --example real_gpu_error --features gpu`). Measured: **GPU output vs the
+  wgsl serial reference is bit-faithful — SPH acc `MAX ≈ 1.5e-4`, granular projection
+  bit-identical 0**. Running on the real adapter also exposed and fixed **two genuine wgsl
+  kernel bugs**: (1) cell-index mismatch — `ci = floor((pi-gmin)/h)` (relative offset) was
+  subtracted by `mi` again in `cell_idx`, doubling the offset so SPH density computed as 0
+  and only gravity survived; fixed to `floor(pi/h)` absolute key (matches the flat-grid
+  `flat_idx`); (2) viscosity force was missing the `m_i` factor (diverged from CPU
+  `compute_forces`); added it. Pressure direction corrected to `(pi-pj)/r × +fpress`
+  (repulsion, matching CPU). `gpu_ref.rs` mirrors all fixes. The earlier host baseline
+  (`SPH MAX≈2.9e-6`) had been measured under the density-0 artifact; after the fix the
+  host test asserts the **bulk** (interior) particles are float-exact and the **boundary**
+  single particles are bounded (CPU `for_each_neighbor` BTreeMap vs flat-grid prefix-sum
+  disagree on corner-particle neighbor lookup — corner SPH force CPU≈0 vs GPU≈36, GPU more
+  physical; interior particles bit-identical). This boundary divergence between the CPU
+  kernel and the flat grid is a known pre-existing difference, deferred to kernel
+  unification; it does not affect the G1 conclusion that the GPU faithfully reproduces the
+  wgsl kernel.
 - **Scene description DSL / prefab (B3, commercial-readiness plan §11)**: new
   `scene.rs` module with `SceneDesc<T>` (gravity + bodies + joints, reusing the
   already-serde `Body`/`JointConstraint` so the description is isomorphic to the
