@@ -31,7 +31,7 @@
 
 /// ABI 版本(单调递增整数)。破坏任一 `phy_*` 符号签名 / 移除符号 / 改变
 /// `PhyWorldHandle` 布局时 **必须** +1,并在 CHANGELOG 记录。
-pub const PHY_FFI_ABI_VERSION: u32 = 1;
+pub const PHY_FFI_ABI_VERSION: u32 = 2;
 
 /// 语义主版本(破坏性变更 +1,`0.x` 阶段允许 minor 间破坏性改动)。
 pub const PHY_FFI_VERSION_MAJOR: u32 = 0;
@@ -589,6 +589,209 @@ pub extern "C" fn phy_world_get_rigid_transforms_f32(
         }
     }
     written / 7
+}
+
+// ---- 刚体单实例操控(四旋翼等"被控对象"接口, P-quad) --------------------------
+//
+// 现有 FFI 只暴露整世界级读回(`get_rigid_transforms`)。四旋翼仿真需要按 id 施加
+// 旋翼推力(力/力矩)并读回线/角速度以生成 IMU 真值,故补以下符号。
+//
+// 积分语义:引擎 `RigidWorld::step` 仅对 `vel` 加重力、**不动 `ang_vel`**,也不消费
+// 任何"外力"字段。因此 `apply_force`/`apply_torque` 在 `step` 前由调用方每帧调用一次,
+// 直接把世界系力/力矩按半隐式欧拉积分进 `vel`/`ang_vel`(`× inv_mass × dt` /
+// `× I_world⁻¹ × dt`)。`mode`:0=累加(多次调用叠加),1=覆盖(先清该 id 上一帧积分量)。
+// 覆盖模式需在 handle 外维护"上次施加量",本层不存状态 —— 调用方每帧只调一次累加即可。
+
+/// 形状类型枚举(供 `phy_world_rigid_add_body` 的 `shape_kind`)。
+/// 0=Sphere, 1=Box。
+const SHAPE_BOX: i32 = 1;
+
+/// 向刚体子系统追加一个刚体,返回其索引(>=0);失败(空指针/无刚体子系统/panic)返回 -1。
+///
+/// - `shape_kind`: 0=Sphere(半径取 `inertia3[0]`), 1=Box(半长取 `inertia3[0..2]`)。
+/// - `mass`: 质量(kg);0 表示静态/无限质量(inv_mass=0)。
+/// - `pos7`: 7×f64 = pos.xyz + quat.wijk(机体->世界)。
+/// - `inertia3`: 体坐标系三个主转动惯量(Ixx,Iyy,Izz),写入对角 `inv_inertia_local`。
+#[no_mangle]
+pub extern "C" fn phy_world_rigid_add_body(
+    w: *mut PhyWorldHandle,
+    shape_kind: i32,
+    mass: f64,
+    pos7: *const f64,
+    inertia3: *const f64,
+) -> i64 {
+    let (world, p7, i3) = match (as_world(w), nonnull_slice(pos7 as *mut f64, 7), nonnull_slice(inertia3 as *mut f64, 3)) {
+        (Some(world), Some(p7), Some(i3)) => (world, p7, i3),
+        _ => return -1,
+    };
+    guard(|| {
+        for i in 0..world.subsystem_count() {
+            if let Some(sub) = world.get_mut(i) {
+                if let Some(rigid) = sub.as_any_mut().downcast_mut::<RigidSubsystem<f64>>() {
+                    let shape = match shape_kind {
+                        SHAPE_BOX => phy_rigid::shape::Shape::Box {
+                            half: phy_math::Vec3::new(i3[0], i3[1], i3[2]),
+                        },
+                        _ => phy_rigid::shape::Shape::Sphere { r: i3[0] },
+                    };
+                    let rot = phy_math::na::UnitQuaternion::from_quaternion(
+                        phy_math::na::Quaternion::new(p7[3], p7[4], p7[5], p7[6]),
+                    );
+                    let mut body = phy_rigid::Body::new(shape, phy_math::Vec3::new(p7[0], p7[1], p7[2]), mass);
+                    body.rot = rot;
+                    body.inv_inertia_local = phy_math::Mat3::from_diagonal(
+                        &phy_math::na::Vector3::new(i3[0], i3[1], i3[2]),
+                    );
+                    return rigid.world.add_body(body) as i64;
+                }
+            }
+        }
+        -1
+    })
+    .unwrap_or(-1)
+}
+
+/// 施加世界系力(牛顿)到指定刚体,直接积分进线速度:`vel += f * inv_mass * dt`。
+/// 返回 0 成功,-1 失败(空指针/id 越界/无刚体子系统/panic)。`mode` 当前按累加(0)处理。
+#[no_mangle]
+pub extern "C" fn phy_world_rigid_apply_force(
+    w: *mut PhyWorldHandle,
+    id: i64,
+    f3: *const f64,
+    dt: f64,
+    _mode: i32,
+) -> i32 {
+    let (world, f) = match (as_world(w), nonnull_slice(f3 as *mut f64, 3)) {
+        (Some(world), Some(f)) => (world, f),
+        _ => return -1,
+    };
+    guard(|| {
+        let id = id as usize;
+        for i in 0..world.subsystem_count() {
+            if let Some(sub) = world.get_mut(i) {
+                if let Some(rigid) = sub.as_any_mut().downcast_mut::<RigidSubsystem<f64>>() {
+                    if id < rigid.world.bodies.len() {
+                        let b = &mut rigid.world.bodies[id];
+                        if b.inv_mass > 0.0 {
+                            b.vel.x += f[0] * b.inv_mass * dt;
+                            b.vel.y += f[1] * b.inv_mass * dt;
+                            b.vel.z += f[2] * b.inv_mass * dt;
+                        }
+                        return 0;
+                    }
+                }
+            }
+        }
+        -1
+    })
+    .unwrap_or(-1)
+}
+
+/// 施加世界系力矩(N·m)到指定刚体,直接积分进角速度:`ang_vel += I_world⁻¹ * t * dt`,
+/// 其中 `I_world⁻¹ = rot * inv_inertia_local * rotᵀ`。返回 0 成功,-1 失败。
+#[no_mangle]
+pub extern "C" fn phy_world_rigid_apply_torque(
+    w: *mut PhyWorldHandle,
+    id: i64,
+    t3: *const f64,
+    dt: f64,
+    _mode: i32,
+) -> i32 {
+    let (world, t) = match (as_world(w), nonnull_slice(t3 as *mut f64, 3)) {
+        (Some(world), Some(t)) => (world, t),
+        _ => return -1,
+    };
+    guard(|| {
+        let id = id as usize;
+        for i in 0..world.subsystem_count() {
+            if let Some(sub) = world.get_mut(i) {
+                if let Some(rigid) = sub.as_any_mut().downcast_mut::<RigidSubsystem<f64>>() {
+                    if id < rigid.world.bodies.len() {
+                        let b = &mut rigid.world.bodies[id];
+                        if b.inv_mass > 0.0 {
+                            // I_world⁻¹ = rot * inv_inertia_local * rotᵀ
+                            let iw = b.rot.to_rotation_matrix()
+                                * b.inv_inertia_local
+                                * b.rot.to_rotation_matrix().transpose();
+                            let av = phy_math::Vec3::new(
+                                iw[(0, 0)] * t[0] + iw[(0, 1)] * t[1] + iw[(0, 2)] * t[2],
+                                iw[(1, 0)] * t[0] + iw[(1, 1)] * t[1] + iw[(1, 2)] * t[2],
+                                iw[(2, 0)] * t[0] + iw[(2, 1)] * t[1] + iw[(2, 2)] * t[2],
+                            );
+                            b.ang_vel.x += av.x * dt;
+                            b.ang_vel.y += av.y * dt;
+                            b.ang_vel.z += av.z * dt;
+                        }
+                        return 0;
+                    }
+                }
+            }
+        }
+        -1
+    })
+    .unwrap_or(-1)
+}
+
+/// 读回指定刚体的世界系线速度(3×f64)到 `out3`。返回 0 成功,-1 失败。
+#[no_mangle]
+pub extern "C" fn phy_world_rigid_get_velocity(
+    w: *mut PhyWorldHandle,
+    id: i64,
+    out3: *mut f64,
+) -> i32 {
+    let (world, out) = match (as_world(w), nonnull_slice(out3, 3)) {
+        (Some(world), Some(out)) => (world, out),
+        _ => return -1,
+    };
+    guard(|| {
+        let id = id as usize;
+        for i in 0..world.subsystem_count() {
+            if let Some(sub) = world.get(i) {
+                if let Some(rigid) = sub.as_any().downcast_ref::<RigidSubsystem<f64>>() {
+                    if id < rigid.world.bodies.len() {
+                        let v = rigid.world.bodies[id].vel;
+                        out[0] = v.x;
+                        out[1] = v.y;
+                        out[2] = v.z;
+                        return 0;
+                    }
+                }
+            }
+        }
+        -1
+    })
+    .unwrap_or(-1)
+}
+
+/// 读回指定刚体的世界系角速度(rad/s,3×f64)到 `out3`。返回 0 成功,-1 失败。
+#[no_mangle]
+pub extern "C" fn phy_world_rigid_get_angular_velocity(
+    w: *mut PhyWorldHandle,
+    id: i64,
+    out3: *mut f64,
+) -> i32 {
+    let (world, out) = match (as_world(w), nonnull_slice(out3, 3)) {
+        (Some(world), Some(out)) => (world, out),
+        _ => return -1,
+    };
+    guard(|| {
+        let id = id as usize;
+        for i in 0..world.subsystem_count() {
+            if let Some(sub) = world.get(i) {
+                if let Some(rigid) = sub.as_any().downcast_ref::<RigidSubsystem<f64>>() {
+                    if id < rigid.world.bodies.len() {
+                        let av = rigid.world.bodies[id].ang_vel;
+                        out[0] = av.x;
+                        out[1] = av.y;
+                        out[2] = av.z;
+                        return 0;
+                    }
+                }
+            }
+        }
+        -1
+    })
+    .unwrap_or(-1)
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@
 
 // ABI 版本(单调递增整数)。破坏任一 `phy_*` 符号签名 / 移除符号 / 改变
 // `PhyWorldHandle` 布局时 **必须** +1,并在 CHANGELOG 记录。
-#define PHY_FFI_ABI_VERSION 1
+#define PHY_FFI_ABI_VERSION 2
 
 // 语义主版本(破坏性变更 +1,`0.x` 阶段允许 minor 间破坏性改动)。
 #define PHY_FFI_VERSION_MAJOR 0
@@ -135,5 +135,39 @@ uintptr_t phy_world_get_fluid_velocities_f32(PhyWorldHandle *w, float *buf, uint
 // 把所有刚体的位姿(pos.x,y,z + quat.w,i,j,k,共 7 个 f32 交错)写入 `buf`。
 // 返回写入的刚体数。
 uintptr_t phy_world_get_rigid_transforms_f32(PhyWorldHandle *w, float *buf, uintptr_t len);
+
+// 向刚体子系统追加一个刚体,返回其索引(>=0);失败(空指针/无刚体子系统/panic)返回 -1。
+//
+// - `shape_kind`: 0=Sphere(半径取 `inertia3[0]`), 1=Box(半长取 `inertia3[0..2]`)。
+// - `mass`: 质量(kg);0 表示静态/无限质量(inv_mass=0)。
+// - `pos7`: 7×f64 = pos.xyz + quat.wijk(机体->世界)。
+// - `inertia3`: 体坐标系三个主转动惯量(Ixx,Iyy,Izz),写入对角 `inv_inertia_local`。
+int64_t phy_world_rigid_add_body(PhyWorldHandle *w,
+                                 int32_t shape_kind,
+                                 double mass,
+                                 const double *pos7,
+                                 const double *inertia3);
+
+// 施加世界系力(牛顿)到指定刚体,直接积分进线速度:`vel += f * inv_mass * dt`。
+// 返回 0 成功,-1 失败(空指针/id 越界/无刚体子系统/panic)。`mode` 当前按累加(0)处理。
+int32_t phy_world_rigid_apply_force(PhyWorldHandle *w,
+                                    int64_t id,
+                                    const double *f3,
+                                    double dt,
+                                    int32_t _mode);
+
+// 施加世界系力矩(N·m)到指定刚体,直接积分进角速度:`ang_vel += I_world⁻¹ * t * dt`,
+// 其中 `I_world⁻¹ = rot * inv_inertia_local * rotᵀ`。返回 0 成功,-1 失败。
+int32_t phy_world_rigid_apply_torque(PhyWorldHandle *w,
+                                     int64_t id,
+                                     const double *t3,
+                                     double dt,
+                                     int32_t _mode);
+
+// 读回指定刚体的世界系线速度(3×f64)到 `out3`。返回 0 成功,-1 失败。
+int32_t phy_world_rigid_get_velocity(PhyWorldHandle *w, int64_t id, double *out3);
+
+// 读回指定刚体的世界系角速度(rad/s,3×f64)到 `out3`。返回 0 成功,-1 失败。
+int32_t phy_world_rigid_get_angular_velocity(PhyWorldHandle *w, int64_t id, double *out3);
 
 #endif  /* PHY_FFI_H */
