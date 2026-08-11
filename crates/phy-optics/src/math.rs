@@ -1,7 +1,6 @@
 //! 光学几何/向量工具:折射(Snell)、反射、Fresnel 反射率。
 
-use num_traits::FromPrimitive;
-use phy_math::{na, RealField, Vec3};
+use phy_math::{RealField, Vec3};
 
 /// 归一化方向(防御除零:零向量返回 +X)。
 pub fn normalize<T: RealField + Copy>(v: &Vec3<T>) -> Vec3<T> {
@@ -29,7 +28,6 @@ pub fn refract<T: RealField + Copy>(
     n: &Vec3<T>,
     eta: T,
 ) -> Option<Vec3<T>> {
-    let two = <T as num_traits::FromPrimitive>::from_f64(2.0).unwrap();
     let one = T::one();
     let cosi = -i.dot(n); // 入射方向与法线夹角余弦(要求 n 指向入射侧)
     let cosi2 = cosi * cosi;

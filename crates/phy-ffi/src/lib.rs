@@ -10,6 +10,12 @@
 //! 编译产物:`cargo build -p phy-ffi --release` → `target/release/phy_ffi.{dll,so,dylib}`。
 //! C 头:`PHY_FFI_GEN_HEADER=1 cargo build -p phy-ffi` → `crates/phy-ffi/phy_ffi.h`。
 
+// Windows-GNU 目标下,rustc 为 cdylib 自动生成的 `.def` 会被 MinGW `ld` 报
+// "corrupt .drectve at end of def file"(rust-lang/rust#50633,工具链已知缺陷,
+// 与引擎代码无关,且不影响 MSVC 打包路径 —— 见 build_package.py 的 llvm-dlltool)。
+// 该 linker lint 在此 crate 静音,保持构建信号干净。
+#![allow(linker_messages)]
+
 use std::ffi::CStr;
 use std::panic::{self, AssertUnwindSafe};
 

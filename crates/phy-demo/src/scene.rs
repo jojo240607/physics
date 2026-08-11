@@ -10,7 +10,7 @@ use phy_field::{AcousticField, EmField, GravField, HeatField, ScalarField, WaveF
 use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
 use phy_math::{na, RealField, Vec3};
 use phy_optics::{OpticBody, OpticScene, OpticSubsystem, Precision, Surface};
-use phy_rigid::{Body, Joint, RigidSubsystem, RigidWorld, Shape};
+use phy_rigid::{Body, RigidSubsystem, RigidWorld, Shape};
 use phy_soft::{SoftBody, SoftSubsystem};
 
 use crate::camera::Camera;
@@ -1017,6 +1017,7 @@ fn _assert_any<T: RealField>(_: &dyn Any) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use phy_rigid::Joint; // 仅在集成测试中用于构造关节约束。
 
     fn build_fluid_heat_world(warm_top: bool) -> World<f64> {
         let mut w = World::<f64>::new();
@@ -1252,7 +1253,7 @@ mod tests {
         let mut f = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
         let hot = f.idx(1, 1, 1);
         f.u[hot] = 100.0;
-        let mut heat_sub = HeatField::new(f, 0.1);
+        let heat_sub = HeatField::new(f, 0.1);
         // 让热场在 step 里做扩散,thermally meaningful。
         w.add_subsystem(Box::new(heat_sub));
 
@@ -1568,7 +1569,7 @@ mod tests {
             pb: Vec3::zeros(),
             rest: 1.5,
         });
-        let mut rsub = RigidSubsystem::new(rworld);
+        let rsub = RigidSubsystem::new(rworld);
         w.add_subsystem(Box::new(rsub));
 
         for _ in 0..300 {
@@ -1630,7 +1631,7 @@ mod tests {
         let mut veh = phy_rigid::Vehicle::new(cid, wheels);
         veh.set_engine(3000.0);
 
-        let mut rsub = RigidSubsystem::new(rworld);
+        let rsub = RigidSubsystem::new(rworld);
         w.add_subsystem(Box::new(rsub));
 
         let dt = 1.0 / 120.0;

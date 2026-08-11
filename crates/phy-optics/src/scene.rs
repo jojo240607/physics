@@ -3,8 +3,7 @@
 //! 复用 `phy_rigid::Shape` 作为几何,叠加光学属性(表面材质 / 介质折射率),
 //! 使刚体世界与光学世界共享同一套几何体描述。
 
-use num_traits::FromPrimitive;
-use phy_math::{na, RealField, Vec3};
+use phy_math::{RealField, Vec3};
 use phy_rigid::{Body, Shape};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -128,7 +127,6 @@ fn sphere_hit<T: RealField + Copy>(ro: &Vec3<T>, rd: &Vec3<T>, r: T) -> Option<(
         return None;
     }
     let sq = disc.sqrt();
-    let two = <T as FromPrimitive>::from_f64(2.0).unwrap();
     let t0 = -b - sq;
     let t = if t0 > T::zero() { t0 } else { -b + sq };
     if t <= T::zero() {

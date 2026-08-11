@@ -257,9 +257,9 @@ impl<T: RealField + Copy + num_traits::ToPrimitive + num_traits::FromPrimitive> 
                     let cxx = ga.x * gb.x;
                     let cyy = ga.y * gb.y;
                     let czz = ga.z * gb.z;
-                    let cxy = ga.x * gb.y + ga.y * gb.x;
-                    let cyz = ga.y * gb.z + ga.z * gb.y;
-                    let czx = ga.z * gb.x + ga.x * gb.z;
+                    let _cxy = ga.x * gb.y + ga.y * gb.x;
+                    let _cyz = ga.y * gb.z + ga.z * gb.y;
+                    let _czx = ga.z * gb.x + ga.x * gb.z;
                     // Ke 子块 (3x3):
                     // u_a分量对 u_b分量
                     let kxx = l2m * cxx + mu * (cyy + czz);
@@ -360,9 +360,9 @@ impl<T: RealField + Copy + num_traits::ToPrimitive + num_traits::FromPrimitive> 
                     let cxx = ga.x * gb.x;
                     let cyy = ga.y * gb.y;
                     let czz = ga.z * gb.z;
-                    let cxy = ga.x * gb.y + ga.y * gb.x;
-                    let cyz = ga.y * gb.z + ga.z * gb.y;
-                    let czx = ga.z * gb.x + ga.x * gb.z;
+                    let _cxy = ga.x * gb.y + ga.y * gb.x;
+                    let _cyz = ga.y * gb.z + ga.z * gb.y;
+                    let _czx = ga.z * gb.x + ga.x * gb.z;
                     let kxx = l2m * cxx + mu * (cyy + czz);
                     let kxy = lam * ga.x * gb.y + mu * ga.y * gb.x;
                     let kxz = lam * ga.x * gb.z + mu * ga.z * gb.x;

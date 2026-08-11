@@ -444,7 +444,7 @@ mod tests {
     fn couple_em_electric_force_on_charge() {
         let nx = 3usize;
         let dx = 1.0;
-        let mut rho = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
+        let rho = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
         let mut em = EmField::build(rho, 1.0);
         // 直接铺设一个沿 +X 的均匀电场(跳过泊松松弛,专测力项)。
         for e in em.e.iter_mut() {
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn couple_em_velocity_cross_b_deflects() {
         let nx = 3usize;
-        let mut rho = ScalarField::<f64>::new(nx, nx, nx, 1.0, 0.0, Bc::Neumann);
+        let rho = ScalarField::<f64>::new(nx, nx, nx, 1.0, 0.0, Bc::Neumann);
         let mut em = EmField::build(rho, 1.0);
         em.b_ext = Vec3::new(0.0, 0.0, 1.0); // B 沿 +Z
         let mut world = RigidWorld::new();
@@ -511,7 +511,7 @@ mod tests {
     #[test]
     fn couple_em_deposits_charge_from_moving_body() {
         let nx = 3usize;
-        let mut rho = ScalarField::<f64>::new(nx, nx, nx, 1.0, 0.0, Bc::Neumann);
+        let rho = ScalarField::<f64>::new(nx, nx, nx, 1.0, 0.0, Bc::Neumann);
         let mut em = EmField::build(rho, 1.0);
         let mut world = RigidWorld::new();
         let body = Body {
@@ -536,7 +536,7 @@ mod tests {
         // 5x5x5 引力场,中心放一个静态大质量天体(质量源注入中心格)。
         let nx = 5usize;
         let dx = 1.0;
-        let mut rho = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
+        let rho = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
         rho.add_source(2, 2, 2, 10.0); // 天体质量源。
         let mut grav = GravField::build(rho, 1.0);
         grav.step(&0.1); // 松弛出引力井。

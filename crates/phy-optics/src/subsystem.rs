@@ -1,7 +1,7 @@
 //! 把 `OpticScene` 适配为 `phy_core::Subsystem`,并提供一个离线成像辅助。
 
 use phy_core::Subsystem;
-use phy_math::{na, RealField, Vec3};
+use phy_math::{RealField, Vec3};
 use phy_rigid::RigidSubsystem;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -93,7 +93,7 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> OpticSubsystem<T> {
         fov: T,
     ) {
         // 相机基向量(右手)。
-        let fwd = (*target - *eye);
+        let fwd = *target - *eye;
         let fwd_len = fwd.norm();
         let fwd = if fwd_len > T::from_f64(1e-12).unwrap() {
             fwd / fwd_len
@@ -122,7 +122,7 @@ impl<T: RealField + Copy + num_traits::ToPrimitive> OpticSubsystem<T> {
                     * tan_w;
                 let v = (T::from_f64(1.0 - 2.0 * (y as f64) / (height as f64 - 1.0)).unwrap())
                     * tan_h;
-                let dir = (fwd + right * u + true_up * v);
+                let dir = fwd + right * u + true_up * v;
                 let dir = if dir.norm() > T::from_f64(1e-12).unwrap() {
                     dir / dir.norm()
                 } else {

@@ -13,5 +13,9 @@ serde.workspace = true
 num-traits = "0.2"
 rayon.workspace = true
 
+[features]
+# 可选的焦散网格 CSV 导出工具(write_caustics_csv)。默认关闭,避免额外依赖。
+io_csv = []
+
 [dev-dependencies]
 phy-soft = { path = "../phy-soft" }

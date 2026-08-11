@@ -100,7 +100,7 @@ impl<T: RealField + Copy> Cloth<T> {
         let sp = self.spacing;
         let sp2 = sp * T::from_f64(2.0).unwrap();
         let sp_d = sp * T::from_f64(2.0_f64.sqrt()).unwrap();
-        let mut add = |a: usize, b: usize, rest: T, out: &mut Vec<DistanceConstraint<T>>| {
+        let add = |a: usize, b: usize, rest: T, out: &mut Vec<DistanceConstraint<T>>| {
             out.push(DistanceConstraint { a, b, rest });
         };
         for iy in 0..self.ny {

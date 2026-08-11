@@ -185,5 +185,6 @@ pub(crate) struct FlatGrid<T: RealField + Copy + ToPrimitive> {
     pub ncx: usize,
     pub ncy: usize,
     pub ncz: usize,
+    #[allow(dead_code)] // GPU 端网格 cell size 契约字段,当前 GPU 内核未读,但保留以维持扁平布局对齐。
     pub cell: T,
 }

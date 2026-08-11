@@ -4,11 +4,10 @@
 //! - `Whitted`:递归反射+折射(Snell + Schlick-Fresnel),适合离线科研图。
 //! - `Approx`:单次折射近似 + 阴影射线,低开销,适合实时 Demo。
 
-use num_traits::FromPrimitive;
-use phy_math::{na, RealField, Vec3};
+use phy_math::{RealField, Vec3};
 
 use crate::math::{f0_of, fresnel, normalize, reflect, refract};
-use crate::scene::{OpticScene, Surface};
+use crate::scene::OpticScene;
 
 /// 渲染后端接口。
 pub trait Renderer<T: RealField + Copy> {

@@ -19,6 +19,5 @@ fn main() {
             .generate()
             .expect("cbindgen 生成失败")
             .write_to_file(format!("{}/phy_ffi.h", crate_dir));
-        println!("cargo:warning=phy_ffi.h 已重新生成");
     }
 }

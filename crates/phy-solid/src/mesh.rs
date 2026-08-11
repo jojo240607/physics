@@ -72,6 +72,7 @@ pub fn cantilever_box<
 }
 
 /// 取自由端 (x 最大) 处位移最大的节点位移(用于与解析柔度对照)。
+#[allow(dead_code)] // 调试/解析对照 API,当前无内部调用方,但对库用户有用。
 pub fn tip_displacement<
     T: RealField + Copy + num_traits::ToPrimitive + num_traits::FromPrimitive,
 >(
@@ -108,6 +109,7 @@ pub fn tip_displacement<
 /// 因此载荷必须通过 `add_load`(在 each step 之前) 或这里一次性加到 `node.f`;
 /// 为稳健起见,这里把载荷写入节点 `f`,并假定随后立即 `solve_equilibrium`
 /// (静力求解不重置 `f`,直接以当前 `f` 为右端)。若要动力松弛,需每步重新加载。
+#[allow(dead_code)] // 调试/解析对照 API,当前无内部调用方,但对库用户有用。
 pub fn apply_tip_load<
     T: RealField + Copy + num_traits::ToPrimitive + num_traits::FromPrimitive,
 >(
@@ -135,6 +137,7 @@ pub fn apply_tip_load<
 }
 
 /// 取第 i 个四面体(便于渲染/调试)。
+#[allow(dead_code)] // 调试/渲染辅助 API,当前无内部调用方,但对库用户有用。
 pub fn tet(w: &SolidWorld<f64>, i: usize) -> Option<&Tet> {
     w.tets.get(i)
 }

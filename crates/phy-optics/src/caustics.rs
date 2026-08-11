@@ -7,7 +7,7 @@
 //!
 //! 这是离线焦散的经典"正向光线"近似:不递归、不做颜色,只关心能量分布。
 
-use phy_math::{na, RealField, Vec3};
+use phy_math::{RealField, Vec3};
 
 use crate::math::{f0_of, fresnel, normalize, refract};
 use crate::scene::OpticScene;
@@ -35,7 +35,6 @@ impl Caustics {
         let travel = -ldir;
         let zero = T::zero();
         let one = T::one();
-        let eps = T::from_f64(1e-4).unwrap();
 
         let mut grid: Vec<Vec<T>> = vec![vec![zero; grid_n]; grid_n];
         let mut max_val = zero;
