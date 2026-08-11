@@ -77,6 +77,11 @@ prototype / small-to-medium scale simulation by internal or trusted consumers.
   once `1.0.0` is tagged.
 
 ### Known limitations (see PLAN.md "阶段二" roadmap)
-- GPU numerical consistency not yet verified on a real WebGPU adapter (P5).
+- GPU numerical consistency: **host-side proxy evidence** in place — `phy-demo-web::gpu_ref`
+  re-implements the W4 SPH and W5 granular-PBD `wgsl` kernels as deterministic serial Rust
+  and asserts finite output + (SPH) mean-density≈rest + (granular) overlap resolved / bounds
+  clamped, runnable via `cargo test -p phy-demo-web` without a WebGPU adapter. The `wasm` CI
+  job (`wasm-cross-check.py --gpu`) confirms the `wgsl` compiles into `wasm32`. True on-adapter
+  numeric comparison still requires a browser with WebGPU (manual, per PLAN §5.8).
 - Some public debug/reference helper APIs in `phy-solid` carry `#[allow(dead_code)]`
   (intentionally exposed for library users, not yet called internally).

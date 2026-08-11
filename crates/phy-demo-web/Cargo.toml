@@ -11,12 +11,17 @@ crate-type = ["cdylib", "rlib"]
 default = []
 # 仅 Web Demo 的 GPU 加速路径(§5.7.4 W1):通过 WebGPU(wasm32 目标)在浏览器内跑 compute。
 # 桌面构建即使打开此 feature 也不会拉入 wgpu(见 src/gpu 的 target_arch 门控),避开 MinGW 链接崩溃(M3)。
-gpu = ["dep:wgpu", "dep:bytemuck", "dep:futures", "dep:wasm-bindgen-futures", "dep:phy-optics", "dep:phy-rigid", "dep:phy-fluid", "dep:phy-granular"]
+# 注:phy-fluid / phy-granular 为非可选依赖——它们的 FlatData 类型被非门控的 gpu_ref 模块(host 端
+# P5 验收测试)引用,且二者均为纯 CPU 计算 crate(不拉 wgpu),对桌面/host 构建无副作用。
+gpu = ["dep:wgpu", "dep:bytemuck", "dep:futures", "dep:wasm-bindgen-futures", "dep:phy-optics", "dep:phy-rigid"]
 
 [dependencies]
 phy-demo = { path = "../phy-demo" }
 phy-core = { path = "../phy-core" }
 phy-math = { path = "../phy-math" }
+# 非可选:FlatData 类型被非门控的 gpu_ref 模块(host 端 P5 验收)引用,且为纯 CPU crate。
+phy-fluid = { path = "../phy-fluid" }
+phy-granular = { path = "../phy-granular" }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "CanvasRenderingContext2d", "ImageData", "KeyboardEvent", "Storage"] }
@@ -28,8 +33,6 @@ wgpu = { version = "0.20", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 futures = { version = "0.3", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
-# W2/W3/W4: GPU 渲染需要物理场景类型(仅 gpu feature 下引用)。
+# W2/W3: GPU 渲染需要物理场景类型(仅 gpu feature 下引用)。
 phy-optics = { path = "../phy-optics", optional = true }
 phy-rigid = { path = "../phy-rigid", optional = true }
-phy-fluid = { path = "../phy-fluid", optional = true }
-phy-granular = { path = "../phy-granular", optional = true }

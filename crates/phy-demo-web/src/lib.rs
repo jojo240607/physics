@@ -11,6 +11,10 @@ use phy_demo::{Camera, DemoMode, Framebuffer, Scene};
 use phy_math::Vec3 as V3;
 use wasm_bindgen::prelude::*;
 
+// P5 验收:W4/W5 wgsl 内核的纯 Rust 确定性串行参考(非门控,host `cargo test` 可跑),
+// 用于在无 WebGPU adapter 的本机构建下验证 wgsl 数学自洽性。
+pub mod gpu_ref;
+
 // W1: 仅 wasm + gpu feature 下编译 WebGPU 后端;其余构建忽略。
 #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
 pub mod gpu;

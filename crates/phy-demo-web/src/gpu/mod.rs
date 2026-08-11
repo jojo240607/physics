@@ -1596,7 +1596,7 @@ pub async fn render_granular_gpu(
 
 /// W5 自测:堆一小盒颗粒,跑 GPU 接触投影,验证不重叠 + 有限。
 pub async fn granular_self_test() -> Result<String, String> {
-    use phy_granular::world::{Grain, GranularWorld};
+    use phy_granular::world::GranularWorld;
     let mut world = GranularWorld::<f32>::new();
     world.set_bounds(
         phy_math::Vec3::new(-1.0, -1.0, -1.0),
