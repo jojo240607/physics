@@ -39,6 +39,14 @@ pub struct SphParams<T: RealField + Copy> {
     pub bounds_max: Vec3<T>,
     /// 边界反弹速度保留系数(0=完全吸收,1=完全弹性)。
     pub boundary_damp: T,
+    /// XSPH 速度修正系数(Monaghan 1989),范围 [0,1]。
+    ///
+    /// XSPH 在邻居循环内累加 `Σ m_j/ρ_j (v_j - v_i) W_poly6(r)`,并在 `integrate`
+    /// 中按 `v_i += xsph_eps * xsph_i` 平滑粒子间相对速度。它是**速度低通**,
+    /// 不增加系统总动能,用于抑制 WCSPH 的"粒子无序能量漂移"(闭合无外力系统
+    /// 因仅非负压力 + 半隐式欧拉而自发沸腾、动能无界增长)。默认 0.5 为标准取值,
+    /// 对自由表面/边界物理无碍,反而提升稳定性。
+    pub xsph_eps: T,
 }
 
 impl<T: RealField + Copy> SphParams<T> {
@@ -72,6 +80,7 @@ impl<T: RealField + Copy> SphParams<T> {
                 T::from_f64(5.0).unwrap(),
             ),
             boundary_damp: T::from_f64(0.4).unwrap(),
+            xsph_eps: T::from_f64(0.5).unwrap(),
         }
     }
 }

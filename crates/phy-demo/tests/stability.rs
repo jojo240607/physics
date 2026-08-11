@@ -56,6 +56,10 @@ fn momentum_norm(w: &World<f64>) -> f64 {
 fn invariants_sph_closed_system() {
     let mut params = SphParams::<f64>::defaults();
     params.gravity = Vec3::new(0.0, 0.0, 0.0); // 闭合:无外力注入
+    // 让边界框覆盖整个填充区域(留余量),确保闭合测试中粒子永不触边界,
+    // 从而纯粹检验求解器本身的能量/动量守恒(避免边界强制反弹注入能量/动量)。
+    params.bounds_min = Vec3::new(-7.0, -1.0, -7.0);
+    params.bounds_max = Vec3::new(7.0, 13.0, 7.0);
     let mut w = sph_world_with(params, 800);
 
     let e0 = w.kinetic_energy();
@@ -78,20 +82,28 @@ fn invariants_sph_closed_system() {
     let e1 = w.kinetic_energy();
     let p1 = momentum_norm(&w);
 
-    // 看门狗通过(无 NaN/Inf)。但记录能量/动量漂移供人工评估。
-    // 已知缺口(G3):无重力静止初始条件下,SPH 数值压力不对称会自发注入能量
-    // (e0≈0 → e1 可达 ~1e4),闭合系统不守恒。这是真实稳定性缺陷,需在 M3-fix
-    // 或后续求解器改进中处理(symplectic 积分 / 压力对称化 / 无初始重叠初始化)。
+    // M3-fix 已修复闭合 SPH 系统的能量/动量守恒(XSPH 速度平滑 + 修正测试边界
+    // 越界注入)。修复后无重力静止初始条件下 e1≈e0(零漂移)、p1≈0(数值噪声级)。
+    // 现升级为硬断言:闭合无外力系统动能/动量增量须在数值容差内,否则视为
+    // 守恒律回归(求解器或 XSPH 配置被改坏)。
     eprintln!(
         "[invariants] SPH 1000 步 e0={:.4} e1={:.4} p0={:.3e} p1={:.3e}",
         e0, e1, p0, p1
     );
-    if e1 > e0 + 1e-3 {
-        eprintln!(
-            "[invariants] ⚠ 已知缺口: 闭合 SPH 系统动能自发增长 {:.3e} (G3, 非看门狗失败)",
-            e1 - e0
-        );
-    }
+    const E_TOL: f64 = 1e-2; // 动能漂移容差(静止初值 e0≈0,允许极小数值噪声)
+    const P_TOL: f64 = 1e-3; // 净动量容差(应≈0)
+    assert!(
+        (e1 - e0).abs() <= E_TOL,
+        "闭合 SPH 系统动能漂移 {} 超出容差 {} (M3-fix 守恒律回归?)",
+        e1 - e0,
+        E_TOL
+    );
+    assert!(
+        p1 <= P_TOL,
+        "闭合 SPH 系统净动量 {} 超出容差 {} (M3-fix 守恒律回归?)",
+        p1,
+        P_TOL
+    );
 }
 
 // ---------------------------------------------------------------------------

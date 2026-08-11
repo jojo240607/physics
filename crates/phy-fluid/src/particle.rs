@@ -39,6 +39,10 @@ pub struct Particle<T: RealField + Copy> {
     /// 不参与序列化),牛顿流体下恒为 `visc_k[material]`。
     #[serde(skip)]
     pub mu_eff: T,
+    /// XSPH 速度修正累加器(由 `compute_forces` 写入,`integrate` 应用前清零),
+    /// 见 `SphParams::xsph_eps`。不参与序列化(每步派生量)。
+    #[serde(skip)]
+    pub xsph: Vec3<T>,
 }
 
 impl<T: RealField + Copy> Particle<T> {
@@ -54,6 +58,7 @@ impl<T: RealField + Copy> Particle<T> {
             mass,
             material: 0,
             mu_eff: T::zero(),
+            xsph: Vec3::zeros(),
         }
     }
 

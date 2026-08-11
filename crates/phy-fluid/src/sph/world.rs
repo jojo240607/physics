@@ -271,7 +271,7 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
         let grid = &self.grid;
 
         use rayon::prelude::*;
-        let (acc_out, mu_out): (Vec<Vec3<T>>, Vec<T>) = (0..n)
+        let results: Vec<(Vec3<T>, T, Vec3<T>)> = (0..n)
             .into_par_iter()
             .map(|i| {
                 let p_i = pos[i];
@@ -283,6 +283,8 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
                 let mut f_press = Vec3::zeros();
                 // 粘性累加(尚未乘有效粘度 μ)
                 let mut f_visc_raw = Vec3::zeros();
+                // XSPH 速度修正累加: Σ (m_j/ρ_j)(v_j - v_i) W_poly6(r)
+                let mut xsph = Vec3::zeros();
                 // 局部应变率代理 = Σ |v_j - v_i| / (r+ε) · (m_j/ρ_j)
                 let mut shear = T::zero();
 
@@ -305,6 +307,9 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
                     // 粘性力(原始项,μ 在外层乘): μ m_i m_j (v_j - v_i)/ρ_j ∇²W
                     let lap = k.visc_lap(r);
                     f_visc_raw += (vel[j] - v_i) * (m_i * mass[j] / rho_j * lap);
+                    // XSPH 速度修正(用 Poly6 核作权重,平滑粒子间相对速度)。
+                    let w = k.poly6(r);
+                    xsph += (vel[j] - v_i) * (mass[j] / rho_j * w);
                     // 应变率代理累加
                     let dv = (vel[j] - v_i).norm();
                     shear += dv / (r + r_eps) * (mass[j] / rho_j);
@@ -329,13 +334,15 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
                 } else {
                     Vec3::zeros()
                 };
-                (acc, mu_eff)
+                (acc, mu_eff, xsph)
             })
-            .unzip();
+            .collect::<Vec<(Vec3<T>, T, Vec3<T>)>>();
 
         for (i, part) in self.particles.iter_mut().enumerate() {
-            part.acc = acc_out[i];
-            part.mu_eff = mu_out[i];
+            let (acc, mu_eff, xsph) = results[i];
+            part.acc = acc;
+            part.mu_eff = mu_eff;
+            part.xsph = xsph;
         }
     }
 
@@ -344,9 +351,12 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
     /// 结算后立即清零 `body_acc`,使浮力每帧由 `couple` 重新写入(对齐 World 的 step→couple 约定)。
     fn integrate(&mut self, dt: T) {
         let g = self.params.gravity;
+        let xsph_eps = self.params.xsph_eps;
         for pt in self.particles.iter_mut() {
             let a = pt.acc + g + pt.body_acc;
             pt.vel += a * dt;
+            // XSPH 速度修正:平滑粒子间相对速度,抑制闭合系统动能无序增长。
+            pt.vel += pt.xsph * xsph_eps;
             pt.pos += pt.vel * dt;
             pt.body_acc = Vec3::zeros();
         }
