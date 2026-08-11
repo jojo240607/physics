@@ -647,10 +647,17 @@ pub extern "C" fn phy_world_rigid_add_body(
                     let rot = phy_math::na::UnitQuaternion::from_quaternion(
                         phy_math::na::Quaternion::new(p7[3], p7[4], p7[5], p7[6]),
                     );
-                    let mut body = phy_rigid::Body::new(shape, phy_math::Vec3::new(p7[0], p7[1], p7[2]), mass);
+                    // `mass` 语义为质量(kg);0 表示静态。`Body::new` 接收的是反质量(inv_mass)。
+                    let inv_mass = if mass > 0.0 { 1.0 / mass } else { 0.0 };
+                    let mut body = phy_rigid::Body::new(
+                        shape,
+                        phy_math::Vec3::new(p7[0], p7[1], p7[2]),
+                        inv_mass,
+                    );
                     body.rot = rot;
+                    // 用调用方提供的体坐标主转动惯量覆盖几何估计值(Ixx,Iyy,Izz)。
                     body.inv_inertia_local = phy_math::Mat3::from_diagonal(
-                        &phy_math::na::Vector3::new(i3[0], i3[1], i3[2]),
+                        &phy_math::na::Vector3::new(1.0 / i3[0], 1.0 / i3[1], 1.0 / i3[2]),
                     );
                     return rigid.world.add_body(body) as i64;
                 }

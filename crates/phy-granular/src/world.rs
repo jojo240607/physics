@@ -183,38 +183,53 @@ impl<T: RealField + Copy> GranularWorld<T> {
         //
         // 宽相位邻域对由 `_contact_pairs` 经 `SpatialGrid` 空间哈希生成(见该函数),
         // 把朴素 O(n²) 降为近似 O(n)。
-        let pairs = self._contact_pairs(&predicted);
+        // M2-fix: 用 Arc 共享只读接触对,避免每次迭代 clone 大向量。
+        let pairs = std::sync::Arc::new(self._contact_pairs(&predicted));
+        let nthreads = rayon::current_num_threads().max(1);
+        // 分块大小:让并行任务数约等于线程数(而非 pairs 数),把 fold 的
+        // 全量 delta 缓冲分配次数从 O(pairs) 降到 O(threads),并让 reduce
+        // 的合并步数降到 O(log threads)。原实现 `pairs.par_iter().fold()`
+        // 把 pairs 切成成百上千个细粒度任务,每个任务都分配一个 `vec![zero; n]`
+        // 全量缓冲,且 reduce 的 `|a,b| ...collect()` 每次都 clone 一个 n 维向量,
+        // 总开销 O(pairs × n) 内存分配+复制 —— 这就是 n 较大时性能悬崖(5000≈1167ms、
+        // 10000≈4430ms/帧)的根因。
+        let chunk_size = (pairs.len() / nthreads).max(1) + 1;
         for _ in 0..self.iterations {
             // 2a. 球-球非穿透(单边约束),Jacobi 并行累积。
             let zero = Vec3::zeros();
             let deltas: Vec<Vec3<T>> = pairs
-                .par_iter()
+                .par_chunks(chunk_size)
                 .fold(
                     || vec![zero; n],
-                    |mut local, &(i, j)| {
-                        let ri = self.grains[i].radius;
-                        let rj = self.grains[j].radius;
-                        let pi = predicted[i];
-                        let pj = predicted[j];
-                        let d = pj - pi;
-                        let dist = d.norm().max(T::from_f64(1e-9).unwrap());
-                        let min_dist = ri + rj;
-                        if dist < min_dist {
-                            let wi = self.grains[i].inv_mass;
-                            let wj = self.grains[j].inv_mass;
-                            let wsum = wi + wj;
-                            if wsum > T::zero() {
-                                let corr = (min_dist - dist) / dist;
-                                let dir = d * corr;
-                                local[i] -= dir * (wi / wsum);
-                                local[j] += dir * (wj / wsum);
+                    |mut local, chunk| {
+                        for &(i, j) in chunk {
+                            let ri = self.grains[i].radius;
+                            let rj = self.grains[j].radius;
+                            let pi = predicted[i];
+                            let pj = predicted[j];
+                            let d = pj - pi;
+                            let dist = d.norm().max(T::from_f64(1e-9).unwrap());
+                            let min_dist = ri + rj;
+                            if dist < min_dist {
+                                let wi = self.grains[i].inv_mass;
+                                let wj = self.grains[j].inv_mass;
+                                let wsum = wi + wj;
+                                if wsum > T::zero() {
+                                    let corr = (min_dist - dist) / dist;
+                                    let dir = d * corr;
+                                    local[i] -= dir * (wi / wsum);
+                                    local[j] += dir * (wj / wsum);
+                                }
                             }
                         }
                         local
                     },
                 )
-                .reduce(|| vec![zero; n], |a, b| {
-                    a.iter().zip(b.iter()).map(|(x, y)| *x + *y).collect()
+                .reduce(|| vec![zero; n], |mut a, b| {
+                    for k in 0..n {
+                        a[k] += b[k];
+                    }
+                    a
                 });
 
             for k in 0..n {

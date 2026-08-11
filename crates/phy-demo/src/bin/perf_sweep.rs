@@ -78,16 +78,14 @@ fn main() {
 
     // SPH: 扫描 1k / 10k(10k 已验证可正常 step)。
     let mut sph_scales = vec![1_000usize, 10_000];
-    // Granular: 限制在已验证范围(PLAN: 5000 颗粒单步 <2s)。
-    // 10000+ 在当前 Jacobi+rayon reduce 实现下因 per-task 全量 delta vec 分配而
-    // 显著劣化,故不纳入默认扫描(见 perf_baseline.md 说明)。
-    let gran_scales = vec![1_000usize, 5_000];
-    // `--large` 仅扩展 SPH 上限到 100k(Granular 实现在该量级有分配缺陷,不纳入)。
+    // Granular: M2-fix 后 Jacobi+rayon 改用 par_chunks(任务数≈线程数而非 pairs 数),
+    // 消除了 per-task 全量 delta vec 分配导致的性能悬崖,5000/10000 均在合理耗时内。
+    let mut gran_scales = vec![1_000usize, 5_000, 10_000];
+    // `--large` 同时扩展 SPH(→100k)与 Granular(→20000)上限,验证规模延展性。
     if large {
         sph_scales.push(100_000);
+        gran_scales.push(20_000);
     }
-
-    println!("=== M2 perf sweep (host CPU, f64) ===");
 
     println!("=== M2 perf sweep (host CPU, f64) ===");
     for &n in &sph_scales {
