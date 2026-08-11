@@ -73,6 +73,19 @@ fn main() {
         .iter()
         .position(|a| a == "--out")
         .and_then(|i| args.get(i + 1).cloned());
+    let csv_path = args
+        .iter()
+        .position(|a| a == "--csv")
+        .and_then(|i| args.get(i + 1).cloned());
+    // `--check`:跑测量后,逐场景比对 `csv_path`(缺省 docs/perf_baseline.csv)基线,
+    // 单帧 ms 超出 ±PERF_TOL(默认 20%)即判回归并 exit 1(G6 数值门禁)。
+    let check = args.iter().any(|a| a == "--check");
+    let tol = args
+        .iter()
+        .position(|a| a == "--tol")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.20);
 
     let mut rows = Vec::new();
 
@@ -90,8 +103,8 @@ fn main() {
     println!("=== M2 perf sweep (host CPU, f64) ===");
     for &n in &sph_scales {
         eprintln!("[probe] building SPH world n={}", n);
-        let warm = 5;
-        let frames = 30;
+        let warm = 20;
+        let frames = 60;
         let mut w = sph_world(n);
         eprintln!("[probe] SPH world built n={}", n);
         let ms = measure(|| w.step(0.01), warm, frames);
@@ -106,8 +119,8 @@ fn main() {
 
     for &n in &gran_scales {
         eprintln!("[probe] building Granular world n={}", n);
-        let warm = 5;
-        let frames = 30;
+        let warm = 20;
+        let frames = 60;
         let mut gw = granular_world(n);
         eprintln!("[probe] Granular world built n={}", n);
         let ms = measure(|| gw.step(0.016), warm, frames);
@@ -126,6 +139,92 @@ fn main() {
         println!("report -> {}", path);
     } else {
         println!("\n{}", md);
+    }
+
+    // 结构化 CSV(供版本控制基线 + 门禁比对)。首列 header:
+    // scenario,n,ms_per_frame,fps
+    let csv_lines: Vec<String> = std::iter::once("scenario,n,ms_per_frame,fps".to_string())
+        .chain(rows.iter().map(|r| {
+            format!("{},{},{:.3},{}", r.scenario, r.n, r.ms_per_frame, r.fps as usize)
+        }))
+        .collect();
+    let csv = csv_lines.join("\n");
+    if let Some(path) = csv_path.clone() {
+        std::fs::write(&path, &csv).unwrap_or_else(|e| eprintln!("write {} failed: {}", path, e));
+        println!("csv -> {}", path);
+    }
+
+    // G6 数值门禁:比对基线,单帧 ms 超 ±tol 判回归。
+    if check {
+        let base = csv_path
+            .or_else(|| Some("docs/perf_baseline.csv".to_string()))
+            .unwrap();
+        let exit = run_check(&base, &rows, tol);
+        std::process::exit(exit);
+    }
+}
+
+/// 读取基线 CSV(scenario,n,ms_per_frame,fps),逐 (scenario,n) 与本次测量比对。
+/// 返回进程退出码:0=全部在容差内,1=存在回归。
+fn run_check(base_path: &str, rows: &[Row], tol: f64) -> i32 {
+    let raw = match std::fs::read_to_string(base_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[check] FAIL: 无法读取基线 {}: {}", base_path, e);
+            return 1;
+        }
+    };
+    let mut base: std::collections::BTreeMap<(String, usize), f64> = std::collections::BTreeMap::new();
+    for line in raw.lines().skip(1) {
+        let c: Vec<&str> = line.split(',').collect();
+        if c.len() < 3 {
+            continue;
+        }
+        let n = match c[1].parse::<usize>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let ms = match c[2].parse::<f64>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        base.insert((c[0].to_string(), n), ms);
+    }
+
+    let mut fails = 0;
+    let mut checked = 0;
+    for r in rows {
+        let key = (r.scenario.clone(), r.n);
+        match base.get(&key) {
+            None => {
+                eprintln!("[check] SKIP: 基线无 {} n={} (新场景,不判回归)", r.scenario, r.n);
+            }
+            Some(&b) => {
+                checked += 1;
+                let rel = (r.ms_per_frame - b).abs() / b;
+                let ok = rel <= tol;
+                if !ok {
+                    fails += 1;
+                }
+                eprintln!(
+                    "[check] {} {} n={}: 本次 {:.3}ms 基线 {:.3}ms 偏差 {:.1}% {}",
+                    if ok { "PASS" } else { "FAIL" },
+                    r.scenario,
+                    r.n,
+                    r.ms_per_frame,
+                    b,
+                    rel * 100.0,
+                    if ok { "" } else { "(超阈值)" }
+                );
+            }
+        }
+    }
+    if fails > 0 {
+        eprintln!("[check] FAIL: {}/{} 场景超 ±{:.0}% 容差", fails, checked, tol * 100.0);
+        1
+    } else {
+        eprintln!("[check] PASS: 全部 {} 场景在 ±{:.0}% 容差内", checked, tol * 100.0);
+        0
     }
 }
 

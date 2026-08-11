@@ -112,8 +112,9 @@
 
 ### 里程碑 M6 — 工程化交付(解锁 G6)
 - [x] CI 工作流 `ci.yml`:host 全测试 + M3 稳定性套件 + M2 perf_sweep 冒烟 + 三平台原生 `phy-ffi` 编译 + wasm 守卫。
+- [x] **G6 数值门禁落地**:`perf_sweep --check` 比对 `docs/perf_baseline.csv`(±20%),CI host job 接入。
 - [x] 发布流程骨架 `release.yml`(tag 触发,发布前全量验证,保守不自动 publish)。
-- [ ] 基准回归数值门禁(perf_sweep 输出与 `docs/perf_baseline.md` 比对 ±20% 阈值)。
+- [x] **基准回归数值门禁(G6 已完成)**:`perf_sweep` 新增 `--csv` 输出 `docs/perf_baseline.csv`(受版本控制)与 `--check` 比对模式(逐场景单帧 ms 超 ±20% 即 exit 1)。CI `ci.yml` 的 host job 接入 `--check` 门禁步骤,PR 卡点防"悄然变慢/变不准"。本地 `--check` 自测 5/5 场景通过。
 - [ ] 启用 `cargo publish`(需配置 registry token + 审阅节奏)。
 - **交付物**:`.github/workflows/ci.yml` + `.github/workflows/release.yml`(已落地,待数值门禁)。
 - [ ] 基准结果纳入 PR 卡点(性能回归报警)。

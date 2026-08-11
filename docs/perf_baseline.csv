@@ -1,0 +1,6 @@
+scenario,n,ms_per_frame,fps
+SPH fluid,1000,1.748,571
+SPH fluid,10000,7.366,135
+PBD granular,1000,3.298,303
+PBD granular,5000,13.430,74
+PBD granular,10000,24.462,40

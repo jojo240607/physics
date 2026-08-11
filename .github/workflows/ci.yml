@@ -25,6 +25,11 @@ jobs:
         run: cargo test -p phy-demo --test stability
       - name: Perf harness smoke (M2 baseline must compile + run)
         run: cargo run -p phy-demo --bin perf_sweep
+      - name: Perf regression gate (G6)
+        # 数值门禁:release 构建下测量,与受版本控制的基线 docs/perf_baseline.csv
+        # 比对,任一场景单帧 ms 超 ±20% 即判回归并失败(G6 防"悄然变慢/变不准")。
+        # 必须用 release(debug 计时抖动大,会误报);基线本身亦由 release 生成。
+        run: cargo run --release -p phy-demo --bin perf_sweep -- --check
       - name: Test release + ignored (heavy numerical regression)
         run: cargo test --release -p phy-demo -- --ignored
 
