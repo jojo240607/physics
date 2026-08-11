@@ -173,63 +173,85 @@ impl<T: RealField + Copy> GranularWorld<T> {
         }
         let old: Vec<Vec3<T>> = self.grains.iter().map(|gr| gr.pos).collect();
 
-        // 2. 约束投影(Jacobi 式并行;S7 并行后端)。
-        //
-        // 原实现为 Gauss-Seidel(每对即时改写 `predicted`,顺序敏感、不可并行)。
-        // 现改为 Jacobi:每对只读本迭代起点的 `predicted` 快照,把位移修正累加到
-        // 独立的 per-body delta 缓冲(`deltas`),迭代末统一施加。这样可在 rayon
-        // 下并行遍历所有 (i<j) 对;reduce 以固定顺序合并,结果与串行逐对相加
-        // 完全一致(同索引对的修正大小相同,仅求和顺序固定),保持确定性(利于 S8)。
+        // 2. 约束投影(Jacobi 式并行;S7 并行后端;M2-algo 稀疏邻接)。
         //
         // 宽相位邻域对由 `_contact_pairs` 经 `SpatialGrid` 空间哈希生成(见该函数),
-        // 把朴素 O(n²) 降为近似 O(n)。
-        // M2-fix: 用 Arc 共享只读接触对,避免每次迭代 clone 大向量。
-        let pairs = std::sync::Arc::new(self._contact_pairs(&predicted));
-        let nthreads = rayon::current_num_threads().max(1);
-        // 分块大小:让并行任务数约等于线程数(而非 pairs 数),把 fold 的
-        // 全量 delta 缓冲分配次数从 O(pairs) 降到 O(threads),并让 reduce
-        // 的合并步数降到 O(log threads)。原实现 `pairs.par_iter().fold()`
-        // 把 pairs 切成成百上千个细粒度任务,每个任务都分配一个 `vec![zero; n]`
-        // 全量缓冲,且 reduce 的 `|a,b| ...collect()` 每次都 clone 一个 n 维向量,
-        // 总开销 O(pairs × n) 内存分配+复制 —— 这就是 n 较大时性能悬崖(5000≈1167ms、
-        // 10000≈4430ms/帧)的根因。
-        let chunk_size = (pairs.len() / nthreads).max(1) + 1;
+        // 把朴素 O(n²) 降为近似 O(n)。M2-algo 进一步把接触对离线化为 **CSR 稀疏邻接**
+        // (行指针 `adj_row` + 邻接索引 `adj_col`),使投影循环不依赖 `Arc<Vec<(i,j)>>` 的
+        // (i,j) 元组解包,且迭代内用「就地 `accumulate` → `apply`」替代原
+        // `par_chunks().fold().reduce()` 的 **每迭代全量 `vec![zero; n]` delta 缓冲 + 合并**。
+        //
+        // 具体:每迭代先用 `par_iter` 把每对的位移修正 **就地** 累加到 `deltas[k]`
+        // (k 索引对两端体,无中间全量缓冲、无 reduce 合并),再统一施加到 `predicted`。
+        // 结果与串行逐对相加完全一致(同索引对的修正大小相同,仅求和顺序固定),
+        // 保持确定性(利于 S8)。这把投影的每迭代开销从 O(pairs × 分配/合并) 降到
+        // 纯 O(pairs) 算术 + O(n) 施加,消除 M2-fix 前虽已缓解但在大 n 仍显著的
+        // 缓冲分配/合并成本。
+        let pairs = self._contact_pairs(&predicted); // i<j 升序,确定性。
+        let m = pairs.len();
+        // 构造 **双向** CSR 邻接(行指针 + 列索引),O(n+pairs)。
+        // 接触对 (i,j) 必须同时出现在体 i 与体 j 的邻接行,否则只有一端被投影修正,
+        // 另一端永远不动 → 大规模穿透(见 large_scale_runs_without_overlap 初版回归)。
+        let mut adj_row = vec![0usize; n + 1];
+        for &(i, j) in &pairs {
+            adj_row[i + 1] += 1;
+            adj_row[j + 1] += 1;
+        }
+        for k in 0..n {
+            adj_row[k + 1] += adj_row[k];
+        }
+        let mut adj_col = vec![0usize; 2 * m]; // 每对存两次(i 行 + j 行)。
+        let mut cursor = adj_row.clone(); // 当前写入位置。
+        for p in 0..m {
+            let (i, j) = pairs[p];
+            adj_col[cursor[i]] = p; // 存 pair 下标,经 adj_col→pairs 取 (i,j)。
+            cursor[i] += 1;
+            adj_col[cursor[j]] = p;
+            cursor[j] += 1;
+        }
+        let zero = Vec3::zeros();
+        let mut deltas: Vec<Vec3<T>> = vec![zero; n];
         for _ in 0..self.iterations {
-            // 2a. 球-球非穿透(单边约束),Jacobi 并行累积。
-            let zero = Vec3::zeros();
-            let deltas: Vec<Vec3<T>> = pairs
-                .par_chunks(chunk_size)
-                .fold(
-                    || vec![zero; n],
-                    |mut local, chunk| {
-                        for &(i, j) in chunk {
-                            let ri = self.grains[i].radius;
-                            let rj = self.grains[j].radius;
-                            let pi = predicted[i];
-                            let pj = predicted[j];
-                            let d = pj - pi;
-                            let dist = d.norm().max(T::from_f64(1e-9).unwrap());
-                            let min_dist = ri + rj;
-                            if dist < min_dist {
-                                let wi = self.grains[i].inv_mass;
-                                let wj = self.grains[j].inv_mass;
-                                let wsum = wi + wj;
-                                if wsum > T::zero() {
-                                    let corr = (min_dist - dist) / dist;
-                                    let dir = d * corr;
-                                    local[i] -= dir * (wi / wsum);
-                                    local[j] += dir * (wj / wsum);
-                                }
+            // 每迭代重置就地累加缓冲(仅 n 维,非 pairs 维)。
+            for k in 0..n {
+                deltas[k] = zero;
+            }
+            // 2a. 球-球非穿透(单边约束),Jacobi 就地累加(并行、确定性)。
+            //
+            // 用 `par_iter_mut().enumerate()` 让 rayon 给每个体 k 唯一索引,
+            // 逐体遍历其 CSR 行内的全部接触对,把位移修正就地累加到 `deltas[k]`。
+            // 不同体的 deltas 互不写冲突,故可安全并行;求和顺序固定为 k 升序,
+            // 与串行逐对相加字节级一致(确定性,S8)。
+            deltas
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(k, dk)| {
+                    // 遍历体 k 的所有接触对(CSR 行)。
+                    let s = adj_row[k];
+                    let e = adj_row[k + 1];
+                    for q in s..e {
+                        let p = adj_col[q];
+                        let (i, j) = pairs[p];
+                        let (a, b) = if i == k { (i, j) } else { (j, i) };
+                        let ri = self.grains[a].radius;
+                        let rj = self.grains[b].radius;
+                        let pa = predicted[a];
+                        let pb = predicted[b];
+                        let d = pb - pa;
+                        let dist = d.norm().max(T::from_f64(1e-9).unwrap());
+                        let min_dist = ri + rj;
+                        if dist < min_dist {
+                            let wa = self.grains[a].inv_mass;
+                            let wb = self.grains[b].inv_mass;
+                            let wsum = wa + wb;
+                            if wsum > T::zero() {
+                                let corr = (min_dist - dist) / dist;
+                                let dir = d * corr;
+                                // 体 a 推离体 b:b 在 a 的反方向。
+                                *dk -= dir * (wa / wsum);
                             }
                         }
-                        local
-                    },
-                )
-                .reduce(|| vec![zero; n], |mut a, b| {
-                    for k in 0..n {
-                        a[k] += b[k];
                     }
-                    a
                 });
 
             for k in 0..n {

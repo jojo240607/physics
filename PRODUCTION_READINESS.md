@@ -84,7 +84,8 @@
 - [x] 建立 perf harness:固定场景 + 扫描粒子数(`crates/phy-demo/src/bin/perf_sweep.rs`,1k/10k/100k SPH + 1k/5k/10k/20k Granular `--large`)。
 - [x] 产出 `docs/perf_baseline.md`(debug 构建基线 + 业务 SLO 对照 + 性能悬崖发现与修复记录)。
 - [x] **M2-fix(已完成)**:重构 `GranularWorld::step` 接触投影缓冲,改用 `par_chunks` 消除 per-task 全量 vec 分配。5000 颗粒 1167ms→257ms(~4.5×),10000 颗粒 4430ms→469ms(~9.4×),线性缩放恢复。
-- [ ] M2-algo(可选增强):Gauss-Seidel 就地投影 / 稀疏 CSR,进一步压低 Granular 绝对耗时至实时 SLO。
+- [x] **M2-algo(已完成)**:在 M2-fix 基础上把投影改为「双向 CSR 稀疏邻接 + 迭代内就地 Jacobi 求和」(`par_iter_mut` 逐体累加,无 per-iteration 全量缓冲/reduce 合并),消除残余分配/合并成本。同机 debug 5000 颗粒 257ms→181ms(~1.4×)、10000 颗粒 469ms→365ms(~1.3×);确定性经 `parallel_solve_is_deterministic` 守护,7/7 单测 + 5000 规模无穿透回归全过。剩余成本为 Jacobi PBD 算法本质(每步重建 CSR + 多迭代收敛),非缺陷。
+- [ ] M2-algo 后续(可选增强):Gauss-Seidel 就地投影(更少迭代)或 GPU,进一步压低 Granular 绝对耗时至实时 SLO。
 - [ ] release 构建复测(当前 debug 数据偏保守)。
 - [ ] 采集真实 WebGPU adapter 上 GPU 路径 perf 对比(本机无 adapter,待浏览器/原生 GPU)。
 - **交付物**:`crates/phy-demo/src/bin/perf_sweep.rs` + `docs/perf_baseline.md`(已落地,M2-fix 完成)。
