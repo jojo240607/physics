@@ -10,11 +10,30 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+// ABI 版本(单调递增整数)。破坏任一 `phy_*` 符号签名 / 移除符号 / 改变
+// `PhyWorldHandle` 布局时 **必须** +1,并在 CHANGELOG 记录。
+#define PHY_FFI_ABI_VERSION 1
+
+// 语义主版本(破坏性变更 +1,`0.x` 阶段允许 minor 间破坏性改动)。
+#define PHY_FFI_VERSION_MAJOR 0
+
+// 语义次版本(向后兼容新增)。
+#define PHY_FFI_VERSION_MINOR 1
+
+// 语义修订号(patch)。
+#define PHY_FFI_VERSION_PATCH 0
+
 // 不透明句柄。C/C++ 侧只见 `PhyWorldHandle *`,不可解引用;
 // 真实 `World<f64>` 由 Rust 侧 `Box` 拥有,经指针转换在边界传递。
 typedef struct {
     uint8_t _private[0];
 } PhyWorldHandle;
+
+// 返回当前库的 ABI 版本(`PHY_FFI_ABI_VERSION`)。
+//
+// C/C++ 业务应在加载后调用并断言 `>=` 自身编译期期望版本,版本不匹配时
+// 拒绝加载(fail-fast),避免调用到签名已变更的 `phy_*` 符号。
+uint32_t phy_ffi_abi_version(void);
 
 // 创建流体(溃坝)世界。返回不透明句柄(失败返回 NULL)。
 //

@@ -536,7 +536,7 @@ mod tests {
         // 5x5x5 引力场,中心放一个静态大质量天体(质量源注入中心格)。
         let nx = 5usize;
         let dx = 1.0;
-        let rho = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
+        let mut rho = ScalarField::<f64>::new(nx, nx, nx, dx, 0.0, Bc::Neumann);
         rho.add_source(2, 2, 2, 10.0); // 天体质量源。
         let mut grav = GravField::build(rho, 1.0);
         grav.step(&0.1); // 松弛出引力井。

@@ -16,6 +16,30 @@
 // 该 linker lint 在此 crate 静音,保持构建信号干净。
 #![allow(linker_messages)]
 
+// ===== ABI 稳定性契约(P7) =====================================================
+//
+// 本 crate 的所有 `#[no_mangle] pub extern "C" fn phy_*` 是**稳定 ABI 契约**:
+// - 禁止改动其签名、移除符号或改变 `PhyWorldHandle` 布局,除非同步把
+//   `PHY_FFI_ABI_VERSION` 自增,并在 CHANGELOG 的 "Changed" 节记录。
+// - C/C++/Unity/Unreal 业务可在运行时核对 `PHY_FFI_ABI_VERSION` 与自身编译期
+//   期望版本,不匹配时拒绝加载(fail-fast)。
+// - 内部辅助(`as_world`/`box_world`/`cstr_path`/`nonnull_slice*`)为 crate 私有,
+//   不属于 ABI 契约,可自由重构。
+//
+// 语义版本(`PHY_FFI_VERSION_*`)与 `[workspace.package].version` 对齐;
+// `0.x` 阶段 Rust crate API 仍可在 minor 间变动,Rust 消费方需锁定精确版本。
+
+/// ABI 版本(单调递增整数)。破坏任一 `phy_*` 符号签名 / 移除符号 / 改变
+/// `PhyWorldHandle` 布局时 **必须** +1,并在 CHANGELOG 记录。
+pub const PHY_FFI_ABI_VERSION: u32 = 1;
+
+/// 语义主版本(破坏性变更 +1,`0.x` 阶段允许 minor 间破坏性改动)。
+pub const PHY_FFI_VERSION_MAJOR: u32 = 0;
+/// 语义次版本(向后兼容新增)。
+pub const PHY_FFI_VERSION_MINOR: u32 = 1;
+/// 语义修订号(patch)。
+pub const PHY_FFI_VERSION_PATCH: u32 = 0;
+
 use std::ffi::CStr;
 use std::panic::{self, AssertUnwindSafe};
 
@@ -65,6 +89,17 @@ fn cstr_path(ptr: *const std::os::raw::c_char) -> Option<String> {
     }
     let c = unsafe { CStr::from_ptr(ptr) };
     c.to_str().ok().map(|s| s.to_string())
+}
+
+// ---- ABI 版本查询(供 C 侧运行时核对契约) ------------------------------------
+
+/// 返回当前库的 ABI 版本(`PHY_FFI_ABI_VERSION`)。
+///
+/// C/C++ 业务应在加载后调用并断言 `>=` 自身编译期期望版本,版本不匹配时
+/// 拒绝加载(fail-fast),避免调用到签名已变更的 `phy_*` 符号。
+#[no_mangle]
+pub extern "C" fn phy_ffi_abi_version() -> u32 {
+    PHY_FFI_ABI_VERSION
 }
 
 // ---- 场景工厂(构建典型多物理 World,不依赖 GUI 的 phy-demo) ------------------
