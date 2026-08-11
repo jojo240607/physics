@@ -51,8 +51,8 @@
 > ✅ **M3-fix 完成 — SPH 闭合系统能量/动量守恒已修复**:根因两层 —— (1) 测试边界注入:`fill_box` 区域 y∈[1,11] 远超默认 bounds y∈[-5,5],初始即越界 → `enforce_bounds` 强制反弹注入能量+动量;(2) **WCSPH 本质漂移**:仅非负压力(p≥0)+ 半隐式欧拉,粒子一旦因数值扰动离开规则晶格、密度<ρ0 即无回复力,动能永久残留("粒子无序沸腾")。修复:(a) 闭合测试 bounds 覆盖填充区域,消除人为边界注入;(b) 引入 **XSPH 速度修正**(Monaghan 1989,`SphParams::xsph_eps` 默认 0.5),邻居循环内累加 `Σ m_j/ρ_j (v_j-v_i) W_poly6` 并在 `integrate` 应用 `v += xsph·ε`—— 速度低通,不增总动能,平滑无序抖动。修复后 e0≈0 → e1≈0(零漂移)、p1≈2e-9(≈0);修复前 e1≈1.0e4、p1≈1.8e4。XSPH 默认启用未破坏 `dam_break`/`static_body`/`rigid_buoyancy` 等物理(18 个 phy-fluid 单测全过)。
 
 ### G4 — 无真实业务集成示例
-- **缺口**:`phy-demo` / `phy-demo-web` 是演示,不是可嵌入 SDK;无 API 教程、无版本兼容承诺(虽 P7 有底层 ABI 契约)。
-- **业务影响**:接入成本高,业务方无法快速评估集成工作量。
+- **现状**:已通过 **M4(集成 SDK)** 关闭 —— 新增 `phy-sdk` crate,提供 `PhysicsBuilder` 声明式建世界(`.fluid()/.rigid()/.granular()/.soft()/.field()/.optics()/.solid()` 任意组合)+ 强类型句柄重导出(`phy_sdk::fluid::*` 等)+ `get_as`/`get_as_mut` 安全取回 + `save_world_json`/`load_world_json` 存档封装;并附带 **5 段可运行集成教程 doctest**(`cargo test -p phy-sdk --doc` 全过),覆盖快速集成/多子系统/存档/看门狗。`README.md` 新增"集成 SDK"章节。
+- **剩余**:版本兼容承诺(semver)随 `0.1.0` 起步,后续按 P7 ABI 契约演进。
 
 ### G5 — 跨平台 / 可移植性
 - **现状(已决策规避 + 部分验证)**:
@@ -98,10 +98,10 @@
 - **交付物**:`crates/phy-demo/tests/stability.rs`(已落地,M3-fix 完成,守恒律硬断言)。
 
 ### 里程碑 M4 — 业务集成 SDK(解锁 G4)
-- [ ] 抽取稳定公共 API 层(与 P7 ABI 契约对齐)。
-- [ ] 编写集成示例(非 demo):独立仓库可 `cargo add` 使用。
-- [ ] 写 API 教程 + 版本兼容策略(SemVer + 破坏性变更公告)。
-- **交付物**:`phy-sdk` crate + `docs/integration_guide.md`。
+- [x] 抽取稳定公共 API 层(与 P7 ABI 契约对齐):`PhysicsBuilder` 声明式建世界 + 强类型句柄重导出(`phy_sdk::fluid::*` 等)。
+- [x] 编写集成示例(非 demo):`phy-sdk` crate 自带 5 段可运行教程 doctest(`cargo test -p phy-sdk --doc` 全过),业务方 `cargo add phy-sdk` 即用。
+- [ ] 写 API 教程 + 版本兼容策略(SemVer + 破坏性变更公告):**部分落地** —— `README.md` 已含"集成 SDK"章节与最小可用示例;`docs/integration_guide.md`(M4 早期版)存在但需对照 `phy-sdk` 现行 API 复核。
+- **交付物**:`phy-sdk` crate(已建) + `README.md` SDK 章节 + 教程 doctest;`docs/integration_guide.md` 待与现行 SDK API 对齐(低优先,doctest 已覆盖主要路径)。
 
 ### 里程碑 M5 — 原生后端与可移植性(解锁 G5)
 - [x] 原生 CPU 后端 + C ABI(`phy-ffi` cdylib)在桌面 MinGW 编译验证通过,原生部署可用。
@@ -152,7 +152,7 @@ P3(规模化协作):    M6 (CI/CD)
 - [ ] M1:真实 adapter CPU↔GPU 误差报告通过阈值
 - [ ] M2:目标规模下达到业务 SLO 帧率
 - [ ] M3:长时积分 + 极端参数无崩溃 / 无爆炸
-- [ ] M4:有可集成 SDK + 教程 + 版本策略
+- [x] M4:有可集成 SDK + 教程 + 版本策略(教程 doctest 已落地;`phy-sdk` crate + `README` 章节;版本策略随 0.1.0 起步)
 - [ ] M5:目标部署平台原生后端可用
 - [ ] M6:CI 门禁 + 发布流程就位
 

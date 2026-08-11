@@ -30,6 +30,7 @@
 | `phy-field` | 标量场(热扩散 / 波动 / 烟 / 声) |
 | `phy-solid` | 固体 FEM |
 | `phy-io` | JSON / CSV / 轨迹存档载入(serde) |
+| `phy-sdk` | 集成 SDK:`PhysicsBuilder` 声明式建世界 + 强类型句柄重导出 + 教程 doctest(M4) |
 | `phy-demo` | 桌面演示 + 集成/E2E 测试 + 性能基准(`benches/perf.rs`) |
 | `phy-demo-web` | `wasm32 + gpu` 浏览器演示(WebGPU) |
 | `phy-ffi` | C ABI 层(`cdylib` + `rlib`)+ 生成 `phy_ffi.h` |
@@ -78,6 +79,39 @@ for _ in 0..200 {
 ```
 
 更多示例见各 crate 公共 API 的文档注释(含可运行的 doctest:`cargo test --doc`)。
+
+### 集成 SDK(推荐业务接入)
+
+若你不想逐个拼装 `phy-*` crate,可直接依赖 **`phy-sdk`** —— 它把子系统拼装、强类型句柄取回、存档封装成统一入口,并提供可运行的集成教程 doctest:
+
+```toml
+# Cargo.toml
+[dependencies]
+phy-sdk = { path = "crates/phy-sdk" }
+```
+
+```rust
+use phy_sdk::{PhysicsBuilder, World, get_as_mut, granular::{GranularSubsystem, Grain}};
+
+// 1) 声明式启用子系统,自动建世界并挂载(索引=声明顺序)。
+let mut world: World<f64> = PhysicsBuilder::new().granular().build();
+
+// 2) 取回强类型句柄做细粒度控制(Grain::new(pos, radius, mass))。
+if let Some(g) = get_as_mut::<GranularSubsystem<f64>>(&mut world, 0) {
+    for i in 0..100 {
+        let x = (i % 10) as f64 * 0.2 - 1.0;
+        let y = (i / 10) as f64 * 0.2;
+        g.world.add(Grain::new(nalgebra::Vector3::new(x, y, 0.0), 0.1, 1.0));
+    }
+}
+
+// 3) 步进(也支持 world.step_checked(dt) 取回数值看门狗 Err)。
+for _ in 0..30 { world.step(1.0 / 60.0); }
+
+// 4) 存档:save_world_json(&world) 序列化为字符串,load_world_json(&s) 读回。
+```
+
+`PhysicsBuilder` 支持 `.fluid() / .rigid() / .granular() / .soft() / .field() / .optics() / .solid()` 任意组合;句柄经 `get_as::<T>(&world, idx)` / `get_as_mut::<T>(&mut world, idx)` 取回(类型不符或越界返回 `None`,不 panic)。详见 `cargo doc -p phy-sdk`。
 
 ### 性能基线
 

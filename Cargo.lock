@@ -1974,6 +1974,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "phy-sdk"
+version = "0.1.0"
+dependencies = [
+ "nalgebra",
+ "num-traits",
+ "phy-core",
+ "phy-field",
+ "phy-fluid",
+ "phy-granular",
+ "phy-io",
+ "phy-math",
+ "phy-optics",
+ "phy-rigid",
+ "phy-soft",
+ "phy-solid",
+ "serde",
+]
+
+[[package]]
 name = "phy-soft"
 version = "0.1.0"
 dependencies = [
