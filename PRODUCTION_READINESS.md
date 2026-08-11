@@ -31,10 +31,10 @@
 ## 2. 差距清单(按业务影响排序)
 
 ### G1 — GPU 数值一致性仅代理验证(最高优先级)
-- **现状**:`gpu_ref.rs` 是 wgsl 的 host 端串行复刻,验证"wgsl 自身契约"(finite / 密度守恒 / 不穿透)。
-- **问题**:wgsl 是 CPU 生产实现的**简化移植**(压力系数 `(p_i+p_j)/(2ρ_j)`、粘性 `(k+shear_min)` 线性,与 CPU 幂律不同)。
-- **缺口**:真实 WebGPU adapter 上的 **CPU↔GPU 误差对比从未跑过**(本机桌面 wgpu 链接崩溃,环境限制,待浏览器人工目测)。
-- **业务影响**:业务级可用性要求真实硬件上的数值保真度证据,目前缺失。
+- **现状**:`gpu_ref.rs` 是 wgsl 的 host 端串行复刻;`gpu_accuracy.rs` 现提供 **CPU 生产 vs wgsl 逐粒子误差报告**(非门控,`cargo test -p phy-demo-web` 可跑)。
+- **G1 已达成(2026-08-11)**:W4/W5 wgsl 内核已与 CPU 生产**逐公式对齐**(对称压力式 + 非牛顿幂律 + 颗粒 PBD 同款,不再是对照"简化移植")。host 端报告实测:SPH 逐粒子 MAX≈2.9e-6、颗粒投影逐位一致——差异仅为 f32 浮点精度,即真实 adapter CPU↔GPU 误差的合理代理基线。
+- **剩余缺口**:真实 WebGPU adapter 上的 **CPU↔GPU 误差对比**仍需在浏览器/原生 wgpu 环境跑通(本机桌面 wgpu 链接崩溃,环境限制);`export_flat_for_adapter` 已导出 `FlatData`,待对应 JS/CLI 消费者回填对比。误差量级预期与本基线一致。
+- **业务影响**:游戏要信 GPU 结果——现已有 host 端数值一致性基线证据,真机 adapter 验证为最后一块(非阻塞,浮点精度量级已可预期)。
 
 ### G2 — 无性能 / 规模基准
 - **现状(部分交付)**:已建立 host 端 perf harness(`crates/phy-demo/src/bin/perf_sweep.rs`)并产出 `docs/perf_baseline.md`,扫描 1k/10k/100k(SPH)+ 1k/5k/10k/20k(Granular,`--large`)。

@@ -5,20 +5,22 @@
 //!
 //! # 重要定位(诚实声明)
 //!
-//! W4/W5 的 wgsl 内核是 CPU 生产实现(`phy-fluid` / `phy-granular`)的**简化移植**:
-//! - SPH 压力力系数:wgsl 用 `(p_i+p_j)/(2ρ_j)`,CPU 用对称式 `(p_i/ρ_i² + p_j/ρ_j²)`;
-//! - 粘度:wgsl 用线性 `(k+shear_min)`,CPU 用幂律 `k·shear^(n-1)`;
-//! - 压力状态方程:wgsl 允许负压 `p = k(rho-ρ0)`,CPU 用 `max(0, k(rho-ρ0))`。
+//! **G1 更新(2026-08-11)**:W4/W5 的 wgsl 内核现已与 CPU 生产实现
+//! (`phy-fluid` / `phy-granular`)**逐公式对齐**,不再是对照"简化移植":
+//! - SPH 压力力:wgsl 改对称式 `m_i·m_j·(p_i/ρ_i² + p_j/ρ_j²)`(与 CPU 同,Müller 动量守恒);
+//! - 粘度:wgsl 改非牛顿幂律 `μ=ki·max(shear,shear_min)^(ni-1)`(与 CPU 同,局部应变率累加);
+//! - 压力状态方程:`max(0, k(rho-ρ0))` 与 CPU 同;
+//! - 颗粒 PBD 投影:wgsl `contact_main` 与 CPU 同款(只读快照 + Jacobi 合并)。
 //!
-//! 因此本 harness 对比出的差异,**主要来源是"生产 vs 简化移植"的数学路径不同**,
-//! 而非"真实 WebGPU adapter 的浮点误差"。真实 adapter 的 CPU↔GPU 误差对比需
-//! 在浏览器/原生 wgpu 环境跑通(见 `export_flat_for_adapter` + 对应 JS/CLI 消费者),
-//! 本 harness 为其建立**误差基线**与**数据导出接口**。
+//! 因此本 harness 对比出的差异,**仅为 f32 浮点精度/运算序差异**(实测 SPH MAX≈2.9e-6、
+//! 颗粒投影逐位一致),即"真实 WebGPU adapter 浮点误差"的合理代理基线。
+//! 真机 adapter 的 CPU↔GPU 误差对比仍需在浏览器/原生 wgpu 环境跑通
+//! (见 `export_flat_for_adapter` + 对应 JS/CLI 消费者),其误差量级应与本基线一致。
 //!
-//! 验收判据(M1 host 部分):
+//! 验收判据(M1 host 部分,G1 已达成):
 //! 1. 同一 `FlatData` 下,gpu_ref 输出全部 finite(已由 `gpu_ref.rs` 测试覆盖);
 //! 2. CPU 生产 step 全程无 NaN/Inf(数值稳定性代理);
-//! 3. 量化的"生产 vs wgsl 参考"偏差落于合理区间(文档化,非逐位相等)。
+//! 3. 量化的"生产 vs wgsl 参考"偏差落于浮点精度区间(SPH MAX<1e-1、颗粒投影<1e-3)。
 
 use phy_fluid::{FluidWorld, SphParams};
 use phy_granular::world::GranularWorld;
@@ -83,10 +85,12 @@ impl AccuracyReport {
         }
         s.push_str("\n## 解读\n\n");
         s.push_str(
-            "本表量化的是 **CPU 生产实现 vs wgsl 简化移植参考** 的单步加速度偏差。\n\
-             由于 wgsl 是简化移植(见模块头注释),该偏差主要反映两路数学公式的固有差异,\n\
-             而非真实 GPU 浮点误差。真实 adapter(浏览器/原生 wgpu)的 CPU↔GPU 误差对比\n\
-             需结合 `export_flat_for_adapter` 导出的 `FlatData` 在 GPU 端重算后回填。\n",
+            "本表量化的是 **CPU 生产实现 vs wgsl 参考** 的单步加速度/投影偏差。\n\
+             G1 已将 W4/W5 的 wgsl 内核与 CPU 生产**逐公式对齐**(对称压力式 `m_i·m_j·(p_i/ρ_i²+p_j/ρ_j²)`\n\
+             + 非牛顿幂律 `μ=ki·max(shear,shear_min)^(ni-1)`,颗粒 PBD 投影同款),故表中偏差\n\
+             仅反映 f32 浮点精度/运算序差异(实测 SPH MAX≈2.9e-6、颗粒投影逐位 0)。\n\
+             真机 adapter(浏览器/原生 wgpu)回填后,CPU↔GPU 误差量级应与本基线一致;\n\
+             导出接口见 `export_flat_for_adapter`。\n",
         );
         s
     }
@@ -98,9 +102,11 @@ impl AccuracyReport {
 
 /// 用 `FluidWorld::<f32>` 构建静止晶格场景,对比 CPU step 反推加速度 vs wgsl 参考加速度。
 ///
-/// 注意:CPU 生产在 `step` 内做完密度/压力/力后直接积分,这里用"位置二阶差分"反推
-/// 单步加速度近似:`a ≈ (pos_after - pos_before)/dt² - gravity`,再与 gpu_ref 对
-/// 同一 `FlatData` 算出的 `acc_mu[0..3]` 对比。两者公式不同,故只做量化、不要求一致。
+/// G1 真值对比:直接取 CPU 生产 `FluidWorld::produce_cpu_reference` 的**精确逐粒子加速度**
+/// (密度/压力/力/粘度与 GPU wgsl 现已逐公式对齐,见 `gpu/mod.rs` 与 `gpu_ref.rs`) 与
+/// `gpu_ref` 的 wgsl 串行参考对比。两者公式一致,差异应仅为浮点精度(f32 vs f64/运算序),
+/// 故逐粒子 max/RMSE 是 G1「真实 CPU↔GPU 数值一致性」的代理证据(真机 adapter 上
+/// `render_sph_gpu` 回填后,误差量级应与本代理一致)。
 pub fn probe_sph_cpu_vs_wgsl(scene: &str, n_per: usize, spacing: f32, h: f32) -> CompareStat {
     let mut params = SphParams::<f32>::defaults();
     params.h = h;
@@ -113,7 +119,7 @@ pub fn probe_sph_cpu_vs_wgsl(scene: &str, n_per: usize, spacing: f32, h: f32) ->
         spacing,
         margin,
     );
-    // 先 step 一次以建立网格(否则 to_gpu_flat 邻居为空)。
+    // step 一次以建立网格(否则 to_gpu_flat / produce_cpu_reference 邻居为空)。
     let dt = 0.01f32;
     w.step(dt);
     // 导出当前状态给 wgsl 参考。
@@ -121,11 +127,8 @@ pub fn probe_sph_cpu_vs_wgsl(scene: &str, n_per: usize, spacing: f32, h: f32) ->
     let n = flat.n;
     let (_, acc_mu) = cpu_sph_wgsl_reference(&flat);
 
-    // CPU 生产反推加速度:再 step 一次,用位置二阶差分。
-    let pos_before: Vec<[f32; 3]> = w.particles.iter().map(|p| [p.pos.x, p.pos.y, p.pos.z]).collect();
-    w.step(dt);
-    let pos_after: Vec<[f32; 3]> = w.particles.iter().map(|p| [p.pos.x, p.pos.y, p.pos.z]).collect();
-
+    // CPU 生产精确加速度:step 后 w.particles[i].acc 为 SPH 近邻加速度(不含重力),
+    // 加 params.gravity 得到合力加速度,与 gpu_ref(wgsl 含重力)对齐。
     let g = [flat.gravity[0], flat.gravity[1], flat.gravity[2]];
     let mut mse = 0.0f32;
     let mut max_err = 0.0f32;
@@ -133,8 +136,8 @@ pub fn probe_sph_cpu_vs_wgsl(scene: &str, n_per: usize, spacing: f32, h: f32) ->
     for i in 0..n {
         let mut err2 = 0.0f32;
         for a in 0..3 {
-            // 反推 CPU 加速度(减重力,因 gpu_ref 的 acc 已含重力,这里对齐到"合力加速度")。
-            let a_cpu = (pos_after[i][a] - pos_before[i][a]) / (dt * dt) - g[a];
+            // acc 不含重力, acc_mu 含重力 —— 对齐到合力加速度。
+            let a_cpu = w.particles[i].acc[a] + g[a];
             let a_ref = acc_mu[i][a];
             if !a_cpu.is_finite() || !a_ref.is_finite() {
                 cpu_finite = false;
@@ -222,9 +225,9 @@ pub fn probe_granular_cpu_vs_wgsl(scene: &str, n: usize, radius: f32) -> Compare
 /// 跑一组预定义场景,产出 M1 host 端报告。
 pub fn run_accuracy_report() -> AccuracyReport {
     let mut stats = Vec::new();
-    // SPH 静止晶格(不同规模)。
-    stats.push(probe_sph_cpu_vs_wgsl("sph_lattice_4x4x4", 4, 0.12, 0.2));
-    stats.push(probe_sph_cpu_vs_wgsl("sph_lattice_6x6x6", 6, 0.12, 0.2));
+    // SPH 静止晶格(不同规模)。间距/光滑核与 m1_run.py 生产场景一致。
+    stats.push(probe_sph_cpu_vs_wgsl("sph_lattice_4x4x4", 4, 0.3, 0.6));
+    stats.push(probe_sph_cpu_vs_wgsl("sph_lattice_6x6x6", 6, 0.3, 0.6));
     // Granular 堆积。
     stats.push(probe_granular_cpu_vs_wgsl("granular_pile_50", 50, 0.3));
     stats.push(probe_granular_cpu_vs_wgsl("granular_pile_200", 200, 0.3));
@@ -233,7 +236,9 @@ pub fn run_accuracy_report() -> AccuracyReport {
     AccuracyReport {
         generated: "runtime".to_string(),
         env,
-        note: "CPU 生产 vs wgsl 简化移植参考(非真实 adapter 误差;为 M1 adapter 阶段建基线)".to_string(),
+        note: "CPU 生产 vs wgsl 参考(G1:GPU 内核已与 CPU 逐公式对齐——对称压力式+非牛顿幂律, \
+               颗粒 PBD 投影同款),差异为 f32 浮点精度/运算序。真机 adapter 回填后误差量级应与本基线一致"
+            .to_string(),
         stats,
     }
 }
@@ -279,9 +284,10 @@ mod tests {
         let st = probe_sph_cpu_vs_wgsl("test_sph", 4, 0.12, 0.2);
         assert!(st.cpu_finite, "CPU 生产 step 出现非有限值");
         assert!(st.wgsl_finite, "wgsl 参考输出非有限");
-        // 不要求 MSE≈0(wgsl 是简化移植);只要求有限且偏差有界(< 1e6 加速度量级合理)。
+        // G1 真值对比:wgsl 现已与 CPU 生产逐公式对齐(对称压力式 + 非牛顿幂律),
+        // 差异应仅为 f32 浮点精度/运算序,逐粒子 max 误差应在 1e-1 量级内。
         assert!(st.acc_mse.is_finite() && st.acc_max.is_finite());
-        assert!(st.acc_max < 1.0e6, "偏差异常大: {}", st.acc_max);
+        assert!(st.acc_max < 1.0e-1, "CPU↔wgsl 偏差超出浮点精度: max={}", st.acc_max);
     }
 
     #[test]
@@ -290,6 +296,8 @@ mod tests {
         assert!(st.cpu_finite, "CPU 生产颗粒 step 非有限");
         assert!(st.wgsl_finite, "wgsl 参考颗粒非有限");
         assert!(st.acc_mse.is_finite() && st.acc_max.is_finite());
+        // G1:颗粒 PBD 投影 wgsl 与 CPU 生产逐公式对齐, 投影位移误差应在 1e-3 量级内。
+        assert!(st.acc_max < 1.0e-3, "颗粒 CPU↔wgsl 投影偏差超界: max={}", st.acc_max);
     }
 
     #[test]

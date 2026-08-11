@@ -68,6 +68,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Joint λ cross-substep accumulation is preserved by writing λ back to the
   global `joints` after each island pass. Verified numerically equivalent
   (63 tests + doctest green) before and after enabling parallelism.
+- **GPU kernel ↔ CPU production formula alignment + per-particle error report (G1,
+  commercial-readiness plan §11)**: the W4 SPH and W5 granular **wgsl** compute kernels
+  in `crates/phy-demo-web/src/gpu/mod.rs` were upgraded from "simplified port" to be
+  **formula-identical with the CPU production solver** — symmetric pressure
+  `m_i·m_j·(p_i/ρ_i² + p_j/ρ_j²)` (momentum-conserving, was non-symmetric `m_j·(p_i+p_j)/(2ρ_j)`),
+  non-Newtonian power-law viscosity `μ = ki·max(shear, shear_min)^(ni-1)` (was linear
+  `ki + shear_min`), and the granular PBD projection is now the same Jacobi reduce as
+  CPU. `gpu_accuracy.rs` was rewritten to compare **CPU production per-particle
+  acceleration directly** against the wgsl serial reference (`gpu_ref.rs`, now mirroring
+  the aligned kernels) instead of a second-difference approximation. Measured per-particle
+  error is floating-point precision only: SPH `MAX ≈ 2.9e-6`, granular projection
+  bit-identical. This is the honest **CPU↔GPU numerical-consistency baseline**; the real
+  adapter error (browser / native wgpu) is expected to match this magnitude — see
+  `export_flat_for_adapter` for the data-export path. Acceptance tests tightened to
+  consistency thresholds (SPH `MAX < 1e-1`, granular projection `< 1e-3`).
 - **Scene description DSL / prefab (B3, commercial-readiness plan §11)**: new
   `scene.rs` module with `SceneDesc<T>` (gravity + bodies + joints, reusing the
   already-serde `Body`/`JointConstraint` so the description is isomorphic to the

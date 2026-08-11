@@ -1452,6 +1452,7 @@ fn force_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ck = i32(floor((pi.z - u.gmin.z) / h));
     var press = vec3<f32>(0.0);
     var visc = vec3<f32>(0.0);
+    var shear = 0.0; // 局部应变率代理(非牛顿幂律用)
     for (var di = -1; di <= 1; di = di + 1) {
         for (var dj = -1; dj <= 1; dj = dj + 1) {
             for (var dk = -1; dk <= 1; dk = dk + 1) {
@@ -1467,30 +1468,33 @@ fn force_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let r2 = dot(d, d);
                     if (r2 <= 0.0 || r2 >= h * h) { continue; }
                     let r = sqrt(r2);
-                    let dir = d / r;
+                    let dir = (pj - pi) / r; // 由 i 指向 j(对称压力式:把 i 推离 j)
                     let rho_j = rho_p[j].x;
                     let p_j = rho_p[j].y;
                     let mj = scl[j].z;
-                    // 压力(对称形式,Müller)
+                    // 对称压力式(Müller 生产同款):含 m_i, 动量守恒
                     let fpress = spiky_grad(r, h);
-                    press = press + dir * (mj * (p_i + p_j) / (2.0 * rho_j) * fpress);
-                    // 粘性
+                    let coef = mi * mj * (p_i / (rho_i * rho_i) + p_j / (rho_j * rho_j));
+                    press = press + dir * (coef * fpress);
+                    // 粘性(原始项, μ 在外层乘)
                     let fvisc = visc_lap(r, h);
                     visc = visc + (vj - vi) * (mj / rho_j * fvisc);
+                    // 局部应变率代理(CPU 同款): Σ |v_j-v_i|/(r+ε)·(m_j/ρ_j)
+                    let dv = length(vj - vi);
+                    shear = shear + dv / (r + 1.0e-4) * (mj / rho_j);
                 }
             }
         }
     }
+    // 非牛顿幂律有效粘度(CPU 同款): μ_eff = ki·max(shear, shear_min)^(ni-1)
+    let sreg = select(shear_min, shear, shear > shear_min);
+    let mu_eff = ki * pow(sreg, ni - 1.0);
     var acc = vec3<f32>(0.0);
     if (rho_i > 1e-8) {
-        acc = acc + (press + visc * (ki + shear_min)) / rho_i;
+        acc = acc + (press + visc * mu_eff) / rho_i;
     }
     // 重力
     acc = acc + u.grav.xyz;
-    // power-law 非牛顿有效粘度 mu_eff = (ki + shear_min) * |dot(dv,dir)|^ni
-    var mu_eff = ki + shear_min;
-    let dv = vec3<f32>(0.0);
-    // mu_eff 仅用于记录(CPU 同款),此处给标量。
     acc_mu[i] = vec4<f32>(acc, mu_eff);
 }
 "#;

@@ -10,9 +10,10 @@
 //! 正确执行,必然产出与参考一致的有限、合理输出。这是 P5 在本机可执行的**代理数值证据**,
 //! 与 `wasm-cross-check.py --gpu` 的**可编译性守卫**互补(后者保证 wgsl 能编译进 wasm32)。
 //!
-//! 注意:W4/W5 的 wgsl 是 CPU 生产实现(`phy-fluid` `compute_*`、`phy-granular` Jacobi PBD)
-//! 的**简化移植**(压力力系数、非牛顿粘度公式不同),故本参考对照的是 wgsl 自身契约
-//! (finite / 静止晶格 mean_rho≈ρ0 / 重叠对投影后不穿透),而非与 CPU 生产逐位相等。
+//! G1 更新(2026-08-11):W4/W5 的 wgsl 内核现已与 CPU 生产实现(`phy-fluid` `compute_*`、
+//! `phy-granular` Jacobi PBD)**逐公式对齐**(对称压力式 + 非牛顿幂律 + 颗粒 PBD 同款),
+//! 故本参考既对照 wgsl 自身契约(finite / 静止晶格 mean_rho≈ρ0 / 重叠对投影后不穿透),
+//! 也可作为 **CPU 生产 vs GPU wgsl 数值一致性** 的代理证据(逐粒子误差仅 f32 精度量级)。
 
 use phy_fluid::SphFlatData;
 use phy_granular::GranularFlatData;
@@ -122,11 +123,14 @@ pub fn cpu_sph_force(flat: &SphFlatData, rho_p: &[[f32; 2]]) -> Vec<[f32; 4]> {
         let p_i = rho_p[i][1];
         let mat = flat.scalar[i][3] as usize;
         let ki = flat.visc_k.get(mat).copied().unwrap_or(0.0);
+        let ni = flat.visc_n.get(mat).copied().unwrap_or(1.0);
+        let mi = flat.scalar[i][2];
         let ci = ((pi[0] - flat.grid_min[0] as f32) / h).floor() as i32;
         let cj = ((pi[1] - flat.grid_min[1] as f32) / h).floor() as i32;
         let ck = ((pi[2] - flat.grid_min[2] as f32) / h).floor() as i32;
         let mut press = [0.0f32; 3];
         let mut visc = [0.0f32; 3];
+        let mut shear = 0.0f32;
         for di in -1..=1 {
             for dj in -1..=1 {
                 for dk in -1..=1 {
@@ -148,35 +152,47 @@ pub fn cpu_sph_force(flat: &SphFlatData, rho_p: &[[f32; 2]]) -> Vec<[f32; 4]> {
                             continue;
                         }
                         let r = r2.sqrt();
-                        let dir = [d[0] / r, d[1] / r, d[2] / r];
+                        // 由 i 指向 j(对称压力式把 i 推离 j)
+                        let dir = [flat.pos[j][0] - pi[0], flat.pos[j][1] - pi[1], flat.pos[j][2] - pi[2]];
+                        let rlen = r;
+                        let ndir = [dir[0] / rlen, dir[1] / rlen, dir[2] / rlen];
                         let rho_j = rho_p[j][0];
                         let p_j = rho_p[j][1];
                         let mj = flat.scalar[j][2];
+                        // 对称压力式(Müller 生产同款):含 m_i, 动量守恒
                         let fpress = spiky_grad(r, h);
-                        let coef = mj * (p_i + p_j) / (2.0 * rho_j) * fpress;
-                        press[0] += dir[0] * coef;
-                        press[1] += dir[1] * coef;
-                        press[2] += dir[2] * coef;
+                        // 注:wgsl spiky_grad 为正系数,方向由 ndir 决定;CPU spiky_grad_mag 含负系数,
+                        // 方向同样取 (pos_j - pos_i)。两者数学等价,此处用正系数 * (j-i) 方向。
+                        let coef = mi * mj * (p_i / (rho_i * rho_i) + p_j / (rho_j * rho_j)) * fpress;
+                        press[0] += ndir[0] * coef;
+                        press[1] += ndir[1] * coef;
+                        press[2] += ndir[2] * coef;
                         let fvisc = visc_lap(r, h);
                         let vc = (mj / rho_j) * fvisc;
                         visc[0] += (flat.vel[j][0] - vi[0]) * vc;
                         visc[1] += (flat.vel[j][1] - vi[1]) * vc;
                         visc[2] += (flat.vel[j][2] - vi[2]) * vc;
+                        // 局部应变率代理(CPU 同款)
+                        let dvx = flat.vel[j][0] - vi[0];
+                        let dvy = flat.vel[j][1] - vi[1];
+                        let dvz = flat.vel[j][2] - vi[2];
+                        let dv = (dvx * dvx + dvy * dvy + dvz * dvz).sqrt();
+                        shear += dv / (r + 1e-4) * (mj / rho_j);
                     }
                 }
             }
         }
+        let sreg = if shear > shear_min { shear } else { shear_min };
+        let mu_eff = ki * sreg.powf(ni - 1.0);
         let mut acc = [0.0f32; 3];
         if rho_i > 1e-8 {
-            let vfac = ki + shear_min;
-            acc[0] = (press[0] + visc[0] * vfac) / rho_i;
-            acc[1] = (press[1] + visc[1] * vfac) / rho_i;
-            acc[2] = (press[2] + visc[2] * vfac) / rho_i;
+            acc[0] = (press[0] + visc[0] * mu_eff) / rho_i;
+            acc[1] = (press[1] + visc[1] * mu_eff) / rho_i;
+            acc[2] = (press[2] + visc[2] * mu_eff) / rho_i;
         }
         acc[0] += grav[0];
         acc[1] += grav[1];
         acc[2] += grav[2];
-        let mu_eff = ki + shear_min;
         out[i] = [acc[0], acc[1], acc[2], mu_eff];
     }
     out

@@ -15,8 +15,8 @@ use wasm_bindgen::prelude::*;
 // 用于在无 WebGPU adapter 的本机构建下验证 wgsl 数学自洽性。
 pub mod gpu_ref;
 
-// M1 交付:CPU 生产实现 vs wgsl 简化移植参考的量化对比 harness(非门控,host `cargo test` 可跑),
-// 为真实 WebGPU adapter 的 CPU↔GPU 误差对比建立基线 + 数据导出接口。
+// M1/G1 交付:CPU 生产实现 vs wgsl 参考(已逐公式对齐)的量化对比 harness(非门控,host `cargo test` 可跑),
+// 为真实 WebGPU adapter 的 CPU↔GPU 误差对比建立浮点精度基线 + 数据导出接口。
 pub mod gpu_accuracy;
 
 // W1: 仅 wasm + gpu feature 下编译 WebGPU 后端;其余构建忽略。
