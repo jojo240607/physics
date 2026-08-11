@@ -37,10 +37,12 @@
 - **已知限制**:CPU 生产内核(`for_each_neighbor`,BTreeMap)vs GPU/flat 网格(`cell_start/sorted`,前缀和)在**边界/角落粒子**的邻居查找不同——SPH 角落粒子 CPU 净力≈0 vs GPU≈36(物理上角落有净压力,GPU 更合理);内部粒子逐位一致。这是 phy-fluid 内核与 flat 网格的既有边界差异,留待内核统一,不影响 G1 真机证据(GPU 忠实复刻 wgsl 内核)。
 - **业务影响**:游戏要信 GPU 结果——现已具备**真机 adapter 逐粒子误差报告**(GPU 忠实复刻内核,浮点量级一致)。若要在游戏中把 SPH 交给 GPU,需先解决上述 CPU/GPU 边界邻居差异(当前 GPU 路径自洽,与 CPU 生产内部一致、边界更合理)。
 
-### G2 — 无性能 / 规模基准
-- **现状(部分交付)**:已建立 host 端 perf harness(`crates/phy-demo/src/bin/perf_sweep.rs`)并产出 `docs/perf_baseline.md`,扫描 1k/10k/100k(SPH)+ 1k/5k/10k/20k(Granular,`--large`)。
-- **缺口**:真实 WebGPU adapter 上的 GPU 路径 perf 对比缺失(本机无 adapter);Granular 绝对吞吐受 PBD Jacobi 算法级限制(见下),未达实时 SLO。
-- **业务影响**:游戏/仿真首先要回答"能跑多少实体、什么帧率";Granular 在 >1000 实体仍低于实时帧率,但**已无崩溃级性能悬崖**,可预测缩放。
+### G2 — 性能 / 规模基准(CPU 基线 + GPU 路径真机达标)
+- **现状(已交付)**:host 端 perf harness(`crates/phy-demo/src/bin/perf_sweep.rs`)产出 `docs/perf_baseline.md`(CPU 单线程 f64)。
+- **GPU 路径真机达标(2026-08-11,缺口已补)**:`examples/gpu_perf.rs` 在真实 **NVIDIA Quadro P2200**(Vulkan, release)实测 GPU 路径:**SPH 46.6k≈105fps、颗粒 10k≈433fps**,全部远超 30/60fps SLO。详见 `docs/perf_gpu_baseline.md`。
+- **加速比**:颗粒 PBD 5k→5.5x、10k→10.7x(较 CPU 单线程);SPH 10k→1.6x、46k→105fps。诚实标注:耗时含每次 `render_*_gpu` 的 pipeline/buffer 重建 + 回读(游戏复用 pipeline 会更快)。
+- **已知限制**:CPU 单线程路径颗粒 10k 仅 ~40fps(PBD Jacobi + f64 算法成本),GPU 小场景(1k SPH)固定重建开销主导反慢(0.5x)。若在浏览器(wasm WebGPU)跑数万实体实时仿真,**GPU 路径可行且必要**。
+- **业务影响**:游戏/仿真可回答"能跑多少实体、什么帧率":CPU 路径适合 <10k 颗粒(可控帧率),GPU 路径达数万实体实时;GPU 路径为 Web 浏览器(WebGPU)或 MSVC 桌面(原生 wgpu)解锁。
 
 > ✅ **M2-fix 完成 — Granular 性能悬崖已消除**:`GranularWorld::step` 的接触投影原用 `pairs.par_iter().fold/reduce`,把 pairs 切成成百上千个细粒度任务,每个任务分配/合并一个全量 `vec![zero; n]`(48B×n)delta 缓冲,总开销 O(pairs×n)。修复为 `par_chunks`(任务数≈线程数),总开销降为 O(threads×n)。5000 颗粒 **1167ms→257ms(~4.5×)**,10000 颗粒 **4430ms→469ms(~9.4×)**,且随 n **线性缩放**。余下绝对吞吐(257ms@5k)为 PBD Jacobi(需多次迭代收敛)+f64 的**算法本质成本**,非缺陷,需 Gauss-Seidel 就地投影/稀疏化或 GPU 才能达实时 SLO。SPH 路径缩放健康(10k=23fps,近线性)。
 

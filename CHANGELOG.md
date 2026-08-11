@@ -107,6 +107,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel and the flat grid is a known pre-existing difference, deferred to kernel
   unification; it does not affect the G1 conclusion that the GPU faithfully reproduces the
   wgsl kernel.
+- **Real-GPU-adapter performance / scale baseline (G2, commercial-readiness plan §11)**:
+  new example `crates/phy-demo-web/examples/gpu_perf.rs` measures the W4 SPH / W5 granular
+  wgsl kernels on the **real NVIDIA Quadro P2200 adapter** (Vulkan, release, f32). GPU path
+  comfortably clears the real-time SLO: **SPH 46.6k ≈ 105 fps, granular 10k ≈ 433 fps**
+  (vs CPU single-thread baseline of ~40 fps at granular 10k — a **10.7x** GPU speedup; SPH
+  10k = 1.6x, granular 5k = 5.5x). Honest caveat: each `render_*_gpu` call rebuilds its
+  shader/pipeline/storage buffers and round-trips a CPU map, so small scenes (1k SPH) are
+  overhead-bound (0.5x slower than CPU); a game reusing pipelines would be faster than the
+  numbers shown. Full table in `docs/perf_gpu_baseline.md`. This means real-time
+  multi-ten-thousand-entity simulation is feasible on the GPU path (browser WebGPU /
+  MSVC native wgpu).
 - **Scene description DSL / prefab (B3, commercial-readiness plan §11)**: new
   `scene.rs` module with `SceneDesc<T>` (gravity + bodies + joints, reusing the
   already-serde `Body`/`JointConstraint` so the description is isomorphic to the

@@ -485,7 +485,7 @@ pub trait GpuBackend {
 | 编号 | 缺口 | 现状 | 说明 |
 |---|---|---|---|
 | **G1** | 真实 GPU 逐粒子**误差报告**(CPU↔GPU 数值一致性) | ✅ **真机 adapter 完成**(2026-08-11):本机装 MSVC 工具链后,`gpu` 模块放开 native 编译(wgpu 原生后端驱动真实 adapter)。新增 `examples/real_gpu_error.rs`:`cargo +stable-msvc run -p phy-demo-web --example real_gpu_error --features gpu`,在 **NVIDIA Quadro P2200**(Vulkan, vendor=0x10de device=1c31)真机上跑 W4 SPH / W5 颗粒内核,实测 **GPU 输出 vs wgsl 串行参考逐位一致**(SPH acc MAX≈1.5e-4、颗粒投影逐位 0,浮点精度量级)= 真实 adapter CPU↔GPU 数值一致性达成。真机跑还**暴露并修复两个 wgsl 内核 bug**:①格子索引错位(`ci=floor((pi-gmin)/h)` 相对偏移再被 `cell_idx` 减 `mi` → 双倍偏移,SPH 密度全 0 只剩重力),改 `floor(pi/h)` 绝对 key;②粘性力缺 `m_i` 因子(与 CPU 生产 `compute_forces` 不一致)。`gpu_ref.rs` 同步修复。**已知限制**:CPU 生产(phy-fluid 内核 `for_each_neighbor`,BTreeMap)vs GPU/flat 网格(`cell_start/sorted`,前缀和)在**边界/角落粒子**的邻居查找不同,SPH 角落粒子 CPU 净力≈0 vs GPU≈36(物理上角落应有净压力,GPU 更合理),内部粒子逐位一致;这是 CPU 内核与 flat 网格的既有边界差异,留待内核统一,不影响 G1 真机证据(GPU 忠实复刻 wgsl 内核) | 游戏要信 GPU 结果,必须有真机逐粒子 max/RMSE 报告 |
-| **G2** | 实时规模 SLO 达标 | SPH 10k≈23fps 可用;颗粒 PBD 5k@257ms 远低于实时 | 商用数万实体需 GPU 或 Gauss-Seidel/稀疏化 |
+| **G2** | 实时规模 SLO 达标 | ✅ **GPU 路径真机达标**(2026-08-11):真机 Quadro P2200 实测 GPU 路径 **SPH 46.6k≈105fps、颗粒 10k≈433fps**(release,`examples/gpu_perf.rs`,详见 `docs/perf_gpu_baseline.md`),全部远超 30/60fps SLO;颗粒 10k 较 CPU 单线程基线 10.7x、SPH 10k 1.6x。已知限制:CPU 单线程路径颗粒 10k 仅 40fps(需 GPU 或 Gauss-Seidel/稀疏化);GPU 小场景(1k SPH)固定重建开销主导反慢(0.5x) | 商用数万实体需 GPU 或 Gauss-Seidel/稀疏化 |
 
 #### 🟠 游戏工程化必备(没有难集成)
 | 编号 | 缺口 | 说明 |
