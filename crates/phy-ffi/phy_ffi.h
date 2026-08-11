@@ -57,6 +57,10 @@ PhyWorldHandle *phy_world_create_fluid(void);
 // 创建刚体(下落球)世界。
 PhyWorldHandle *phy_world_create_rigid(void);
 
+// 创建**空**刚体世界（无地面、无演示球）。适用于需要自定义被控对象/地面的场景
+// （如四旋翼仿真：调用方自行 `phy_world_rigid_add_body` 添加机体与可选地面）。
+PhyWorldHandle *phy_world_create_rigid_empty(void);
+
 // 创建颗粒(堆积)世界。
 PhyWorldHandle *phy_world_create_granular(void);
 

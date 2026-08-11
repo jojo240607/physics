@@ -1823,9 +1823,11 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "nalgebra",
+ "num-traits",
  "phy-core",
  "phy-field",
  "phy-fluid",
+ "phy-granular",
  "phy-io",
  "phy-math",
  "phy-optics",

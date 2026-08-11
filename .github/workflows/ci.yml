@@ -21,8 +21,27 @@ jobs:
         run: cargo build --workspace --all-targets
       - name: Test workspace (default, fast unit tests)
         run: cargo test --workspace
+      - name: Stability regression (M3 suite)
+        run: cargo test -p phy-demo --test stability
+      - name: Perf harness smoke (M2 baseline must compile + run)
+        run: cargo run -p phy-demo --bin perf_sweep
       - name: Test release + ignored (heavy numerical regression)
         run: cargo test --release -p phy-demo -- --ignored
+
+  native:
+    name: Native desktop (C-ABI) build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # M5 验证:原生 CPU 后端 + C ABI(phy-ffi cdylib)在所有桌面平台可编译,
+      # 业务方可直接链入 C/C++/Unity/Unreal,无需 wgpu。
+      - name: Build phy-ffi (cdylib) native
+        run: cargo build -p phy-ffi
 
   wasm:
     name: WASM cross-compile guard

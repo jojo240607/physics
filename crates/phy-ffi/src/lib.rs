@@ -215,6 +215,16 @@ pub extern "C" fn phy_world_create_rigid() -> *mut PhyWorldHandle {
         .unwrap_or(std::ptr::null_mut())
 }
 
+/// 创建**空**刚体世界（无地面、无演示球）。适用于需要自定义被控对象/地面的场景
+/// （如四旋翼仿真：调用方自行 `phy_world_rigid_add_body` 添加机体与可选地面）。
+#[no_mangle]
+pub extern "C" fn phy_world_create_rigid_empty() -> *mut PhyWorldHandle {
+    let mut rworld = RigidWorld::<f64>::new();
+    let mut world = World::<f64>::new();
+    world.add_subsystem(Box::new(RigidSubsystem::new(rworld)));
+    box_world(world)
+}
+
 /// 创建颗粒(堆积)世界。
 #[no_mangle]
 pub extern "C" fn phy_world_create_granular() -> *mut PhyWorldHandle {

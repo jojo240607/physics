@@ -1,0 +1,54 @@
+# 发布流程骨架(M6)
+#
+# 触发:推送 tag `v*.*.*`(SemVer)。
+# 当前为骨架:仅做"发布前全量验证",不自动 `cargo publish`(避免未审阅即发布)。
+# 待业务方确认发布节奏后,可取消注释 publish 步骤,或拆分为 dry-run + manual approval。
+#
+# 发布检查清单(人工):
+#   1. CHANGELOG.md 已更新本次版本变更(含破坏性 API 变更标注)。
+#   2. 版本号在 workspace + 各 crate Cargo.toml 同步(当前 0.1.0)。
+#   3. 基准未回归(perf_sweep 数值在基线 ±20% 内)。
+#   4. 稳定性套件全过(stability.rs)。
+#   5. ABI 契约未破坏(phy-ffi 版本号 + cbindgen 头文件 diff 审查)。
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  pre-release-verify:
+    name: Pre-release full verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Host test (full)
+        run: cargo test --workspace --all-targets
+      - name: Stability regression
+        run: cargo test -p phy-demo --test stability
+      - name: Perf baseline smoke
+        run: cargo run -p phy-demo --bin perf_sweep
+      - name: WASM guard
+        run: python3 wasm-cross-check.py --all
+      - name: Native C-ABI build
+        run: cargo build -p phy-ffi
+
+  # 取消注释以启用 crates.io 发布(需先配置 CARGO_REGISTRY_TOKEN secret):
+  # publish:
+  #   needs: pre-release-verify
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - name: Publish phy-core
+  #       run: cargo publish -p phy-core --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+  #     # ... 按依赖顺序发布其余 crate
