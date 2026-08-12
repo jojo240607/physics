@@ -23,6 +23,7 @@ pub mod islands;
 pub mod scene;
 pub mod profile;
 pub mod world;
+pub mod character_controller;
 
 pub use shape::{Body, Shape};
 pub use contact::Contact;
@@ -37,6 +38,7 @@ pub use fracture::{fracture_body, fracture_convex, convex_volume_centroid};
 pub use scene::SceneDesc;
 pub use world::RigidWorld;
 pub use profile::StepProfile;
+pub use character_controller::CharacterController;
 
 #[cfg(test)]
 mod tests {

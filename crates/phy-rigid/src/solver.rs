@@ -101,8 +101,6 @@ pub fn solve_velocity<T: RealField + Copy>(
             continue;
         }
         let n = c.contact.normal;
-        let ia = bodies[c.a].inv_inertia_world();
-        let ib = bodies[c.b].inv_inertia_world();
         let ra = c.contact.point - bodies[c.a].pos;
         let rb = c.contact.point - bodies[c.b].pos;
         let pn = n * c.normal_impulse;

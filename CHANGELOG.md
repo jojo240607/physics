@@ -181,6 +181,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ("sliding-contact energy injection" / resting-stack jitter). A new 5-layer stack test
   (`warm_start_stabilizes_tall_stack`) converges to 0.5/1.5/2.5/3.5/4.5 and rests stably.
   78 phy-rigid tests + full workspace green.
+- **CharacterController (D4, game-grade plan `PLAN_NEXT.md`)**: new
+  `crates/phy-rigid/src/character_controller.rs` — a non-dynamic controller over a **kinematic
+  Capsule** body. `update(world, dt, move_dir, want_jump)` computes horizontal movement
+  (normalized × `speed`), integrates gravity across frames into a controller-local `vel_y`
+  (jump overrides it), then `slide` tests the capsule against every other body and pushes it
+  out along contact normals (landing sets `grounded`, walls/climbs resolve via the normal
+  projection). The controller writes the final position directly and zeroes the body velocity
+  so `world.step` doesn't double-integrate the kinematic body (the step still lets a
+  position-overlapping kinematic push dynamic bodies). Verified by
+  `character_falls_to_ground_and_grounded` / `character_can_jump` /
+  `character_moves_horizontally`. 81 phy-rigid tests + full workspace green. (Ragdoll
+  assembly via the D1 Hinge + D2 Capsule primitives is deferred.)
 - **Scene description DSL / prefab (B3, commercial-readiness plan §11)**: new
   `scene.rs` module with `SceneDesc<T>` (gravity + bodies + joints, reusing the
   already-serde `Body`/`JointConstraint` so the description is isomorphic to the

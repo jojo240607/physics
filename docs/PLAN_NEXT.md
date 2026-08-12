@@ -35,13 +35,12 @@
 | 关节角度求解 | ✅ D1 已实现（多维 λ 用逆有效质量矩阵） |
 | 测试 | ✅ `warm_start_stabilizes_tall_stack`(5 层堆叠稳定 + 缓存非空), 78 phy-rigid + 全 workspace 绿 |
 
-### D4 — 角色控制器 / ragdoll
+### D4 — 角色控制器（已完成）/ ragdoll（待做）
 | 子项 | 说明 |
 |---|---|
-| `CharacterController` | 胶囊体 + 移动 / 爬坡 / 下落，非动力学驱动 |
-| Ragdoll 装配 | Ball/Hinge 串起骨骼，Rust 端装配工具 |
-| 依赖 | D1（Hinge）+ D2（Capsule）完成后天然支持 |
-| 测试 | 角色爬坡不穿透、ragdoll 落地不 NaN |
+| `CharacterController` | ✅ 2026-08-12:`crates/phy-rigid/src/character_controller.rs`,kinematic 胶囊体,`update(world,dt,move_dir,want_jump)`:水平移动(归一化×speed) + 垂直重力累积(`vel_y` 跨帧)/跳跃 + `slide` 与场景所有体做胶囊碰撞检测并沿法线推出(落地 grounded/撞墙/爬坡);位置由 CC 直接控制,body vel=0 避免 step 双重积分 |
+| Ragdoll 装配 | ⏳ Ball/Hinge 串起骨骼，Rust 端装配工具（D1 Hinge + D2 Capsule 已具备基础） |
+| 测试 | ✅ `character_falls_to_ground_and_grounded` / `character_can_jump` / `character_moves_horizontally`, 81 phy-rigid + 全 workspace 绿 |
 
 **执行顺序**：D1 → D2 → D3 → D4（依赖链：关节 → 碰撞器 → 求解器稳 → 角色/布偶）。
 
