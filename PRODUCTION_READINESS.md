@@ -97,8 +97,9 @@
 - [x] 稳定性回归套件 `crates/phy-demo/tests/stability.rs`(5 测试,全部通过 `step_checked` 看门狗兜底验证)。
 - [x] 实测发现 SPH 闭合系统能量不守恒(已知缺口,G3 ⚠️),Granular 落体有界、极端参数由看门狗安全捕获。
 - [x] **M3-fix(已完成)**:引入 XSPH 速度修正(`SphParams::xsph_eps` 默认 0.5,`Particle::xsph` 累加器,`compute_forces` 邻居循环累加 + `integrate` 应用)+ 修正闭合测试边界越界注入。SPH 闭合系统 e0≈0→e1≈0、p1≈2e-9(数值噪声级),并升级为硬断言守恒。18 个 phy-fluid 单测 + 5 个稳定性测试全过。
+- [x] **M3-extreme(已完成,2026-08-12)**:新增极端参数压测套件 `crates/phy-demo/tests/extreme_parameters.rs`(10 测试,`cargo test --release -p phy-demo --test extreme_parameters -- --ignored` 全过)。覆盖 5 个极端维度:超大 dt(0.1/0.5/1.0)、极端质量比(1e-9 vs 1e6)、极端重力(±1e4)、极端 SPH 刚度/黏度(stiffness=1e4)、极端场耦合(1e3)、综合极端(超大 dt+高刚度+高重力)。核心判据:**无论看门狗捕获发散(Err)还是引擎稳定推进(Ok),全程绝不含 NaN/Inf**——`run_checked` 对每步 Ok 做有限性断言,杜绝静默污染。另含**看门狗有效性自检**:显式注入 NaN 后断言 `step_checked` 返回 Err,证明看门狗有牙齿(实测:SPH 对 stiffness=1e4+dt=0.01、dt=1.0 等极端参数仍稳定有限,求解器稳健性超预期;看门狗在注入污染时正确捕获)。
 - [ ] 防爆炸/防穿透的安全兜底(如子步、钳制)接入 `step_checked` 有限性之外的有界性检测(可选增强)。
-- **交付物**:`crates/phy-demo/tests/stability.rs`(已落地,M3-fix 完成,守恒律硬断言)。
+- **交付物**:`crates/phy-demo/tests/stability.rs` + `crates/phy-demo/tests/extreme_parameters.rs`(M3 完成:长时积分 + 极端参数无崩溃/无爆炸/看门狗有牙齿)。
 
 ### 里程碑 M4 — 业务集成 SDK(解锁 G4)
 - [x] 抽取稳定公共 API 层(与 P7 ABI 契约对齐):`PhysicsBuilder` 声明式建世界 + 强类型句柄重导出(`phy_sdk::fluid::*` 等)。
@@ -154,7 +155,7 @@ P3(规模化协作):    M6 (CI/CD)
 
 - [x] M1:真实 adapter CPU↔GPU 误差报告通过阈值(Quadro P2200,SPH acc MAX≈1.5e-4、颗粒逐位 0)
 - [x] M2:目标规模下达到业务 SLO 帧率(release 基线:SPH 10k=136fps、Granular 10k=42fps,均 ≥30fps;SPH 达 60fps+。CPU 单线程路径对 <10k 颗粒可行,更大规模走 GPU/rayon)
-- [ ] M3:长时积分 + 极端参数无崩溃 / 无爆炸
+- [x] M3:长时积分 + 极端参数无崩溃 / 无爆炸(10 测试极端参数套件 + 看门狗有效性自检全过)
 - [x] M4:有可集成 SDK + 教程 + 版本策略(教程 doctest 已落地;`phy-sdk` crate + `README` 章节;版本策略随 0.1.0 起步)
 - [ ] M5:目标部署平台原生后端可用
 - [ ] M6:CI 门禁 + 发布流程就位
