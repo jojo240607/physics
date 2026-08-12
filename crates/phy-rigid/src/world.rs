@@ -674,7 +674,7 @@ mod tests {
     use phy_field::{Bc, EmField, GravField, HeatField, ScalarField};
     use phy_math::na;
 
-    use crate::shape::Shape;
+    use crate::shape::{Shape, SubShape};
     use crate::solver::SolverParams;
 
     /// 热浮力应让热区中的刚体获得向上的速度修正(抵消部分重力)。
@@ -1165,6 +1165,61 @@ mod tests {
             world.bodies[ball].vel.norm() < 0.5,
             "球落地后应静止,实际 vel={}",
             world.bodies[ball].vel.norm()
+        );
+    }
+
+    /// 复合体(D2):由 2 个子球组成的 Compound 落在静态盒地面上,应停在地面(不穿透),
+    /// 验证 Compound 逐子形状递归窄相。
+    #[test]
+    fn compound_body_rests_on_ground() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, -9.81, 0.0);
+        // 静态地面。
+        world.add_body(Body::new(
+            Shape::Box {
+                half: Vec3::new(5.0, 0.5, 5.0),
+            },
+            Vec3::new(0.0, 0.0, 0.0),
+            0.0,
+        ));
+        // Compound:两个球(半径 0.5),一个在质心,一个偏 x=0.6。
+        let compound = world.add_body(Body {
+            shape: Shape::Compound {
+                subshapes: vec![
+                    SubShape {
+                        shape: Shape::Sphere { r: 0.5 },
+                        offset: Vec3::zeros(),
+                        quat: na::one(),
+                    },
+                    SubShape {
+                        shape: Shape::Sphere { r: 0.5 },
+                        offset: Vec3::new(0.6, 0.0, 0.0),
+                        quat: na::one(),
+                    },
+                ],
+            },
+            pos: Vec3::new(0.0, 3.0, 0.0),
+            rot: na::one(),
+            inv_mass: 1.0,
+            ..Default::default()
+        });
+        let _ = compound;
+        // 记录初始 subshapes 数量(应为 2)。
+        for _ in 0..400 {
+            world.step(1.0 / 120.0);
+        }
+        // Compound 最低子形状底部应在地面上方:质心 y 应使最低子球底部 ≈ 地面顶 0.5。
+        // 最低子球中心 = pos.y(质心子球),底部 = pos.y - 0.5。应 ≥ 0.5 - 0.05(轻微穿透容差)。
+        let cy = world.bodies[compound].pos.y;
+        assert!(
+            (cy - 1.0).abs() < 0.15,
+            "Compound 最低子球底部应停在地面上(pos.y≈1.0),实际 y={}",
+            cy
+        );
+        assert!(
+            world.bodies[compound].vel.norm() < 0.5,
+            "Compound 落地后应静止,实际 vel={}",
+            world.bodies[compound].vel.norm()
         );
     }
 

@@ -12,7 +12,7 @@
 //!
 //! 车辆子系统据此从车轮向下打射线找地面,计算悬挂压缩量与接触法线。
 
-use phy_math::{RealField, Vec3};
+use phy_math::{na, RealField, Vec3};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +58,40 @@ pub fn ray_cast<T: RealField + Copy>(
         }
         // 高度场:射线命中需沿射线步进查询地形表面,暂保守返回 None(待补)。
         Shape::Heightfield { .. } => None,
+        // 复合体:对每个子形状(变换到子局部)递归射线,取最近命中。
+        Shape::Compound { subshapes } => {
+            let mut best: Option<RayHit<T>> = None;
+            for s in subshapes.iter() {
+                // 子形状世界位姿 = body 位姿 * 子 offset/quat。
+                // 射线变换到子形状局部系。
+                let inv_rot = (body.rot * s.quat).inverse();
+                let o_local = inv_rot * (*origin - (body.pos + body.rot * s.offset));
+                let d_local = inv_rot * *dir;
+                // 构造子 Body(局部位姿为单位)。
+                let sub_body = Body {
+                    shape: s.shape.clone(),
+                    pos: Vec3::zeros(),
+                    rot: na::UnitQuaternion::identity(),
+                    inv_mass: T::zero(),
+                    collision_mask: u32::MAX,
+                    ..Default::default()
+                };
+                if let Some(h) = ray_cast(&o_local, &d_local, &sub_body) {
+                    // 命中在子形状局部,需变换回世界。
+                    let world_point = body.pos + body.rot * s.offset + (body.rot * s.quat) * h.point;
+                    let world_normal = (body.rot * s.quat) * h.normal;
+                    let hit = RayHit {
+                        t: h.t,
+                        point: world_point,
+                        normal: world_normal,
+                    };
+                    if best.as_ref().map(|b| h.t < b.t).unwrap_or(true) {
+                        best = Some(hit);
+                    }
+                }
+            }
+            best
+        }
     }
 }
 

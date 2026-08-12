@@ -161,6 +161,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   main `RigidWorld` impl bound was relaxed from `ToPrimitive` to `NumCast` so narrow-phase can
   use index conversions for heightfield queries. Verified by
   `sphere_rests_on_heightfield_terrain`. 76 phy-rigid tests + full workspace green.
+- **Compound collider — multi-subshape bodies (D2, game-grade plan `PLAN_NEXT.md`)**: new
+  `Shape::Compound { subshapes: Vec<SubShape> }` where each `SubShape` is a child shape plus a
+  local `offset` / `quat`. `support_local` takes the farthest child support along `dir`,
+  `contains_local` any-child containment, inertia merges children (parallel-axis), and
+  `bounding_sphere_r` takes the max child bound. Narrow-phase **recurses per subshape** via a
+  `sub_body` helper (child inherits parent velocity incl. the offset angular term, inertia,
+  layers, kinematic/sensor flags), picking the deepest contact; `ray_cast` recurses for the
+  nearest hit; fracture merges child meshes. Useful for robot arms, car chassis, and humanoid
+  limbs. Verified by `compound_body_rests_on_ground` (two child spheres rest on a static box
+  ground without tunneling). 77 phy-rigid tests + full workspace green — **D2 (colliders:
+  Capsule / Heightfield / Compound) is now complete**.
 - **Scene description DSL / prefab (B3, commercial-readiness plan §11)**: new
   `scene.rs` module with `SceneDesc<T>` (gravity + bodies + joints, reusing the
   already-serde `Body`/`JointConstraint` so the description is isomorphic to the

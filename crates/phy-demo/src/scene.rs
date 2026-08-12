@@ -1044,6 +1044,16 @@ fn render_body(fb: &mut Framebuffer, cam: &Camera, body: &Body<f64>) {
                 fb.draw_line(d.0, d.1, a.0, a.1, depth as f32, col);
             }
         }
+        Shape::Compound { subshapes } => {
+            // 遍历子形状,用子形状世界位姿渲染中心球。
+            for s in subshapes.iter() {
+                let center = body.pos + body.rot * s.offset;
+                if let Some((sx, sy, depth)) = project_point(cam, fb, center) {
+                    let r_screen = 0.2 * fb.width as f64 / (depth.max(0.5));
+                    fb.fill_circle(sx, sy, (r_screen as i32).max(2), depth as f32, [120u8, 90u8, 160u8]);
+                }
+            }
+        }
     }
 }
 

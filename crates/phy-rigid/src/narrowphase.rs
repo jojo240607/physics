@@ -5,10 +5,10 @@
 //! - 通用凸体(含球/盒/凸多面体):GJK 判相交,EPA 求接触法线+穿透深度。
 
 use num_traits::NumCast;
-use phy_math::{RealField, Vec3};
+use phy_math::{na, RealField, Vec3};
 
 use crate::contact::Contact;
-use crate::shape::{Body, Shape};
+use crate::shape::{Body, Shape, SubShape};
 
 /// 泛型标量转 f64(用于索引/边界计算)。
 #[allow(dead_code)]
@@ -635,8 +635,60 @@ pub fn heightfield_vs_body<T: RealField + Copy + NumCast>(hf: &Body<T>, b: &Body
     Some(Contact::new(point, normal, depth))
 }
 
+/// 构造 Compound 的子 Body(世界位姿 = 父位姿 * 子 offset/quat)。
+/// 线速度含 offset 的角速度贡献,惯性/层/掩码继承父。
+fn sub_body<T: RealField + Copy>(parent: &Body<T>, s: &SubShape<T>) -> Body<T> {
+    let offset_world = parent.rot * s.offset;
+    Body {
+        shape: s.shape.clone(),
+        pos: parent.pos + offset_world,
+        rot: parent.rot * s.quat,
+        vel: parent.vel + parent.ang_vel.cross(&offset_world),
+        ang_vel: parent.ang_vel,
+        inv_inertia_local: {
+            let r = na::Matrix3::from(s.quat);
+            r * parent.inv_inertia_local * r.transpose()
+        },
+        inv_mass: parent.inv_mass,
+        sleeping: parent.sleeping,
+        sleep_time: parent.sleep_time,
+        layers: parent.layers,
+        collision_mask: parent.collision_mask,
+        kinematic: parent.kinematic,
+        is_sensor: parent.is_sensor,
+    }
+}
+
 /// 通用 Narrow-phase 入口:优先快速路径,回退 GJK+EPA。
+/// Compound 逐子形状递归(构造临时子 Body 与对方碰撞,取最深接触)。
 pub fn collide<T: RealField + Copy + NumCast>(a: &Body<T>, b: &Body<T>) -> Option<Contact<T>> {
+    // a 是复合体:遍历子形状,构造子 Body 与 b 碰撞,取最深。
+    if let Shape::Compound { subshapes } = &a.shape {
+        let mut best: Option<Contact<T>> = None;
+        for s in subshapes.iter() {
+            let sub = sub_body(a, s);
+            if let Some(c) = collide(&sub, b) {
+                if best.as_ref().map(|x| c.depth > x.depth).unwrap_or(true) {
+                    best = Some(c);
+                }
+            }
+        }
+        return best;
+    }
+    // b 是复合体:遍历子形状,构造子 Body 与 a 碰撞,取最深(法线翻转成 a→b)。
+    if let Shape::Compound { subshapes } = &b.shape {
+        let mut best: Option<Contact<T>> = None;
+        for s in subshapes.iter() {
+            let sub = sub_body(b, s);
+            if let Some(c) = collide(a, &sub) {
+                // collide(a, sub) 法线由 a→子形状(=a→b),符合约定,不需翻转。
+                if best.as_ref().map(|x| c.depth > x.depth).unwrap_or(true) {
+                    best = Some(c);
+                }
+            }
+        }
+        return best;
+    }
     if matches!(a.shape, Shape::Sphere { .. }) && matches!(b.shape, Shape::Sphere { .. }) {
         if let Some(c) = sphere_sphere(a, b) {
             return Some(c);

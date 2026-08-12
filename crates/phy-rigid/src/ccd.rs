@@ -61,6 +61,11 @@ pub fn substep_count<T: RealField + Copy + ToPrimitive>(
             Shape::Convex { .. } => r,
             // 高度场为静态地形，取网格尺寸作为特征尺度（不参与 CCD 保守估计）。
             Shape::Heightfield { cell, .. } => *cell,
+            // 复合体:取各子形状最小特征尺寸(取最小以便保守子步)。
+            Shape::Compound { subshapes } => subshapes
+                .iter()
+                .map(|s| s.shape.bounding_sphere_r())
+                .fold(r, |a, b| if a < b { a } else { b }),
         };
         if feat < min_feat {
             min_feat = feat;

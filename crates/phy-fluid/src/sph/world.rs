@@ -503,6 +503,11 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
                 };
                 hx * hz * hy.abs()
             }
+            // 复合体:各子形状体积之和。
+            Shape::Compound { subshapes } => subshapes
+                .iter()
+                .map(|sub| Self::body_volume(&sub.shape))
+                .fold(T::zero(), |a, b| a + b),
         }
     }
 

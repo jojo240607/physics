@@ -124,6 +124,26 @@ pub enum Shape<T: RealField + Copy> {
         /// 高度值(z-major,长度 `nx*nz`;T 为 f32/f64,serde 默认支持)。
         heights: Vec<T>,
     },
+    /// 复合体(Compound):一个刚体挂多个子碰撞器(机械臂/车辆底盘/人形肢体)。
+    /// 每个子碰撞器有自己的形状 + 相对质心的局部偏移/旋转。
+    /// 窄相逐子形状递归;support 取各子形状沿 dir 最远点;contains 任一子形状含 p。
+    Compound {
+        subshapes: Vec<SubShape<T>>,
+    },
+}
+
+/// 复合体的子碰撞器:形状 + 相对 Body 质心的局部位姿。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
+pub struct SubShape<T: RealField + Copy> {
+    /// 子形状(局部坐标,原点在自身中心)。
+    pub shape: Shape<T>,
+    /// 子形状原点相对质心的局部平移。
+    #[serde(with = "serde_geom")]
+    pub offset: Vec3<T>,
+    /// 子形状局部旋转(相对 Body 朝向)。
+    #[serde(with = "serde_geom::quat")]
+    pub quat: na::UnitQuaternion<T>,
 }
 
 impl<T: RealField + Copy> Shape<T> {
@@ -168,6 +188,24 @@ impl<T: RealField + Copy> Shape<T> {
             }
             // 高度场非凸,不用于 GJK;支撑返回局部原点(仅防误用崩溃)。
             Shape::Heightfield { .. } => Vec3::zeros(),
+            // 复合体:取各子形状沿 dir 最远的支撑点。
+            Shape::Compound { subshapes } => {
+                let mut best = subshapes[0].offset;
+                let mut best_dot = T::zero();
+                for sub in subshapes.iter() {
+                    // 子形状局部 dir。
+                    let d_local = sub.quat.inverse() * *dir;
+                    let s = sub.shape.support_local(&d_local);
+                    // 变换回 Body 局部:offset + quat * s。
+                    let world_s = sub.offset + sub.quat * s;
+                    let d = world_s.dot(dir);
+                    if d > best_dot {
+                        best_dot = d;
+                        best = world_s;
+                    }
+                }
+                best
+            }
         }
     }
 
@@ -190,6 +228,11 @@ impl<T: RealField + Copy> Shape<T> {
                     .fold(T::zero(), |a, &h| if h.abs() > a { h.abs() } else { a });
                 (hx * hx + hy * hy + hz * hz).sqrt()
             }
+            // 复合体:取 max(子形状包围球半径 + offset 长度)。
+            Shape::Compound { subshapes } => subshapes
+                .iter()
+                .map(|s| s.shape.bounding_sphere_r() + s.offset.norm())
+                .fold(T::zero(), |a, b| if a > b { a } else { b }),
         }
     }
 
@@ -226,6 +269,11 @@ impl<T: RealField + Copy> Shape<T> {
             }
             // 高度场非凸,不支持点包含(走专用窄相)。
             Shape::Heightfield { .. } => false,
+            // 复合体:任一子形状包含 p(把 p 变换到子形状局部)。
+            Shape::Compound { subshapes } => subshapes.iter().any(|s| {
+                let p_local = s.quat.inverse() * (*p - s.offset);
+                s.shape.contains_local(&p_local)
+            }),
         }
     }
 }
@@ -423,6 +471,18 @@ impl<T: RealField + Copy> Body<T> {
                     .iter()
                     .fold(T::zero(), |a, &h| if h.abs() > a { h.abs() } else { a });
                 Vec3::new(hx, hy, hz)
+            }
+            // 复合体:半长取各子形状半长(含 offset)的最大值。
+            Shape::Compound { subshapes } => {
+                let mut h = Vec3::new(T::zero(), T::zero(), T::zero());
+                for s in subshapes.iter() {
+                    // 用子形状包围盒半径 + offset 作为范围。
+                    let br = s.shape.bounding_sphere_r() + s.offset.norm();
+                    h.x = if br > h.x { br } else { h.x };
+                    h.y = if br > h.y { br } else { h.y };
+                    h.z = if br > h.z { br } else { h.z };
+                }
+                h
             }
         };
         // 实心长方体主惯量: I_x = m/12 (y²+z²) 等(球用 r 等价)。

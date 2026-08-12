@@ -19,7 +19,7 @@
 //! `fracture_body` 不修改 `RigidWorld`,只返回新 `Body` 列表(含局部→世界变换后的
 //! 顶点),由调用方(如 `RigidWorld::shatter`)加入世界,避免热路径耦合。
 
-use phy_math::{RealField, Vec3};
+use phy_math::{na, RealField, Vec3};
 use num_traits::NumCast;
 
 use crate::shape::{Body, Shape};
@@ -428,6 +428,30 @@ fn body_to_convex_local<T: RealField + Copy + NumCast>(body: &Body<T>) -> (Vec<V
                 [0, 5, 1], [0, 4, 5], [2, 6, 7], [2, 7, 3],
                 [1, 6, 2], [1, 5, 6], [3, 7, 4], [3, 4, 0],
             ];
+            (v, f)
+        }
+        Shape::Compound { subshapes } => {
+            // 合并所有子形状的破碎 mesh(顶点按 offset/quat 变换 + 面索引偏移)。
+            let mut v = Vec::new();
+            let mut f = Vec::new();
+            for s in subshapes.iter() {
+                let sub_body = Body {
+                    shape: s.shape.clone(),
+                    pos: Vec3::zeros(),
+                    rot: na::UnitQuaternion::identity(),
+                    inv_mass: T::zero(),
+                    collision_mask: u32::MAX,
+                    ..Default::default()
+                };
+                let (sv, sf) = body_to_convex_local(&sub_body);
+                let base = v.len();
+                for p in sv.iter() {
+                    v.push(s.offset + (s.quat * *p));
+                }
+                for tri in sf.iter() {
+                    f.push([tri[0] + base, tri[1] + base, tri[2] + base]);
+                }
+            }
             (v, f)
         }
     }
