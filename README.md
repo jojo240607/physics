@@ -37,6 +37,37 @@
 
 ---
 
+## 安装
+
+### 方式 A:从 crates.io 依赖(发布后)
+
+```toml
+[dependencies]
+phy-math   = "0.1"   # 数学原语
+phy-core   = "0.1"   # World / Subsystem 抽象
+phy-rigid  = "0.1"   # 刚体(接触/关节/车辆/破碎)
+phy-fluid  = "0.1"   # SPH 流体
+# phy-granular / phy-soft / phy-optics / phy-field / phy-solid / phy-io 同理
+# 集成一步到位:phy-sdk = "0.1"
+# C ABI(需编动态库供 C/C++/Unity/Unreal):phy-ffi = "0.1"
+nalgebra = "0.33"
+```
+
+> 发布状态见 [scripts/publish_all.sh](scripts/publish_all.sh)(按依赖拓扑顺序发布)。
+> crates.io 发布需先 `cargo login`,执行 `bash scripts/publish_all.sh`。
+
+### 方式 B:本地 path 依赖(开发 / 未发布时)
+
+```toml
+[dependencies]
+phy-sdk = { path = "crates/phy-sdk" }
+# 或按需选子 crate,见下方"工作区结构"表
+```
+
+本地 path 依赖**优先于 version**(即使写了 `version` 也走本地),适合跟随本仓库开发、或尚未 publish 的中间态。
+
+---
+
 ## 快速上手(Rust)
 
 ```toml
@@ -225,11 +256,39 @@ cargo bench -p phy-demo                 # 性能基线
 
 ---
 
+## 发布到 crates.io
+
+本仓库为 workspace,`phy-*` 是一组相互依赖的 crate,发布必须**按依赖拓扑从底到顶**进行
+(crates.io 的 crate 只能引用已存在的版本)。已提供一键脚本:
+
+```bash
+cargo login <token>              # 一次性:配置 crates.io API token(需你的 crates.io 账号)
+bash scripts/publish_all.sh      # 按顺序发布全部 12 个可发布 crate
+bash scripts/publish_all.sh --dry-run   # 先预检(不真正发布)
+```
+
+发布顺序(脚本已编码):
+
+```
+phy-math → phy-core → phy-field → phy-rigid
+→ phy-fluid / phy-solid / phy-granular / phy-optics
+→ phy-soft → phy-io → phy-ffi / phy-sdk
+```
+
+> - `phy-demo` / `phy-demo-web` 为 `publish = false`(Web 演示依赖 wasm-only 库),不发布。
+> - 发布前请确认各 crate 的 `version` / `license` / `description` / `repository` 元数据已就绪
+>   (内部 path 依赖已补 `version = "0.1.0"`;如需一并发布,改根 `Cargo.toml` 的 `version` 并同步所有 crate)。
+> - 版本更新策略:修改根 `Cargo.toml` 的 `workspace.package.version` 后再执行 `publish_all.sh`,
+>   依赖版本随之统一。
+
+---
+
 ## 库化业务的 GPU 约束
 
-- **GPU 后端仅限 Web 演示**(`wasm32 + feature=gpu`,浏览器 WebGPU):A 档(SPH 受力、颗粒 PBD 接触、光学逐像素、焦散)上 GPU,W7 可运行时接管流体/颗粒 step。
-- **库化交付默认 CPU(rayon 并行)确定性实现,不含 GPU**:桌面 wgpu 在 MinGW 工具链下链接崩溃,且刚体/关节/破碎/软体本就不适合 GPU。
-- 若业务确需 GPU:换非 MinGW 工具链(Linux / macOS / **MSVC VS2019+**)可重新启用 wgpu 桌面后端;或以已验证的 CPU 数值内核为参考实现自写 compute shader。
+- **GPU 后端**:正式路径为 `wasm32 + feature=gpu`(浏览器 WebGPU);桌面原生(`cargo +stable-msvc run --features gpu`)需 **MSVC 工具链**(MinGW 链接 wgpu 崩溃,M3)。
+- **真机已验证(G1/G2,2026-08-11)**:在真实 NVIDIA Quadro P2200 adapter 上跑 W4 SPH / W5 颗粒 wgsl 内核——**GPU 输出 vs wgsl 串行参考逐位一致**(SPH acc MAX≈1.5e-4、颗粒投影逐位 0);**GPU 路径实时规模达标**(SPH 46.6k≈105fps、颗粒 10k≈433fps,见 `docs/perf_gpu_baseline.md`)。
+- **库化交付默认 CPU(rayon 并行)确定性实现**:刚体/关节/破碎/软体不适合 GPU;CPU 路径为 f64 + Jacobi 确定性,适合确定性存档回放 / 网络同步。
+- 业务接入建议:确定性要求高 → CPU 路径;数万实体实时 → GPU 路径(浏览器 WebGPU 或 MSVC 原生 wgpu)。
 
 ---
 
@@ -241,7 +300,18 @@ cargo bench -p phy-demo                 # 性能基线
 | L2 数值确定性(重复 / 存档重放) | ✅ |
 | L3 C ABI(`phy-ffi`,不透明句柄 + panic 守卫) | ✅ |
 | L4 性能基线 + NaN 看门狗 + W7 路由 CPU 验证 | ✅ |
+| B1 休眠/摩擦收敛/slop | ✅ |
+| B2 触发器(sensor) | ✅ |
+| B3 关卡 JSON DSL | ✅ |
+| B4 island 并行(确定性) | ✅ |
+| B5 碰撞层(layers/mask) | ✅ |
+| C2 Unity / Unreal 集成示例 + 发行包 | ✅ |
+| C3 运行时 profiler(`step_with_profile`) | ✅ |
+| C4 游戏 quickstart(README) | ✅ |
+| G1 真机 GPU↔CPU 数值一致性 | ✅ 真实 Quadro P2200 adapter,GPU vs wgsl 参考逐位一致(SPH acc MAX≈1.5e-4、颗粒投影逐位 0) |
+| G2 真机 GPU 实时规模 SLO | ✅ SPH 46.6k≈105fps、颗粒 10k≈433fps(见 `docs/perf_gpu_baseline.md`) |
+| C1 crates.io 发布 | ⏳ 发布准备完成(脚本 `scripts/publish_all.sh` 就绪),待 `cargo login` 后执行 |
 
-剩余:① 文档/doctest 持续补充中;② GPU 数值一致性需浏览器端人工核对(见 `PLAN.md` §5.8 L4-3)。
+剩余:① 文档/doctest 持续补充中;② C1 实际 `cargo publish` 待 crates.io 凭据(发布准备已完成)。
 
 详见 [`PLAN.md`](./PLAN.md)(完整路线图与里程碑记录)。
