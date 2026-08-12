@@ -39,8 +39,8 @@
 | 子项 | 说明 |
 |---|---|
 | `CharacterController` | ✅ 2026-08-12:`crates/phy-rigid/src/character_controller.rs`,kinematic 胶囊体,`update(world,dt,move_dir,want_jump)`:水平移动(归一化×speed) + 垂直重力累积(`vel_y` 跨帧)/跳跃 + `slide` 与场景所有体做胶囊碰撞检测并沿法线推出(落地 grounded/撞墙/爬坡);位置由 CC 直接控制,body vel=0 避免 step 双重积分 |
-| Ragdoll 装配 | ⏳ Ball/Hinge 串起骨骼，Rust 端装配工具（D1 Hinge + D2 Capsule 已具备基础） |
-| 测试 | ✅ `character_falls_to_ground_and_grounded` / `character_can_jump` / `character_moves_horizontally`, 81 phy-rigid + 全 workspace 绿 |
+| Ragdoll 装配 | ✅ 2026-08-12：`crates/phy-rigid/src/ragdoll.rs`,`RagdollBuilder` 给定根位置/朝向/质量把 10 个胶囊肢体(头/躯干/上臂×2/前臂×2/大腿×2/小腿×2)用 Ball(颈/肩/髋) + Hinge(肘/膝,沿 y 轴屈伸) 串成被动布偶,一次性注入 `RigidWorld`;导出 `Ragdoll`/`RagdollLimb`/`RagdollParams` |
+| 测试 | ✅ `character_falls_to_ground_and_grounded` / `character_can_jump` / `character_moves_horizontally` / `ragdoll_assembles_with_correct_counts_and_pose` / `ragdoll_falls_under_gravity_and_stays_connected` / `ragdoll_joints_keep_limbs_attached`(颈/膝锚点分离 <0.25), 84 phy-rigid + 全 workspace 绿 |
 
 **执行顺序**：D1 → D2 → D3 → D4（依赖链：关节 → 碰撞器 → 求解器稳 → 角色/布偶）。
 
@@ -85,4 +85,4 @@
 ## 四、优先级建议
 1. **D1 关节扩充**（游戏向价值最高，求解器可扩展）—— ✅ 已完成。
 2. **GPU pipeline 持久化 + `GpuStrategy` 默认 Auto**（省 CPU 可交付能力）—— ✅ 已完成（复测待办）。
-3. D2 → D3 → D4（D2 ✅、D3 块求解 ✅ 均已完成；**D4 ragdoll 装配待做**）。
+3. D2 → D3 → D4（D2 ✅、D3 块求解 ✅、D4 ragdoll 装配 ✅ 均已完成；四项补齐计划全部收口）。

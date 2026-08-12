@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (n,t1,t2) 正交基), 在单一迭代循环内联合求解, 摩擦锥每步基于最新法向冲量夹紧, 静止堆叠/斜坡更稳。
   切向基由 `tangent_basis(n)` 现算 (Contact 只存法向); 顺带清理原文件内 `build_k3` 的重复定义。
   81 个 phy-rigid 测试全绿 (含 `stacked_boxes_converge_without_jitter` / `warm_start_stabilizes_tall_stack`)。
+- **D4 Ragdoll 装配 (PLAN_NEXT §D4)**: 新增 `crates/phy-rigid/src/ragdoll.rs` 与 `RagdollBuilder`——
+  给定根位置/朝向/质量,自动创建 10 个胶囊肢体(头/躯干/上臂×2/前臂×2/大腿×2/小腿×2),
+  用 Ball 关节(颈/肩/髋,允许各向摆动) + Hinge 关节(肘/膝,沿 y 轴屈伸) 串成被动布偶,
+  一次性注入 `RigidWorld`;导出 `Ragdoll` / `RagdollLimb` / `RagdollParams`。
+  3 个回归测试全绿 (装配计数/站立姿态、重力下整体下落不散架、颈/膝锚点分离 <0.25)。
+  phy-rigid 测试计数升至 84。
 - **GPU pipeline 持久化 + `GpuStrategy` 默认 Auto (PLAN_NEXT §2.3)**: `GpuContext::init()`
   现在一次性预编译全部 5 个 compute pipeline (square/optic/caustic/sph 双 entry/granular 三 entry)
   + 常驻 bind group layout / pipeline layout，存于新增的 `GpuPipelines`，常驻于 `GpuContext.pipelines`。

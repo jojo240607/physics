@@ -24,6 +24,7 @@ pub mod scene;
 pub mod profile;
 pub mod world;
 pub mod character_controller;
+pub mod ragdoll;
 
 pub use shape::{Body, Shape};
 pub use contact::Contact;
@@ -39,6 +40,7 @@ pub use scene::SceneDesc;
 pub use world::RigidWorld;
 pub use profile::StepProfile;
 pub use character_controller::CharacterController;
+pub use ragdoll::{Ragdoll, RagdollBuilder, RagdollLimb, RagdollParams};
 
 #[cfg(test)]
 mod tests {
