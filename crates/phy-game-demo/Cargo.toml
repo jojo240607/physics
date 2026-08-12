@@ -1,0 +1,17 @@
+[package]
+name = "phy-game-demo"
+edition.workspace = true
+version.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+phy-sdk = { path = "../phy-sdk" }
+phy-core = { path = "../phy-core" }
+phy-rigid = { path = "../phy-rigid" }
+phy-math = { path = "../phy-math" }
+phy-demo = { path = "../phy-demo" }
+nalgebra = { workspace = true }
+winit = "0.30"
+softbuffer = "0.4"

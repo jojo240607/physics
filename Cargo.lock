@@ -1813,6 +1813,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "phy-game-demo"
+version = "0.1.0"
+dependencies = [
+ "nalgebra",
+ "phy-core",
+ "phy-demo",
+ "phy-math",
+ "phy-rigid",
+ "phy-sdk",
+ "softbuffer",
+ "winit",
+]
+
+[[package]]
 name = "phy-granular"
 version = "0.1.0"
 dependencies = [

@@ -102,6 +102,10 @@ impl<T: RealField + Copy + NumCast> CharacterController<T> {
             dz = n.z * self.speed * dt;
         }
         // 垂直:未着地累积重力速度;着地归零。跳跃覆盖。
+        // 注:着地时若 vel_y 归零,本帧 dy=0 不再下穿,slide 无法确认接触 → grounded 会丢失。
+        // 故着地时额外施加一个微小向下探测位移(probe),让 slide 仍能检测到接触并维持 grounded;
+        // 若角色已走下台阶(探测不再穿透),slide 返回未着地 → 自然开始下落。
+        let probe = T::from_f64(0.02).unwrap();
         if self.grounded {
             self.vel_y = T::zero();
         } else {
@@ -111,7 +115,12 @@ impl<T: RealField + Copy + NumCast> CharacterController<T> {
             self.vel_y = self.jump_speed;
             self.grounded = false;
         }
-        let dy = self.vel_y * dt;
+        let dy = if self.grounded {
+            // 着地态:用探测位移确认接触,vel_y 保持 0。
+            -probe
+        } else {
+            self.vel_y * dt
+        };
         // slide:检测角色移动后的穿透,修正位置(落地/撞墙)。
         let (final_pos, grounded) = self.slide(world, id, dx, dy, dz);
         world.bodies[id].pos = final_pos;

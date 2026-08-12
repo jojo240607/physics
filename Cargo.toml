@@ -15,6 +15,7 @@ members = [
     "crates/phy-demo-web",
     "crates/phy-ffi",
     "crates/phy-sdk",
+    "crates/phy-game-demo",
 ]
 
 [workspace.package]
