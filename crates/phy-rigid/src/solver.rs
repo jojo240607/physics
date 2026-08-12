@@ -4,6 +4,7 @@
 //! 采用标准 SI 的**累积冲量**形式:每次迭代施加增量 dλ 并把 λ 钳制为非负,
 //! 避免非累积版本在堆叠场景中产生的反向过冲与抖动。
 
+use nalgebra::{Matrix3, Vector3};
 use phy_math::{Mat3, RealField, Vec3};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,58 @@ impl<T: RealField> Default for SolverParams<T> {
             sleep_time: T::from_f64(0.5).unwrap(),      // 持续 0.5s 静止即休眠
         }
     }
+}
+
+/// 3×3 有效质量矩阵(法向 + 两个切向),供 D3 块求解器(`solve_velocity`)使用。
+///
+/// 相对速度由冲量 P 引起的变化满足 `Δv = K · P`,其中
+/// `K = Σ_i (1/m_i)·I + I_i⁻¹ (r_i r_iᵀ − |r_i|²·I)`(i=a,b),
+/// 即每个体的"速度/冲量"有效质量矩阵。块求解器在 (n, t1, t2) 正交基下求解,
+/// 故把世界系 K 投影到该基:`K_basis = Bᵀ · K_world · B`(B 的列即 n/t1/t2)。
+fn build_k3<T: RealField + Copy>(
+    ba: &Body<T>,
+    bb: &Body<T>,
+    ra: &Vec3<T>,
+    rb: &Vec3<T>,
+    n: &Vec3<T>,
+    t1: &Vec3<T>,
+    t2: &Vec3<T>,
+) -> Matrix3<T> {
+    let inv_ma = ba.eff_inv_mass();
+    let inv_mb = bb.eff_inv_mass();
+    let ia = ba.inv_inertia_world();
+    let ib = bb.inv_inertia_world();
+    let ra2 = ra.dot(ra);
+    let rb2 = rb.dot(rb);
+    // 体 a: I⁻¹(r rᵀ − |r|²I) + (1/m)I
+    let mut ka = ia * (ra * ra.transpose()) - ia * ra2;
+    ka += Mat3::identity() * inv_ma;
+    // 体 b:同上
+    let mut kb = ib * (rb * rb.transpose()) - ib * rb2;
+    kb += Mat3::identity() * inv_mb;
+    let k_world = ka + kb;
+    // 投影到 (n, t1, t2) 基
+    let b = Matrix3::new(
+        n.x, t1.x, t2.x,
+        n.y, t1.y, t2.y,
+        n.z, t1.z, t2.z,
+    );
+    b.transpose() * k_world * b
+}
+
+/// 由法向 `n` 构造一组单位正交切向基 (t1, t2),其中 `t2 = n × t1`。
+fn tangent_basis<T: RealField + Copy>(n: &Vec3<T>) -> (Vec3<T>, Vec3<T>) {
+    // 选一个与 n 不平行的参考轴构造 t1。
+    let ref1 = Vec3::new(T::one(), T::zero(), T::zero());
+    let mut t1 = ref1 - n * n.dot(&ref1);
+    if t1.norm() < T::from_f64(1e-9).unwrap() {
+        // n 几乎沿 X:改用 Y 轴。
+        let ref2 = Vec3::new(T::zero(), T::one(), T::zero());
+        t1 = ref2 - n * n.dot(&ref2);
+    }
+    t1 = t1.normalize();
+    let t2 = n.cross(&t1);
+    (t1, t2)
 }
 
 /// 一个接触在求解期的状态(含参与 body 索引、接触几何、累积冲量)。
@@ -111,109 +164,93 @@ pub fn solve_velocity<T: RealField + Copy>(
         bodies[c.b].apply_impulse_at(pt, rb);
     }
 
-    // B1: 法向求解在主迭代中完成。
+    // D3 块求解器(Box2D 同款):法向 + 两个切向摩擦方向耦合进 3×3 有效质量矩阵,
+    // 在**单一迭代循环**内联合求解(而非先解完法向再解摩擦)。好处:摩擦锥在每步迭代都
+    // 基于最新法向冲量夹紧,静止堆叠/斜坡上物体更稳定,不再出现法向与摩擦相互拉扯的抖动。
     for _ in 0..params.iterations {
         for c in constraints.iter_mut() {
             let n = c.contact.normal;
-            let ia = bodies[c.a].inv_inertia_world();
-            let ib = bodies[c.b].inv_inertia_world();
-            let ra = c.contact.point - bodies[c.a].pos;
-            let rb = c.contact.point - bodies[c.b].pos;
-            // 有效质量(法向): m_eff = 1 / (effInvMa + effInvMb + nᵀ(Ia⁻¹(ra×n)×ra + Ib⁻¹(rb×n)×rb))
-            // B2: 运动学体 eff_inv_mass=0,不被接触冲量驱动(但按自身 vel 主动移动并推开动态体)。
+            // 由法向构造正交切向基(Contact 只存法向,切向基数值求解时现算)。
+            let (t1, t2) = tangent_basis(&n);
+
             let inv_sum = bodies[c.a].eff_inv_mass() + bodies[c.b].eff_inv_mass();
             if inv_sum <= T::zero() {
                 continue;
             }
-            let angular_term = |r: Vec3<T>, inv: Mat3<T>| -> T {
-                let rn = r.cross(&n);
-                let t = inv * rn;
-                rn.dot(&t)
-            };
-            let denom = inv_sum + angular_term(ra, ia) + angular_term(rb, ib);
-            if denom <= T::from_f64(1e-12).unwrap() {
-                continue;
-            }
 
-            // ---- 法向(累积增量) ----
-            // 相对速度含角速度项: v_rel = (vb + ωb×rb) - (va + ωa×ra)
+            let ra = c.contact.point - bodies[c.a].pos;
+            let rb = c.contact.point - bodies[c.b].pos;
+            // 3×3 有效质量矩阵 K(Box2D 块求解核心),来自 build_K3:
+            //   K = Σ 1/m_i * (E₃ - [r×](I_i⁻¹)[r×]ᵀ) 对 i=a,b
+            // 各列对应 (法向, 切向1, 切向2)。
+            let k3 = build_k3(&bodies[c.a], &bodies[c.b], &ra, &rb, &n, &t1, &t2);
+            let mass = Matrix3::new(
+                k3[(0, 0)], k3[(0, 1)], k3[(0, 2)],
+                k3[(1, 0)], k3[(1, 1)], k3[(1, 2)],
+                k3[(2, 0)], k3[(2, 1)], k3[(2, 2)],
+            );
+            // 奇异(K 退化,如运动学体只一个运动分量)→ 跳过本约束。
+            let inv_mass = match mass.try_inverse() {
+                Some(im) => im,
+                None => continue,
+            };
+
+            // 累积冲量初值(warm-start 已把上一帧值打入速度)
+            let mut pn = c.normal_impulse;
+            let mut pt1 = c.tangent_impulse.dot(&t1);
+            let mut pt2 = c.tangent_impulse.dot(&t2);
+
+            // 相对速度(含角速度项)
             let va = bodies[c.a].vel + bodies[c.a].ang_vel.cross(&ra);
             let vb = bodies[c.b].vel + bodies[c.b].ang_vel.cross(&rb);
             let rel_v = vb - va;
             let vn = rel_v.dot(&n);
-            // 增量冲量:把法向相对速度消除(含恢复系数)
-            let dlambda = -(T::one() + e) * vn / denom;
-            let new_lambda = if c.normal_impulse + dlambda > T::zero() {
-                c.normal_impulse + dlambda
-            } else {
-                T::zero()
-            };
-            let applied = new_lambda - c.normal_impulse;
-            c.normal_impulse = new_lambda;
-            let imp = n * applied;
-            bodies[c.a].apply_impulse_at(-imp, ra);
-            bodies[c.b].apply_impulse_at(imp, rb);
-        }
-    }
+            let vt1 = rel_v.dot(&t1);
+            let vt2 = rel_v.dot(&t2);
 
-    // B1: 摩擦独立子迭代(收敛上限 = friction_iterations)。法向冲量已固定,
-    // 此阶段只调整切向冲量使其收敛到库仑锥,不回写体速度之外的新法向分量。
-    let fiter = if params.friction_iterations == 0 {
-        params.iterations
-    } else {
-        params.friction_iterations
-    };
-    for _ in 0..fiter {
-        for c in constraints.iter_mut() {
-            let n = c.contact.normal;
-            let ia = bodies[c.a].inv_inertia_world();
-            let ib = bodies[c.b].inv_inertia_world();
-            let ra = c.contact.point - bodies[c.a].pos;
-            let rb = c.contact.point - bodies[c.b].pos;
-            let inv_sum = bodies[c.a].eff_inv_mass() + bodies[c.b].eff_inv_mass();
-            if inv_sum <= T::zero() {
-                continue;
+            // 3×3 块求解:目标冲量 = -K⁻¹ · v_rel(把相对速度消除;恢复系数在法向侧加)
+            let col = Vector3::new((T::one() + e) * vn, vt1, vt2);
+            let p = inv_mass * col;
+            let mut d_pn = -p[0];
+            let mut d_pt1 = -p[1];
+            let mut d_pt2 = -p[2];
+
+            // 法向夹紧(累积非负)
+            let new_pn = pn + d_pn;
+            if new_pn < T::zero() {
+                d_pn = -pn;
+                pn = T::zero();
+            } else {
+                pn = new_pn;
             }
-            let angular_term = |r: Vec3<T>, inv: Mat3<T>| -> T {
-                let rn = r.cross(&n);
-                let t = inv * rn;
-                rn.dot(&t)
-            };
-            let va = bodies[c.a].vel + bodies[c.a].ang_vel.cross(&ra);
-            let vb = bodies[c.b].vel + bodies[c.b].ang_vel.cross(&rb);
-            let rel_v = vb - va;
-            let vn_now = rel_v.dot(&n);
-            let tangent = rel_v - n * vn_now;
-            let tlen = tangent.norm();
-            if tlen > T::from_f64(1e-9).unwrap() {
-                let t = tangent / tlen;
-                let vt = rel_v.dot(&t);
-                let denom_t = inv_sum
-                    + angular_term(ra, ia)
-                    + angular_term(rb, ib);
-                let dlt = if denom_t > T::from_f64(1e-12).unwrap() {
-                    -vt / denom_t
-                } else {
-                    T::zero()
-                };
-                // 库仑摩擦: |λ_t| <= μ * λ_n(法向冲量已在此阶段固定)
-                let max_lt = mu * c.normal_impulse;
-                let cur_lt = c.tangent_impulse.norm();
-                let new_lt = if cur_lt + dlt.abs() > max_lt {
-                    if dlt > T::zero() {
-                        max_lt
-                    } else {
-                        -max_lt
-                    }
-                } else {
-                    cur_lt + dlt
-                };
-                let applied_t = new_lt - cur_lt;
-                c.tangent_impulse = t * new_lt;
-                let imp_t = t * applied_t;
-                bodies[c.a].apply_impulse_at(-imp_t, ra);
-                bodies[c.b].apply_impulse_at(imp_t, rb);
+
+            // 摩擦锥夹紧(基于最新法向冲量,块求解核心):
+            // 切向冲量幅值 |(pt1,pt2)| <= μ * pn
+            let mut new_pt1 = pt1 + d_pt1;
+            let mut new_pt2 = pt2 + d_pt2;
+            let max_f = mu * pn;
+            let fmag2 = new_pt1 * new_pt1 + new_pt2 * new_pt2;
+            if fmag2 > max_f * max_f && fmag2 > T::zero() {
+                let scale = max_f / fmag2.sqrt();
+                new_pt1 *= scale;
+                new_pt2 *= scale;
+                d_pt1 = new_pt1 - pt1;
+                d_pt2 = new_pt2 - pt2;
+                pt1 = new_pt1;
+                pt2 = new_pt2;
+            } else {
+                pt1 = new_pt1;
+                pt2 = new_pt2;
             }
+
+            // 应用本次增量冲量
+            let pvec = n * d_pn + t1 * d_pt1 + t2 * d_pt2;
+            bodies[c.a].apply_impulse_at(-pvec, ra);
+            bodies[c.b].apply_impulse_at(pvec, rb);
+
+            // 写回累积冲量(供 warm-start 缓存 / 渲染 / 位置层使用)
+            c.normal_impulse = pn;
+            c.tangent_impulse = t1 * pt1 + t2 * pt2;
         }
     }
 }

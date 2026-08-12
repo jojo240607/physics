@@ -10,15 +10,102 @@
 
 use wgpu::util::DeviceExt;
 
-/// WebGPU 上下文:持有 device/queue,提供 compute 原型。
+/// GPU 加速策略(API 层默认 Auto)。
+///
+/// - `Auto`:有可用 adapter 就用 GPU,否则自动回退 CPU(默认)。
+/// - `ForceGpu`:强制走 GPU;无 adapter 时 `plan()` 直接报错(便于 CI/调测暴露问题)。
+/// - `ForceCpu`:强制走 CPU,任何情况下都不初始化 GPU(便于在共享 GPU 环境/无头机器上跳过)。
+///
+/// 用途:在 web/桌面 demo 入口、各 `render_*_gpu` 内部根据此枚举决定 GPU/CPU 路由,
+/// 实现 §2.3 的"GpuStrategy 默认 Auto"。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuStrategy {
+    Auto,
+    ForceGpu,
+    ForceCpu,
+}
+
+impl Default for GpuStrategy {
+    fn default() -> Self {
+        GpuStrategy::Auto
+    }
+}
+
+impl GpuStrategy {
+    /// 给定 GPU adapter 是否可用,返回是否应当走 GPU 路径。
+    /// `Auto`:adapter 可用即 true;`ForceGpu`:要求 adapter 可用,否则 Err;`ForceCpu`:恒 false。
+    pub fn plan(self, gpu_available: bool) -> Result<bool, String> {
+        match self {
+            GpuStrategy::Auto => Ok(gpu_available),
+            GpuStrategy::ForceCpu => Ok(false),
+            GpuStrategy::ForceGpu => {
+                if gpu_available {
+                    Ok(true)
+                } else {
+                    Err("GpuStrategy::ForceGpu 要求 GPU adapter 可用,但当前不可用".to_string())
+                }
+            }
+        }
+    }
+}
+
+/// 预编译并常驻的 GPU 管线集合。
+///
+/// 所有核(square/optic/caustic/sph/granular)的 shader 模块与 compute pipeline
+/// 在 `GpuContext::init()` 时一次性编译,之后每个渲染/步进调用只重建"按输入尺寸变化"
+/// 的 data buffer 与 bind group,复用这里的 pipeline —— 这是 §2.3 的"GPU 管线持久化"
+/// (消除每帧重新编译 pipeline 的开销)。
+pub struct GpuPipelines {
+    pub square: wgpu::ComputePipeline,
+    pub optic: wgpu::ComputePipeline,
+    pub caustic: wgpu::ComputePipeline,
+    pub sph: wgpu::ComputePipeline,
+    pub granular: wgpu::ComputePipeline,
+    // SPH 用自定义 bind group layout + pipeline layout(两个 entry point 共享),需一并常驻。
+    pub sph_bgl: wgpu::BindGroupLayout,
+    pub sph_pl: wgpu::PipelineLayout,
+    pub sph_dens: wgpu::ComputePipeline,
+    pub sph_force: wgpu::ComputePipeline,
+    // granular 用自定义 bind group layout(8 绑定),需一并常驻。
+    pub granular_bgl: wgpu::BindGroupLayout,
+    pub granular_pl: wgpu::PipelineLayout,
+    pub granular_dens: wgpu::ComputePipeline,
+    pub granular_pred: wgpu::ComputePipeline,
+    pub granular_solve: wgpu::ComputePipeline,
+}
+
+/// WebGPU 上下文:持有 device/queue + 常驻管线缓存,提供 compute 原型。
+///
+/// `init()` 只应调用一次(上层用 `Rc<RefCell<Option<GpuContext>>>` 缓存);其返回的
+/// `pipelines` 永久有效,后续每帧渲染/步进直接复用,不再重编译。
 pub struct GpuContext {
+    pub adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// 一次性预编译的常驻管线,所有核共享。
+    pub pipelines: GpuPipelines,
 }
 
 impl GpuContext {
-    /// 异步申请 adapter/device/queue。浏览器里必须走 async(await navigator.gpu.requestAdapter)。
+    /// 异步申请 adapter/device/queue,并预编译全部 compute 管线。
+    /// 浏览器里必须走 async(await navigator.gpu.requestAdapter)。
+    ///
+    /// 注意:本函数有 pipeline 编译开销,仅应在启动时调用一次;返回的 `pipelines` 常驻,
+    /// 之后每帧渲染/步进复用,不再重编译(§2.3 GPU 管线持久化)。
     pub async fn init() -> Result<GpuContext, String> {
+        Self::init_with(GpuStrategy::Auto).await
+    }
+
+    /// 带策略的初始化:根据 `strategy` 决定是否走 GPU 路径(§2.3 GpuStrategy 默认 Auto)。
+    ///
+    /// - `Auto`:有 adapter 就用 GPU,否则 `request_adapter` 失败(上层回退 CPU)。
+    /// - `ForceCpu`:直接返回专门错误,调用方应据此走 CPU,不初始化 GPU。
+    /// - `ForceGpu`:要求 adapter 必须可用,否则返回明确错误(便于 CI/调测暴露问题)。
+    pub async fn init_with(strategy: GpuStrategy) -> Result<GpuContext, String> {
+        // ForceCpu:不碰 adapter,直接报错让上层回退。
+        if let GpuStrategy::ForceCpu = strategy {
+            return Err("GpuStrategy::ForceCpu:已强制 CPU,跳过 GPU 初始化".to_string());
+        }
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -29,6 +116,11 @@ impl GpuContext {
             })
             .await
             .map_err(|e| format!("request_adapter 失败: {:?}", e))?;
+        // ForceGpu 要求 adapter 可用,这里 adapter 已拿到,plan 必为 Ok(true);
+        // 若将来 adapter 拿到但策略判定不可用(极端),给出明确错误。
+        if let Err(msg) = strategy.plan(true) {
+            return Err(msg);
+        }
         // 关键:M1 验收在真实浏览器发现 wgpu 0.20 的 `Limits::default()` /
         // `downlevel_defaults()` 会把 `max_inter_stage_shader_components` 等字段设成
         // 非 None 值,而浏览器端 WebGPU 规范已移除/重命名该 limit,`requestDevice`
@@ -53,7 +145,48 @@ impl GpuContext {
             )
             .await
             .map_err(|e| format!("request_device 失败: {:?}", e))?;
-        Ok(GpuContext { device, queue })
+
+        let mk_pipeline = |device: &wgpu::Device, label: &str, src: &'static str| {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(src)),
+            });
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(&format!("{}_pipe", label)),
+                layout: None,
+                module: &shader,
+                entry_point: Some("main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            })
+        };
+
+        let (sph_bgl, sph_pl, sph_dens, sph_force) = build_sph_pipelines(&device);
+        let (granular_bgl, granular_pl, granular_dens, granular_pred, granular_solve) =
+            build_granular_pipelines(&device);
+
+        let pipelines = GpuPipelines {
+            square: mk_pipeline(&device, "square", SQUARE_WGSL),
+            optic: mk_pipeline(&device, "optic", OPTIC_WGSL),
+            caustic: mk_pipeline(&device, "caustic", CAUSTIC_WGSL),
+            sph: mk_pipeline(&device, "sph", SPH_WGSL),
+            granular: mk_pipeline(&device, "granular", GRANULAR_WGSL),
+            sph_bgl,
+            sph_pl,
+            sph_dens,
+            sph_force,
+            granular_bgl,
+            granular_pl,
+            granular_dens,
+            granular_pred,
+            granular_solve,
+        };
+        Ok(GpuContext {
+            adapter,
+            device,
+            queue,
+            pipelines,
+        })
     }
 
     /// 最小 compute 原型:对 `data` 中每个 f32 求平方,返回新 buffer。
@@ -86,22 +219,7 @@ impl GpuContext {
             mapped_at_creation: false,
         });
 
-        let shader = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("square"),
-                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(SQUARE_WGSL)),
-            });
-        let pipeline = self
-            .device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("square_pipe"),
-                layout: None,
-                module: &shader,
-                entry_point: Some("main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
-            });
+        let pipeline = &self.pipelines.square;
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("square_bg"),
             layout: &pipeline.get_bind_group_layout(0),
@@ -127,7 +245,7 @@ impl GpuContext {
                 label: Some("square_pass"),
                 ..Default::default()
             });
-            pass.set_pipeline(&pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             // one thread per element, 64 workgroup size。
             pass.dispatch_workgroups(((n + 63) / 64) as u32, 1, 1);
@@ -153,6 +271,220 @@ impl GpuContext {
         read_buf.unmap();
         Ok(out)
     }
+}
+
+/// SPH 核的常驻管线构造:8 绑定的 bind group layout + 共享 pipeline layout +
+/// 两个 entry point(density_main / force_main)。在 `GpuContext::init()` 中调用一次,
+/// 之后每个 `render_sph_gpu` 调用复用,消除每帧重编译(§2.3 GPU 管线持久化)。
+fn build_sph_pipelines(
+    device: &wgpu::Device,
+) -> (
+    wgpu::BindGroupLayout,
+    wgpu::PipelineLayout,
+    wgpu::ComputePipeline,
+    wgpu::ComputePipeline,
+) {
+    let sph_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("sph_bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 6,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 7,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    });
+    let sph_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("sph_pl"),
+        bind_group_layouts: &[Some(&sph_bgl)],
+        immediate_size: 0,
+    });
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("sph"),
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(SPH_WGSL)),
+    });
+    let mk = |entry: &str| -> wgpu::ComputePipeline {
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(entry),
+            layout: Some(&sph_pl),
+            module: &module,
+            entry_point: Some(entry),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        })
+    };
+    let sph_dens = mk("density_main");
+    let sph_force = mk("force_main");
+    (sph_bgl, sph_pl, sph_dens, sph_force)
+}
+
+/// granular 核的常驻管线构造:5 绑定的 bind group layout + 共享 pipeline layout +
+/// 三个 entry point(clear_main / contact_main / apply_main)。在 `GpuContext::init()` 中
+/// 调用一次,之后每个 `render_granular_gpu` 调用复用(§2.3 GPU 管线持久化)。
+fn build_granular_pipelines(
+    device: &wgpu::Device,
+) -> (
+    wgpu::BindGroupLayout,
+    wgpu::PipelineLayout,
+    wgpu::ComputePipeline,
+    wgpu::ComputePipeline,
+    wgpu::ComputePipeline,
+) {
+    // 显式 bind group layout:auto-layout 只会包含各 entry point 实际用到的
+    // binding(clear_main 只用 deltas=>仅 binding4),导致共用 bind group 失败。
+    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("gran_bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    });
+    let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("gran_pl"),
+        bind_group_layouts: &[Some(&bgl)],
+        immediate_size: 0,
+    });
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("gran_wgsl"),
+        source: wgpu::ShaderSource::Wgsl(GRANULAR_WGSL.into()),
+    });
+    let mk = |entry: &str| -> wgpu::ComputePipeline {
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(entry),
+            layout: Some(&pl),
+            module: &module,
+            entry_point: Some(entry),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        })
+    };
+    let granular_dens = mk("clear_main");
+    let granular_pred = mk("contact_main");
+    let granular_solve = mk("apply_main");
+    (bgl, pl, granular_dens, granular_pred, granular_solve)
 }
 
 /// W1 原型 kernel:逐元素平方(one thread per element)。
@@ -259,7 +591,11 @@ fn flatten_scene(scene: &OpticScene<f32>) -> Option<Vec<BodyGpu>> {
         let (geo, kind) = match &ob.body.shape {
             Shape::Sphere { r } => ([*r, 0.0, 0.0, 0.0], 0u32),
             Shape::Box { half } => ([half.x, half.y, half.z, 0.0], 1u32),
-            Shape::Convex { .. } => return None, // GPU 暂不支持
+            // GPU 暂不支持凸体 / 胶囊 / 高度场 / 复合体:直接回退 CPU 渲染。
+            Shape::Convex { .. }
+            | Shape::Capsule { .. }
+            | Shape::Heightfield { .. }
+            | Shape::Compound { .. } => return None,
         };
         out.push(BodyGpu {
             pos_kind: [p.x, p.y, p.z, kind as f32],
@@ -339,22 +675,7 @@ pub async fn render_camera_gpu(
         mapped_at_creation: false,
     });
 
-    let shader = ctx
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("optic"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(OPTIC_WGSL)),
-        });
-    let pipeline = ctx
-        .device
-        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("optic_pipe"),
-            layout: None,
-            module: &shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
+    let pipeline = &ctx.pipelines.optic;
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("optic_bg"),
         layout: &pipeline.get_bind_group_layout(0),
@@ -384,7 +705,7 @@ pub async fn render_camera_gpu(
             label: Some("optic_pass"),
             ..Default::default()
         });
-        pass.set_pipeline(&pipeline);
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(((px + 63) / 64) as u32, 1, 1);
     }
@@ -712,22 +1033,7 @@ pub async fn render_caustics_gpu(
         mapped_at_creation: false,
     });
 
-    let shader = ctx
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("caustic"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(CAUSTIC_WGSL)),
-        });
-    let pipeline = ctx
-        .device
-        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("caustic_pipe"),
-            layout: None,
-            module: &shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
+    let pipeline = &ctx.pipelines.caustic;
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("caustic_bg"),
         layout: &pipeline.get_bind_group_layout(0),
@@ -757,7 +1063,7 @@ pub async fn render_caustics_gpu(
             label: Some("caustic_pass"),
             ..Default::default()
         });
-        pass.set_pipeline(&pipeline);
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(((n + 63) / 64) as u32, 1, 1);
     }
@@ -1110,123 +1416,13 @@ pub async fn render_sph_gpu(
         mapped_at_creation: false,
     });
 
-    let shader = ctx
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("sph"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(SPH_WGSL)),
-        });
-    let module = &shader;
-    let sph_bgl = ctx
-        .device
-        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("sph_bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-    let sph_pl = ctx
-        .device
-        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("sph_pl"),
-            bind_group_layouts: &[Some(&sph_bgl)],
-            immediate_size: 0,
-        });
-    let layout = |entry: &str| -> wgpu::ComputePipeline {
-        ctx.device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&sph_pl),
-                module,
-                entry_point: Some(entry),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
-            })
-    };
-    let p_dens = layout("density_main");
-    let p_force = layout("force_main");
+    let sph_bgl = &ctx.pipelines.sph_bgl;
+    let _sph_pl = &ctx.pipelines.sph_pl;
+    let p_dens = &ctx.pipelines.sph_dens;
+    let p_force = &ctx.pipelines.sph_force;
     let bind = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("sph_bg"),
-        layout: &sph_bgl,
+        layout: sph_bgl,
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: uni_buf.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: pos_buf.as_entire_binding() },
@@ -1251,7 +1447,7 @@ pub async fn render_sph_gpu(
             label: Some("dens"),
             ..Default::default()
         });
-        pass.set_pipeline(&p_dens);
+        pass.set_pipeline(p_dens);
         pass.set_bind_group(0, bg, &[]);
         pass.dispatch_workgroups(((n + 63) / 64) as u32, 1, 1);
     }
@@ -1261,7 +1457,7 @@ pub async fn render_sph_gpu(
             label: Some("force"),
             ..Default::default()
         });
-        pass.set_pipeline(&p_force);
+        pass.set_pipeline(p_force);
         pass.set_bind_group(0, bg, &[]);
         pass.dispatch_workgroups(((n + 63) / 64) as u32, 1, 1);
     }
@@ -1669,98 +1865,17 @@ pub async fn render_granular_gpu(
         mapped_at_creation: false,
     });
 
-    // 模块 + 三个 pipeline。
-    let module = ctx
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("gran_wgsl"),
-            source: wgpu::ShaderSource::Wgsl(GRANULAR_WGSL.into()),
-        });
-    // 显式 bind group layout:auto-layout 只会包含各 entry point 实际用到的
-    // binding(clear_main 只用 deltas=>仅 binding4),导致共用 bind group 失败。
-    let bgl = ctx
-        .device
-        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("gran_bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-    let pl = ctx
-        .device
-        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("gran_pl"),
-            bind_group_layouts: &[Some(&bgl)],
-            immediate_size: 0,
-        });
-    let mk = |entry: &str| {
-        ctx.device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pl),
-                module: &module,
-                entry_point: Some(entry),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
-            })
-    };
-    let p_clear = mk("clear_main");
-    let p_contact = mk("contact_main");
-    let p_apply = mk("apply_main");
+    // 复用常驻管线(见 `GpuContext::init` 中的 `build_granular_pipelines`)。
+    let bgl = &ctx.pipelines.granular_bgl;
+    let _pl = &ctx.pipelines.granular_pl;
+    let p_clear = &ctx.pipelines.granular_dens;
+    let p_contact = &ctx.pipelines.granular_pred;
+    let p_apply = &ctx.pipelines.granular_solve;
     let bind = |_: &wgpu::ComputePipeline| {
         ctx.device
             .create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("gran_bg"),
-                layout: &bgl,
+                layout: bgl,
                 entries: &[
                     wgpu::BindGroupEntry { binding: 0, resource: uni_buf.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 1, resource: pos_buf.as_entire_binding() },
@@ -1770,7 +1885,7 @@ pub async fn render_granular_gpu(
                 ],
             })
     };
-    let bg = bind(&p_clear);
+    let bg = bind(p_clear);
 
     let wg = 64u32;
     let iters = flat.iterations.max(1) as usize;

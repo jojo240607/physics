@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **D3 块求解器 (PLAN_NEXT §D3)**: `phy-rigid` 的 `solve_velocity` 改为 Box2D 同款 3×3 块求解——法向 +
+  两个切向摩擦方向耦合进单个有效质量矩阵 (`build_k3`, 由 `K = Σ (1/m)I + I⁻¹(r rᵀ−|r|²I)` 投影到
+  (n,t1,t2) 正交基), 在单一迭代循环内联合求解, 摩擦锥每步基于最新法向冲量夹紧, 静止堆叠/斜坡更稳。
+  切向基由 `tangent_basis(n)` 现算 (Contact 只存法向); 顺带清理原文件内 `build_k3` 的重复定义。
+  81 个 phy-rigid 测试全绿 (含 `stacked_boxes_converge_without_jitter` / `warm_start_stabilizes_tall_stack`)。
+- **GPU pipeline 持久化 + `GpuStrategy` 默认 Auto (PLAN_NEXT §2.3)**: `GpuContext::init()`
+  现在一次性预编译全部 5 个 compute pipeline (square/optic/caustic/sph 双 entry/granular 三 entry)
+  + 常驻 bind group layout / pipeline layout，存于新增的 `GpuPipelines`，常驻于 `GpuContext.pipelines`。
+  各 `render_*_gpu` / `step_*_gpu` 不再每帧重建 pipeline/shader，只重建按输入尺寸变化的 data buffer +
+  bind group 并复用常驻 pipeline。`GpuStrategy` 枚举 (Auto/ForceGpu/ForceCpu, 默认 Auto) 经
+  `GpuContext::init_with(strategy)` 与 Web `DemoApp::set_gpu_strategy` 暴露，无 adapter / ForceCpu 时
+  自动回退 CPU 帧，确定性不破坏。顺带修复 `flatten_scene` 对 `Shape` 新变种 (Capsule/Heightfield/Compound)
+  的非穷尽匹配编译失败。
 - **Rigid body sleeping (B1, commercial-readiness plan §11)**: `Body` gains
   `sleeping` / `sleep_time` flags; `SolverParams` gains `sleep_lin_vel2`,
   `sleep_ang_vel2`, `sleep_time` thresholds (default ~0.1 m/s, 0.5 s). Near-rest

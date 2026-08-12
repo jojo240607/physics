@@ -50,6 +50,8 @@ pub struct DemoApp {
     gpu: std::rc::Rc<std::cell::RefCell<Option<crate::gpu::GpuContext>>>,
     #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
     gpu_mode: bool,
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    gpu_strategy: crate::gpu::GpuStrategy,
 }
 
 #[wasm_bindgen]
@@ -80,6 +82,8 @@ impl DemoApp {
             gpu: std::rc::Rc::new(std::cell::RefCell::new(None)),
             #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
             gpu_mode: false,
+            #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+            gpu_strategy: crate::gpu::GpuStrategy::Auto,
         })
     }
 
@@ -227,6 +231,19 @@ impl DemoApp {
         self.gpu_mode
     }
 
+    /// 设置 GPU 加速策略(§2.3:默认 Auto)。`Auto`=有 adapter 用 GPU 否则回退 CPU;
+    /// `ForceGpu`=强制 GPU(无 adapter 报错);`ForceCpu`=强制 CPU(不初始化 GPU)。
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    pub fn set_gpu_strategy(&mut self, strategy: crate::gpu::GpuStrategy) {
+        self.gpu_strategy = strategy;
+    }
+
+    /// 查询当前 GPU 加速策略(仅 wasm + gpu feature 构建有效)。
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    pub fn get_gpu_strategy(&self) -> crate::gpu::GpuStrategy {
+        self.gpu_strategy
+    }
+
     /// 异步帧:当 GPU 模式开启时,流体 / 颗粒子系统的力学 step 走 GPU compute 写回
     /// `World<f64>`,其余子系统与 `couple` 走 CPU。由 JS 端 `await app.frame_gpu()` 驱动。
     #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
@@ -238,9 +255,26 @@ impl DemoApp {
         let canvas = self.canvas.clone();
         let ctx2d = self.ctx.clone();
         let fut = async move {
-            // 惰性初始化 GPU 上下文(持久化在 Rc<RefCell> 中)。
+            // 惰性初始化 GPU 上下文(持久化在 Rc<RefCell> 中)。按策略决定:
+            // ForceCpu 不初始化 GPU,直接走 CPU 帧(等价于 frame())。
             if gpu_rc.borrow().is_none() {
-                *gpu_rc.borrow_mut() = Some(crate::gpu::GpuContext::init().await?);
+                match crate::gpu::GpuContext::init_with(self.gpu_strategy).await {
+                    Ok(ctx) => {
+                        *gpu_rc.borrow_mut() = Some(ctx);
+                    }
+                    Err(e) => {
+                        // 策略要求回退 CPU(ForceCpu 或无 adapter 的 Auto):走纯 CPU 帧。
+                        let mut st = (*st_rc).borrow_mut();
+                        let st = &mut *st;
+                        if !st.paused {
+                            st.scene.step(1.0f32 / 60.0);
+                        }
+                        st.fb.clear();
+                        st.scene.render(&mut st.fb, &st.cam);
+                        present(&canvas, &ctx2d, &st.fb);
+                        return Ok::<(), String>(());
+                    }
+                }
             }
             let ctx_guard = gpu_rc.borrow();
             let ctx = ctx_guard.as_ref().unwrap();
