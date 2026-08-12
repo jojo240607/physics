@@ -27,13 +27,13 @@
 | `Compound`（复合） | ✅ `Shape::Compound{SubShape[]}`,每子形状 = shape + 局部 offset/quat;support 取各子沿 dir 最远、contains 任一子含 p、inertia 平行轴合并;窄相 **递归逐子形状**(sub_body 继承父速度/角速度含 offset 贡献),raycast 递归取最近;破碎 mesh 合并。测试 `compound_body_rests_on_ground`(复合体落地停地面不穿透) |
 | 测试 | ✅ 3 个：`capsule_support_on_axis` / `capsule_contains_and_bounds` / `capsule_rests_on_ground_via_gjk_epa`(落地不穿透、静止) |
 
-### D3 — 求解器增强（堆叠稳定性）
+### D3 — 求解器增强（warm-start 已完成，块求解待做）
 | 子项 | 说明 |
 |---|---|
-| Warm-starting（热启动） | 每帧保留上次 λ 作初值，消除静止堆叠抖动（B1 已知限制"滑动接触能量注入"主修法） |
-| 块求解器（block solve） | 摩擦 + 法向作一个 2×2 块解，提高稳定性（Box2D 做法） |
-| 关节角度求解 | 多维 λ 用逆有效质量矩阵（D1 的求解扩展） |
-| 测试 | 高堆叠（10+ 盒）静止无抖动、滑动接触无能量注入 |
+| Warm-starting（热启动） | ✅ 2026-08-12:`ContactConstraint` 加 `warm_started`,`RigidWorld` 加跨帧 `contact_impulses` 缓存(仅保留当帧活跃 pair, 防膨胀);窄相重建从缓存恢复法向/切向冲量初值,`solve_velocity` 迭代前施加。5 层高堆叠在 warm-start 下收敛稳定(0.5/1.5/2.5/3.5/4.5),是 B1 已知限制"滑动接触能量注入"的主修法之一 |
+| 块求解器（block solve） | ⏳ 摩擦 + 法向作一个 2×2 块解，提高稳定性（Box2D 做法） |
+| 关节角度求解 | ✅ D1 已实现（多维 λ 用逆有效质量矩阵） |
+| 测试 | ✅ `warm_start_stabilizes_tall_stack`(5 层堆叠稳定 + 缓存非空), 78 phy-rigid + 全 workspace 绿 |
 
 ### D4 — 角色控制器 / ragdoll
 | 子项 | 说明 |

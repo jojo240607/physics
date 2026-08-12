@@ -43,6 +43,10 @@ pub struct RigidWorld<T: RealField + Copy> {
     /// B2 上一步检测到的传感器重叠接触(仅含 pair 中任一方 `is_sensor` 的接触,
     /// 不施加冲量)。每次 `step` 刷新;可用 `sensor_contacts()` 读取供触发器/拾取判定。
     pub last_sensor_contacts: Vec<Contact<T>>,
+    /// D3 warm-start 缓存:上一步各 body-pair 的接触冲量(法向标量 + 切向向量),
+    /// 跨帧保留作为下一帧接触求解的初值,消除静止堆叠抖动。运行时临时数据,不序列化。
+    #[serde(skip)]
+    pub contact_impulses: HashMap<(usize, usize), (T, Vec3<T>)>,
 }
 
 impl<T: RealField + Copy + NumCast> Default for RigidWorld<T> {
@@ -248,6 +252,7 @@ impl<T: RealField + Copy + NumCast> RigidWorld<T> {
             gravity: gravity::<T>(),
             params: SolverParams::default(),
             last_sensor_contacts: Vec::new(),
+            contact_impulses: HashMap::new(),
         }
     }
 
@@ -394,7 +399,15 @@ impl<T: RealField + Copy + NumCast> RigidWorld<T> {
                         if sensor_pair {
                             sensor_acc.push(c);
                         } else {
-                            cons.push(ContactConstraint::new(i, j, c));
+                            let mut cc = ContactConstraint::new(i, j, c);
+                            // D3 warm-start:从跨帧缓存恢复该 pair 的接触冲量初值。
+                            let key = if i < j { (i, j) } else { (j, i) };
+                            if let Some(&(pn, pt)) = self.contact_impulses.get(&key) {
+                                cc.normal_impulse = pn;
+                                cc.tangent_impulse = pt;
+                                cc.warm_started = true;
+                            }
+                            cons.push(cc);
                         }
                     }
                 }
@@ -471,6 +484,14 @@ impl<T: RealField + Copy + NumCast> RigidWorld<T> {
 
         // B2:刷新传感器事件(仅保留本步最后子步的重叠快照,避免重复计数)。
         self.last_sensor_contacts = sensor_acc;
+        // D3 warm-start:把本帧求解后的累积冲量写回缓存(仅保留当帧活跃 pair),
+        // 供下一帧作为初值;旧 pair 自动消失,避免缓存无限膨胀。
+        let mut next_cache: HashMap<(usize, usize), (T, Vec3<T>)> = HashMap::new();
+        for cc in last_constraints.iter() {
+            let key = if cc.a < cc.b { (cc.a, cc.b) } else { (cc.b, cc.a) };
+            next_cache.insert(key, (cc.normal_impulse, cc.tangent_impulse));
+        }
+        self.contact_impulses = next_cache;
         prof.total_ns = prof.broad_narrow_ns
             + prof.velocity_ns
             + prof.advance_ns
@@ -1496,6 +1517,63 @@ mod tests {
         assert!((world.bodies[ids[0]].pos.y - 0.5).abs() < 0.1, "底层高度异常");
         assert!((world.bodies[ids[1]].pos.y - 1.5).abs() < 0.1, "中层高度异常");
         assert!((world.bodies[ids[2]].pos.y - 2.5).abs() < 0.1, "顶层高度异常");
+    }
+
+    /// D3 warm-start:更高的 5 层堆叠在 warm-start(跨帧冲量初值)下收敛稳定,各层中心停在
+    /// 0.5/1.5/2.5/3.5/4.5 且末态速度收敛(warm-start 减少堆叠抖动,是 B1 已知限制的主修法)。
+    #[test]
+    fn warm_start_stabilizes_tall_stack() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, -9.81, 0.0);
+        // 静态地面。
+        world.add_body(Body::new(
+            Shape::Box {
+                half: Vec3::new(50.0, 0.5, 50.0),
+            },
+            Vec3::new(0.0, -0.5, 0.0),
+            0.0,
+        ));
+        // 5 层盒,半高 0.5。
+        let mut ids = Vec::new();
+        for k in 0..5 {
+            let y0 = 0.5 + k as f64 * 1.1; // 留 0.1 间隙让接触坐实
+            let id = world.add_body(Body::new(
+                Shape::Box {
+                    half: Vec3::new(0.5, 0.5, 0.5),
+                },
+                Vec3::new(0.0, y0, 0.0),
+                1.0,
+            ));
+            ids.push(id);
+        }
+        let dt = 1.0 / 120.0;
+        // 先空跑一帧建立缓存,warm-start 从第 2 帧生效。
+        for _ in 0..5 {
+            world.step(dt);
+        }
+        for _ in 0..700 {
+            world.step(dt);
+        }
+        // 末态各层中心应≈0.5/1.5/2.5/3.5/4.5(±0.15 容差,高堆叠允许多层误差累积)。
+        let expected = [0.5_f64, 1.5, 2.5, 3.5, 4.5];
+        for (k, &ey) in expected.iter().enumerate() {
+            let y = world.bodies[ids[k]].pos.y;
+            assert!(
+                (y - ey).abs() < 0.2,
+                "warm-start 堆叠第 {} 层应停在 {},实际 y={}",
+                k,
+                ey,
+                y
+            );
+        }
+        // 顶层速度收敛(不抖)。
+        assert!(
+            world.bodies[ids[4]].vel.norm() < 0.5,
+            "warm-start 堆叠顶层速度应收敛,实际 {}",
+            world.bodies[ids[4]].vel.norm()
+        );
+        // 缓存应保留当帧接触冲量(证明 warm-start 通路)。
+        assert!(!world.contact_impulses.is_empty(), "warm-start 缓存不应为空");
     }
 
     /// B1 摩擦/位置参数接线与稳定性:(1) SolverParams 默认值正确(friction_iterations

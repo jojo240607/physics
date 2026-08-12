@@ -172,6 +172,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limbs. Verified by `compound_body_rests_on_ground` (two child spheres rest on a static box
   ground without tunneling). 77 phy-rigid tests + full workspace green — **D2 (colliders:
   Capsule / Heightfield / Compound) is now complete**.
+- **Contact warm-starting (D3, game-grade plan `PLAN_NEXT.md`)**: `ContactConstraint` gains a
+  `warm_started` flag and `RigidWorld` holds a cross-frame `contact_impulses` cache (kept to
+  the current frame's active pairs only, so it cannot grow unbounded). When narrow-phase
+  rebuilds a contact, it restores the previous frame's accumulated normal/tangent impulse as
+  the initial guess, and `solve_velocity` applies that warm-start impulse once before the
+  main iteration (Box2D-style). This is the primary remedy for the B1 known limitation
+  ("sliding-contact energy injection" / resting-stack jitter). A new 5-layer stack test
+  (`warm_start_stabilizes_tall_stack`) converges to 0.5/1.5/2.5/3.5/4.5 and rests stably.
+  78 phy-rigid tests + full workspace green.
 - **Scene description DSL / prefab (B3, commercial-readiness plan §11)**: new
   `scene.rs` module with `SceneDesc<T>` (gravity + bodies + joints, reusing the
   already-serde `Body`/`JointConstraint` so the description is isomorphic to the

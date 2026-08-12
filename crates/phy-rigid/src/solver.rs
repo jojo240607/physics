@@ -66,6 +66,8 @@ pub struct ContactConstraint<T: RealField + Copy> {
     /// 累积切向冲量(向量)。
     #[serde(with = "crate::shape::serde_geom")]
     pub tangent_impulse: Vec3<T>,
+    /// 是否已做 warm-start(初值已从上一帧恢复并施加)。
+    pub warm_started: bool,
 }
 
 impl<T: RealField + Copy> ContactConstraint<T> {
@@ -76,6 +78,7 @@ impl<T: RealField + Copy> ContactConstraint<T> {
             contact,
             normal_impulse: T::zero(),
             tangent_impulse: Vec3::zeros(),
+            warm_started: false,
         }
     }
 }
@@ -90,6 +93,25 @@ pub fn solve_velocity<T: RealField + Copy>(
 ) {
     let e = params.restitution;
     let mu = params.friction;
+
+    // D3 warm-start:把上一帧累积的接触冲量作为初值打入速度,减少迭代收敛次数、
+    // 消除静止堆叠抖动(Box2D 同款)。仅对 `warm_started` 的约束施加一次(迭代前)。
+    for c in constraints.iter_mut() {
+        if !c.warm_started {
+            continue;
+        }
+        let n = c.contact.normal;
+        let ia = bodies[c.a].inv_inertia_world();
+        let ib = bodies[c.b].inv_inertia_world();
+        let ra = c.contact.point - bodies[c.a].pos;
+        let rb = c.contact.point - bodies[c.b].pos;
+        let pn = n * c.normal_impulse;
+        bodies[c.a].apply_impulse_at(-pn, ra);
+        bodies[c.b].apply_impulse_at(pn, rb);
+        let pt = c.tangent_impulse;
+        bodies[c.a].apply_impulse_at(-pt, ra);
+        bodies[c.b].apply_impulse_at(pt, rb);
+    }
 
     // B1: 法向求解在主迭代中完成。
     for _ in 0..params.iterations {
