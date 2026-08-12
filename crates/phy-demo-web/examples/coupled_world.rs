@@ -109,8 +109,9 @@ fn main() {
         world.subsystem_count(),
         fluid_particle_count(&world, fluid_idx)
     );
-    println!("注:SPH 入水冲击下存在已知数值刚性(见 BEYOND_COMMERCIAL.md B 阶段),");
-    println!("    本 demo 重点证明'统一 World 自动双向耦合'架构,而非能量守恒声明。");
+    println!("注:B0 攻关已修复 SPH 入水能量爆炸(couple_bodies 改为对称软接触 + 浮力体力化),");
+    println!("    入水冲击能量有界且迅速耗散回落(见 BEYOND_COMMERCIAL.md);本 demo 重点证明");
+    println!("    '统一 World 自动双向耦合'架构,即多场能量可被逐场审计。");
 
     let mut buf = vec![Vec3::zeros(); 32 * 32];
     for i in 0..steps {

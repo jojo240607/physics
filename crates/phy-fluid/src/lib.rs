@@ -34,29 +34,26 @@ mod tests {
     /// 从而纯粹验证 `World::couple` 是否真正自动触发了流体↔刚体耦合链路。
     #[test]
     fn rigid_body_gets_buoyancy_via_world_couple() {
-        // --- 流体:静止水池(重力关闭),仅作浮力介质 ---
+        // --- 流体:重力场开启的水池(浮力本质是流体静压梯度,依赖重力存在) ---
         let mut p = SphParams::defaults();
-        p.gravity = Vec3::zeros();
+        p.gravity = Vec3::new(0.0, -9.81, 0.0);
         let mut fworld: FluidWorld<f64> = FluidWorld::new(p);
+        // 盒子略大于球(r=0.6),使球完全浸没且被流体从四面八方包围。
         fworld.fill_box(
-            Vec3::new(-0.8, -0.8, -0.8),
-            Vec3::new(0.8, 0.8, 0.8),
+            Vec3::new(-0.7, -0.7, -0.7),
+            Vec3::new(0.7, 0.7, 0.7),
             0.1,
             0.05,
         );
-        for _ in 0..15 {
+        // 沉降稳定:流体在盒底边界阻尼后静止,从四面八方包围轻球。
+        for _ in 0..40 {
             fworld.step(0.0025);
-        }
-        // 把粒子压进球内制造淹没。
-        for pt in fworld.particles.iter_mut() {
-            pt.pos = Vec3::new(pt.pos.x * 0.3, pt.pos.y * 0.3, pt.pos.z * 0.3);
-            pt.vel = Vec3::zeros();
         }
         let n_fluid0 = fworld.particles.len();
 
-        // --- 刚体:密度约为流体 1/4 的轻球,完全浸没 ---
+        // --- 刚体:密度约为流体 1/4 的轻球,完全浸没于流体中央 ---
         let mut rworld = phy_rigid::RigidWorld::new();
-        rworld.gravity = Vec3::zeros();
+        rworld.gravity = Vec3::new(0.0, -9.81, 0.0);
         let r: f64 = 0.6;
         let vol = 4.0 / 3.0 * std::f64::consts::PI * r.powi(3);
         let mass_b = fworld.params.rest_density * vol * 0.25;
@@ -66,7 +63,6 @@ mod tests {
             rot: na::UnitQuaternion::identity(),
             vel: Vec3::zeros(),
             inv_mass: 1.0 / mass_b,
-        
             ..Default::default()
         };
         rworld.add_body(body);
@@ -75,12 +71,9 @@ mod tests {
         world.add_subsystem(Box::new(FluidSubsystem::new(fworld)));
         world.add_subsystem(Box::new(RigidSubsystem::new(rworld)));
 
-        // 步进若干帧(与受控 sph 测试同时间尺度 dt=0.0025):
-        // 刚体应整体上浮(vy > 0,即受到净上举)。仅跑少量帧,在 SPH 大挤压
-        // 条件不稳定窗口之前即可确认 #10 耦合链路已自动触发浮力(诊断显示
-        // 早期帧 vy 即转正,~15 帧后 SPH 在持续刚体挤压下才发散,属 SPH 数值
-        // 稳定性范畴,非耦合逻辑问题;受控 sph 测试同尺度仅临界不爆)。
-        let n_frames = 12;
+        // 轻球(ρ_b=0.25ρ_f)净力 (ρ_b−ρ_f)Vg 向上 => 应被浮力顶起,浮出水面。
+        // 跑足够帧让上浮趋势显现(World 框架自动对刚体做重力积分 + 流体耦合浮力)。
+        let n_frames = 100;
         for _ in 0..n_frames {
             world.step(0.0025);
         }
@@ -93,12 +86,12 @@ mod tests {
             .downcast_ref::<RigidSubsystem<f64>>()
             .unwrap();
         let b = &rb.world.bodies[0];
-        // 浮力应为正(上举):竖直速度或位移向上。
+        // 浮力应为正(上举):球净上浮,竖直位置高于初始。
         assert!(
-            b.vel.y > 0.0 || b.pos.y > 0.0,
-            "轻刚体应被浮力上举: vy={}, dy={}",
-            b.vel.y,
-            b.pos.y
+            b.pos.y > 0.0,
+            "轻刚体应被浮力上举: y0=0.0 y_end={}, vy={}",
+            b.pos.y,
+            b.vel.y
         );
 
         // 流体粒子数守恒。

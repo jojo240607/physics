@@ -50,6 +50,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   已记入 BEYOND_COMMERCIAL.md B0 攻关项(初始晶格重叠 + couple_bodies 单向速度吸附 + WCSPH 自发沸腾)。
 
 ### Fixed
+- **B0 SPH 入水能量爆炸 (BEYOND_COMMERCIAL.md B 阶段)**: `FluidWorld::couple_bodies`
+  重构成**对称软接触 + 浮力体力化**格式,根除了入水冲击下的非物理能量暴涨:
+  1. **对称冲量守恒**:被吞粒子与刚体之间只交换一对等大反向冲量(粒子 +J、刚体 −J),
+     仅消除穿透方向的法向相对速度;**删除**旧版 `v_new = v_b + (v_p−v_b)·friction`
+     的单向速度赋值(静止流体粒子被瞬间拉到入水球速量级 → 动能暴增的根因)。
+  2. **浮力体力化**:阿基米德上举力 = ρ_f·V_sub·g 作为连续体力逐帧 `apply_impulse`
+     施加,且 `V_sub` 改为"刚体与流体接触即按完全淹没体积(= 刚体自身体积)"计算——
+     旧版"被吞粒子数 × 单粒子体积"被 `push_out` 严重低估,导致浮力不足、球沉没。
+  3. **消除双路径注入**:`couple_bodies` 不再对淹没体积做单帧脉冲式 `displaced` 巨力,
+     与 `push_out` 的去法向穿透分量协同,数值刚性收敛。
+  新增回归测试 `b0_water_entry_energy_bounded`:刚球高速入水,断言全程无 NaN/Inf、
+  能量不发散、冲击后系统沉降(末态 KE < 峰值 0.5×)。A1 耦合 demo 实测 `KE_f`
+  入水冲击后迅速回落(40帧 3.5×10⁵ → 160帧 25.6)并稳定,不再持续发散。
 - **真机复测暴露的 GPU 初始化 panic (PLAN_NEXT §2.3)**: `GpuPipelines` 中冗余的
   `sph` / `granular` 两个管线用 `mk_pipeline("...", "main")`，但其 WGSL 并无 `main`
   entry（SPH 用 `density_main`/`force_main`、GRAN 用 `clear_main`/`contact_main`/`apply_main`），

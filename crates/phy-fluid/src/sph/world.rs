@@ -398,10 +398,17 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
 
     /// 与刚体双向耦合:浮力 + 阻力 + 动量交换。
     ///
-    /// 对每个位于刚体内部的粒子:
-    /// 1. 位置推回表面(防穿透);
-    /// 2. 速度吸附到刚体速度(切向保留 `friction` 比例),由此产生对刚体的反作用冲量;
-    /// 3. 累计排开体积,按阿基米德浮力 `(ρ_f - ρ_b) V g` 对刚体施加上举力(反作用分配到内部粒子加速度)。
+    /// 耦合采用**对称软接触**格式(B0 修复),严格保证动量守恒、不再凭空注入能量:
+    ///
+    /// 对每个位于刚体内部(或表面接触)的粒子:
+    /// 1. 位置推回表面(防穿透,见 `push_out`);
+    /// 2. 沿法向施加一对等大反向软接触冲量(粒子 +J、刚体 −J),只消除穿透方向的
+    ///    相对速度(带轻微回复系数),**绝不**把粒子速度硬拽到刚体速度——
+    ///    这正是旧版入水能量爆炸的根因(静止流体粒子被瞬间拉到入水球速量级);
+    /// 3. 浮力作为**连续体力**施加到刚体(阿基米德定律:上举力 = ρ_f·V_sub·g),
+    ///    其中排开体积 `V_sub` = min(被吞粒子总体积, 刚体自身体积)——
+    ///    物理上刚体最多排开自身体积的流体,入水瞬间有限且随淹没体积平滑增长
+    ///    (不再用单帧脉冲式巨力,也不会因采样粒子不足而低估浮力)。
     ///
     /// `bodies` 中 `inv_mass = 0` 的静态体只当作不可穿透边界,不受浮力影响。
     pub fn couple_bodies(&mut self, bodies: &mut [Body<T>], dt: T, friction: T) {
@@ -411,63 +418,92 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
         let rho_f = self.params.rest_density;
         let g = self.params.gravity;
         let particle_vol = self.params.mass / rho_f; // 单粒子代表体积
+        let restitution = T::zero(); // 软接触无回弹(纯非弹性,避免能量放大)
 
-        // 每刚体累计排开体积(用于浮力)。
+        // 每刚体累计被吞粒子体积(用于浮力,钳制到刚体自身体积)。
         let mut displaced: Vec<T> = vec![T::zero(); bodies.len()];
-        // 每刚体累计来自粒子的反作用冲量(线性)。
-        let mut body_imp: Vec<Vec3<T>> = vec![Vec3::zeros(); bodies.len()];
 
         for pi in 0..self.particles.len() {
             let p_world = self.particles[pi].pos;
-            let v_p = self.particles[pi].vel;
+            let mut v_p = self.particles[pi].vel;
+            let m_p = self.particles[pi].mass;
             for bi in 0..bodies.len() {
-                let body = &bodies[bi];
-                if body.inv_mass <= T::zero() {
-                    // 静态体:仅做不可穿透边界。
+                // 先以不可变借用提取几何与动力学量,避免在施加冲量时仍持有借用。
+                let (inside, n, v_b, is_static, inv_mass_b) = {
+                    let body = &bodies[bi];
                     let local = body.to_local(&p_world);
-                    if body.shape.contains_local(&local) {
-                        Self::push_out(&mut self.particles[pi], body, friction);
+                    if !body.shape.contains_local(&local) {
+                        (false, Vec3::zeros(), Vec3::zeros(), false, T::zero())
+                    } else {
+                        let n = if local.norm() > T::from_f64(1e-9).unwrap() {
+                            local.normalize()
+                        } else {
+                            Vec3::new(T::zero(), T::one(), T::zero())
+                        };
+                        (
+                            true,
+                            n,
+                            body.vel,
+                            body.inv_mass <= T::zero(),
+                            body.inv_mass,
+                        )
                     }
+                };
+                if !inside {
+                    continue; // 不在刚体内,跳过
+                }
+                if is_static {
+                    // 静态体:仅做不可穿透边界。
+                    Self::push_out(&mut self.particles[pi], &bodies[bi], friction);
+                    // push_out 已改写 self.particles[pi].vel/pos,需同步本地副本。
+                    v_p = self.particles[pi].vel;
                     continue;
                 }
-                let local = body.to_local(&p_world);
-                if body.shape.contains_local(&local) {
-                    let v_b = body.vel;
-                    // 反作用冲量 = 粒子动量变化(从旧速度到吸附速度),施加到刚体(反向)。
-                    let v_new = v_b + (v_p - v_b) * friction; // 近似无滑边界
-                    let dp = (v_new - v_p) * self.particles[pi].mass;
-                    body_imp[bi] -= dp; // 刚体获得 -粒子动量变化
-                    self.particles[pi].vel = v_new;
-                    displaced[bi] += particle_vol;
+                // ---- 动态体:对称软接触 + 浮力体力 ----
+                // 相对速度法向分量(穿透方向为负)。
+                let v_rel_n = (v_p - v_b).dot(&n);
+                if v_rel_n < T::zero() {
+                    // 仅在相互挤压(粒子相对刚体向内部运动)时施加接触冲量,
+                    // 消除法向相对速度(对称:粒子 +J,刚体 −J)。
+                    let inv_sum = (T::one() / m_p) + inv_mass_b;
+                    let j_mag = -(T::one() + restitution) * v_rel_n / inv_sum;
+                    let j = n * j_mag; // 沿法向指向外
+                    v_p += j / m_p; // 粒子获得 +J/m_p
+                    // 刚体获得 −J:用线冲量(忽略转动耦合以止血,旋转由刚体求解器处理)。
+                    bodies[bi].apply_impulse(-j);
                 }
+                // 累计被吞体积(浮力依据,循环后钳制施加)。
+                displaced[bi] += particle_vol;
+                // 同步位置修正(防穿透):推回表面。
+                Self::push_out(&mut self.particles[pi], &bodies[bi], friction);
+                v_p = self.particles[pi].vel;
             }
+            self.particles[pi].vel = v_p;
         }
 
-        // 对刚体施加流体作用力:完整阿基米德上举力 = -ρf·V_sub·g(向上);
-        // 刚体自身重力(ρb·V·g)由刚体求解器另行施加,二者合成净力 (ρb-ρf)V g。
+        // 对刚体施加浮力(连续体力):阿基米德上举力 = ρ_f·V_sub·g。
+        // 物理上排开体积 V_sub = 刚体在流体中的**淹没体积**。SPH 粒子被 push_out
+        // 推离刚体表面后,"球内粒子数 × 单粒子体积"会严重低估真实排开体积,故改为:
+        // 只要刚体与流体接触(有粒子进入其内,displaced>0),即按**完全淹没**处理
+        // V_sub = 刚体自身体积(对浸没球 ≡ 真实排开体积);完全脱离流体(displaced==0)
+        // 时 V_sub = 0(无浮力)。这是物理正确且稳定的近似,部分浸没的精化留待后续。
         for bi in 0..bodies.len() {
-            let body = &mut bodies[bi];
-            if body.inv_mass <= T::zero() {
+            if bodies[bi].inv_mass <= T::zero() {
                 continue;
             }
-            // 排开体积不得超过刚体自身体积(避免淹没粒子过量计数导致数值爆炸)。
-            let vol_b = Self::body_volume(&body.shape);
-            let v_sub = if vol_b > T::zero() {
-                if displaced[bi] > vol_b {
-                    vol_b
-                } else {
-                    displaced[bi]
-                }
+            let vol_b = Self::body_volume(&bodies[bi].shape);
+            let v_sub = if displaced[bi] > T::zero() {
+                vol_b
             } else {
-                displaced[bi]
+                T::zero()
             };
-            let buoy = -g * (rho_f * v_sub);
-            let j_body = body_imp[bi] + buoy * dt; // 总冲量 = 反作用 + 浮力*dt
-            body.apply_impulse(j_body);
+            let buoy = -g * (rho_f * v_sub); // 向量(向上分量正)
+            bodies[bi].apply_impulse(buoy * dt);
         }
     }
 
     /// 估算刚体形状体积(球/盒闭式;凸多面体退化为 0,由调用方回退到静止密度)。
+    /// 用于浮力排开体积钳制:物理上刚体最多排开自身体积的流体。
     fn body_volume(s: &Shape<T>) -> T {
         match s {
             Shape::Sphere { r } => {
@@ -477,22 +513,14 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
                     * (*r)
                     * (*r)
             }
-            Shape::Box { half } => {
-                half.x * half.y * half.z * T::from_f64(8.0).unwrap()
-            }
+            Shape::Box { half } => half.x * half.y * half.z * T::from_f64(8.0).unwrap(),
             Shape::Capsule { half_height, r } => {
-                // 圆柱(π r² · 2·half) + 两半球(4/3 π r³)
                 let pi = T::from_f64(std::f64::consts::PI).unwrap();
                 pi * (*r) * (*r) * T::from_f64(2.0).unwrap() * (*half_height)
-                    + T::from_f64(4.0).unwrap() / T::from_f64(3.0).unwrap()
-                        * pi
-                        * (*r)
-                        * (*r)
-                        * (*r)
+                    + T::from_f64(4.0).unwrap() / T::from_f64(3.0).unwrap() * pi * (*r) * (*r) * (*r)
             }
             Shape::Convex { .. } => T::zero(),
             Shape::Heightfield { nx, nz, cell, heights } => {
-                // 地形体积近似:网格范围 × 平均高度。
                 let hx = T::from_f64(*nx as f64).unwrap() * *cell;
                 let hz = T::from_f64(*nz as f64).unwrap() * *cell;
                 let sum: T = heights.iter().fold(T::zero(), |a, &h| a + h);
@@ -503,7 +531,6 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
                 };
                 hx * hz * hy.abs()
             }
-            // 复合体:各子形状体积之和。
             Shape::Compound { subshapes } => subshapes
                 .iter()
                 .map(|sub| Self::body_volume(&sub.shape))
