@@ -13,13 +13,20 @@ patch_impls.py
 
 # Web 自测截图产物
 crates/phy-demo-web/shot_*.png
-build_tmp.txt  
 
-# 临时构建/日志产物
+# 临时构建/日志产物(含诊断 stdout 捕获与中间构建日志)
+build_tmp.txt
 b4_build.txt
 b4_ws.txt
 build_err.txt
 build_log.txt
+build_log2.txt
+build_log3.txt
+test_out.txt
+test_out2.txt
+
+# 调试/诊断脚本临时输出(_ 前缀,跑测试/排查时由 python 管道落盘)
+_*.txt
 
 # 打包产物(build_package.py 输出,非源码)
 /pkg
