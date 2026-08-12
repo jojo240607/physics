@@ -25,6 +25,75 @@ use phy_soft::SoftSubsystem;
 use phy_solid::SolidSubsystem;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// 浮点位模式存档标签:把 `f64` 编码为 `{"__f64": <u64 位模式>}` 对象,
+/// 使文本 JSON 往返逐位(bit-exact)还原。
+///
+/// 问题:serde_json 用 ryu 输出浮点,但 Rust 的 `f64::from_str` 对 17 位十进制串
+/// (如 `"-1.5999999999999999"`)会舍入到相邻可表示值(`-1.6`),导致恰好落在 1-ULP
+/// 边界的浮点在「存档→读档」后丢失 1 位,破坏 replay 确定性。把位模式显式写出即可
+/// 逐位还原。整数(i64/u64)不受影响,只转换真正的浮点(含 NaN/Inf)。
+const F64_TAG: &str = "__f64";
+
+/// 递归把 JSON 中所有浮点 `Number` 替换为 `{"__f64": bits}` 对象。
+fn f64_to_bits(v: &mut Value) {
+    match v {
+        Value::Number(n) => {
+            // 仅转换真正的浮点(非精确整数):整数(i64/u64)原样保留,避免污染
+            // 计数 / 索引 / 版本号等整型字段。
+            if !n.is_i64() && !n.is_u64() {
+                if let Some(f) = n.as_f64() {
+                    let bits = f.to_bits();
+                    *v = Value::Object({
+                        let mut m = serde_json::Map::new();
+                        m.insert(F64_TAG.to_string(), Value::Number(bits.into()));
+                        m
+                    });
+                }
+            }
+        }
+        Value::Array(a) => {
+            for e in a.iter_mut() {
+                f64_to_bits(e);
+            }
+        }
+        Value::Object(o) => {
+            // 已是位模式对象则不再下钻(避免重复编码)。
+            if o.contains_key(F64_TAG) {
+                return;
+            }
+            for (_, val) in o.iter_mut() {
+                f64_to_bits(val);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 递归把 `{"__f64": bits}` 对象还原为原始浮点 `Number`。
+fn bits_to_f64(v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            if let Some(bits_val) = o.get(F64_TAG) {
+                if let Some(bits) = bits_val.as_u64() {
+                    let f = f64::from_bits(bits);
+                    *v = Value::Number(serde_json::Number::from_f64(f).expect("finite f64"));
+                    return;
+                }
+            }
+            for (_, val) in o.iter_mut() {
+                bits_to_f64(val);
+            }
+        }
+        Value::Array(a) => {
+            for e in a.iter_mut() {
+                bits_to_f64(e);
+            }
+        }
+        _ => {}
+    }
+}
 
 /// 各子系统存档镜像(带类型标签,供 JSON 枚举派发)。
 ///
@@ -108,6 +177,7 @@ where
         + Copy
         + Serialize
         + DeserializeOwned
+       
         + Default
         + nalgebra::Scalar
         + num_traits::ToPrimitive,
@@ -156,6 +226,7 @@ where
         + Copy
         + Serialize
         + DeserializeOwned
+       
         + Default
         + nalgebra::Scalar
         + num_traits::ToPrimitive
@@ -195,7 +266,9 @@ where
         + num_traits::Float,
 {
     let arch = archive_world(world);
-    serde_json::to_string_pretty(&arch).expect("serialize world archive")
+    let mut val = serde_json::to_value(&arch).expect("serialize world archive");
+    f64_to_bits(&mut val);
+    serde_json::to_string_pretty(&val).expect("serialize world archive")
 }
 
 /// 从 JSON 字符串反序列化世界。
@@ -210,8 +283,10 @@ where
         + num_traits::ToPrimitive
         + num_traits::Float,
 {
-    let arch: WorldArchive<T> =
+    let mut val: Value =
         serde_json::from_str(json).expect("deserialize world archive");
+    bits_to_f64(&mut val);
+    let arch: WorldArchive<T> = serde_json::from_value(val).expect("decode world archive");
     unarchive_world(arch)
 }
 

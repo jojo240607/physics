@@ -9,40 +9,77 @@ use serde::{Deserialize, Serialize};
 
 /// 自定义 serde 模块:把 nalgebra 泛型类型序列化为纯元组,绕过 nalgebra
 /// 自带的 `Matrix<T>: Serialize`(要求 `T: nalgebra::Scalar`)带来的 impl 传播问题。
+///
+/// 元素以原始位模式(u64)序列化,保证 `save → load` 逐位(bit-exact)还原,
+/// 避免文本 JSON 对落在 1-ULP 边界的浮点(如 `-1.5999999999999999` 与 `-1.6`)
+/// 在反序列化时被 `f64::from_str` 舍入到相邻可表示值,破坏 replay 的确定性。
 pub mod serde_geom {
-    use phy_math::Vec3;
+    use num_traits::FromPrimitive;
+    use phy_math::{na, RealField, Vec3};
+    use serde::de::DeserializeOwned;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S: Serializer, T: Serialize + Copy>(v: &Vec3<T>, s: S) -> Result<S::Ok, S::Error> {
-        [v[0], v[1], v[2]].serialize(s)
+    /// 把 `T` 标量逐位(bit-exact)编码为 `u64` 位模式,用于 JSON 存档/读档。
+    ///
+    /// 文本 JSON 序列化对恰好落在 1-ULP 边界的 f64(如 `-1.5999999999999999`
+    /// 与 `-1.6`)在反序列化时会被 Rust 的 `f64::from_str` 舍入到相邻可表示值,
+    /// 破坏 replay 的确定性。改为传输原始位模式即可逐位还原。
+    ///
+    /// `RealField: ComplexField: SupersetOf<f64>`,故 `na::try_convert(v)` 将
+    /// 任意标量 `T` 无损转为 `f64`;反方向用 `FromPrimitive::from_f64`(同样是
+    /// `ComplexField` 的 supertrait),二者都只需 `T: RealField` 即可,不会把
+    /// 额外的 trait bound 传播到所有使用 `serde_geom` 的容器类型。
+    #[inline]
+    fn to_bits<T: RealField + Copy>(v: T) -> u64 {
+        let f: f64 = na::try_convert(v).expect("scalar -> f64");
+        f.to_bits()
     }
-    pub fn deserialize<'de, D: Deserializer<'de>, T: Deserialize<'de> + Copy>(
+    #[inline]
+    fn from_bits<T: RealField + Copy + FromPrimitive>(bits: u64) -> T {
+        let f = f64::from_bits(bits);
+        T::from_f64(f).expect("f64 -> scalar")
+    }
+
+    pub fn serialize<S: Serializer, T: RealField + Serialize + Copy>(v: &Vec3<T>, s: S) -> Result<S::Ok, S::Error> {
+        [to_bits(v[0]), to_bits(v[1]), to_bits(v[2])].serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>, T: RealField + DeserializeOwned + Copy + num_traits::FromPrimitive>(
         d: D,
     ) -> Result<Vec3<T>, D::Error> {
-        let a = <[T; 3]>::deserialize(d)?;
-        Ok(Vec3::new(a[0], a[1], a[2]))
+        let a = <[u64; 3]>::deserialize(d)?;
+        Ok(Vec3::new(from_bits(a[0]), from_bits(a[1]), from_bits(a[2])))
     }
 
     pub mod vec3_vec {
-        use phy_math::Vec3;
+        use super::{from_bits, to_bits};
+        use phy_math::{RealField, Vec3};
+        use serde::de::DeserializeOwned;
         use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-        pub fn serialize<S: Serializer, T: Serialize + Copy>(
+        pub fn serialize<S: Serializer, T: RealField + Serialize + Copy>(
             v: &Vec<Vec3<T>>,
             s: S,
         ) -> Result<S::Ok, S::Error> {
-            v.iter().map(|x| [x[0], x[1], x[2]]).collect::<Vec<_>>().serialize(s)
+            v.iter()
+                .map(|x| [to_bits(x[0]), to_bits(x[1]), to_bits(x[2])])
+                .collect::<Vec<_>>()
+                .serialize(s)
         }
-        pub fn deserialize<'de, D: Deserializer<'de>, T: Deserialize<'de> + Copy>(
+        pub fn deserialize<'de, D: Deserializer<'de>, T: RealField + DeserializeOwned + Copy + num_traits::FromPrimitive>(
             d: D,
         ) -> Result<Vec<Vec3<T>>, D::Error> {
-            let arr = <Vec<[T; 3]>>::deserialize(d)?;
-            Ok(arr.into_iter().map(|a| Vec3::new(a[0], a[1], a[2])).collect())
+            let arr = <Vec<[u64; 3]>>::deserialize(d)?;
+            Ok(arr
+                .into_iter()
+                .map(|a| Vec3::new(from_bits(a[0]), from_bits(a[1]), from_bits(a[2])))
+                .collect())
         }
     }
 
     pub mod quat {
+        use super::{from_bits, to_bits};
         use phy_math::{na, RealField};
+        use serde::de::DeserializeOwned;
         use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
         pub fn serialize<S: Serializer, T: RealField + Serialize + Copy>(
@@ -50,20 +87,22 @@ pub mod serde_geom {
             s: S,
         ) -> Result<S::Ok, S::Error> {
             let c = q.quaternion().clone();
-            [c.w, c.i, c.j, c.k].serialize(s)
+            [to_bits(c.w), to_bits(c.i), to_bits(c.j), to_bits(c.k)].serialize(s)
         }
-        pub fn deserialize<'de, D: Deserializer<'de>, T: RealField + Deserialize<'de> + Copy>(
+        pub fn deserialize<'de, D: Deserializer<'de>, T: RealField + DeserializeOwned + Copy + num_traits::FromPrimitive>(
             d: D,
         ) -> Result<na::UnitQuaternion<T>, D::Error> {
-            let a = <[T; 4]>::deserialize(d)?;
-            let q = na::Quaternion::new(a[0], a[1], a[2], a[3]);
+            let a = <[u64; 4]>::deserialize(d)?;
+            let q = na::Quaternion::new(from_bits(a[0]), from_bits(a[1]), from_bits(a[2]), from_bits(a[3]));
             Ok(na::UnitQuaternion::new_normalize(q))
         }
     }
 
     /// 体坐标系逆惯性张量(Matrix3<T>)的序列化:展平为 9 元素行主序数组。
     pub mod mat3 {
+        use super::{from_bits, to_bits};
         use phy_math::{Mat3, RealField};
+        use serde::de::DeserializeOwned;
         use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
         pub fn serialize<S: Serializer, T: RealField + Serialize + Copy>(
@@ -71,17 +110,21 @@ pub mod serde_geom {
             s: S,
         ) -> Result<S::Ok, S::Error> {
             [
-                m[(0, 0)], m[(0, 1)], m[(0, 2)],
-                m[(1, 0)], m[(1, 1)], m[(1, 2)],
-                m[(2, 0)], m[(2, 1)], m[(2, 2)],
+                to_bits(m[(0, 0)]), to_bits(m[(0, 1)]), to_bits(m[(0, 2)]),
+                to_bits(m[(1, 0)]), to_bits(m[(1, 1)]), to_bits(m[(1, 2)]),
+                to_bits(m[(2, 0)]), to_bits(m[(2, 1)]), to_bits(m[(2, 2)]),
             ]
             .serialize(s)
         }
-        pub fn deserialize<'de, D: Deserializer<'de>, T: RealField + Deserialize<'de> + Copy>(
+        pub fn deserialize<'de, D: Deserializer<'de>, T: RealField + DeserializeOwned + Copy + num_traits::FromPrimitive>(
             d: D,
         ) -> Result<Mat3<T>, D::Error> {
-            let a = <[T; 9]>::deserialize(d)?;
-            Ok(Mat3::from_row_slice(&a))
+            let a = <[u64; 9]>::deserialize(d)?;
+            Ok(Mat3::from_row_slice(&[
+                from_bits(a[0]), from_bits(a[1]), from_bits(a[2]),
+                from_bits(a[3]), from_bits(a[4]), from_bits(a[5]),
+                from_bits(a[6]), from_bits(a[7]), from_bits(a[8]),
+            ]))
         }
     }
 }
