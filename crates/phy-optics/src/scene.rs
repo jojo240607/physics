@@ -106,6 +106,7 @@ impl<T: RealField + Copy> OpticBody<T> {
         let (t_local, n_local) = match &self.body.shape {
             Shape::Sphere { r } => sphere_hit(&ro, &rd_n, *r),
             Shape::Box { half } => box_hit(&ro, &rd_n, half),
+            Shape::Capsule { .. } => None, // 光学暂不处理胶囊体
             Shape::Convex { vertices, faces } => convex_hit(&ro, &rd_n, vertices, faces),
         }?;
         // 局部 t 需按世界方向长度还原(因为 rd 被旋转但长度不变,rd_len 即比例)。

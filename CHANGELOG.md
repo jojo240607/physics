@@ -140,6 +140,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sync), `hinge_joint_with_motor_rotates_around_aligned_axis` (axis-aligned spin under motor),
   and `prismatic_joint_with_motor_slides_along_axis` (axis slide, no spin). 72 phy-rigid tests
   + full workspace green.
+- **Capsule collider + analytic narrow-phase (D2, game-grade plan `PLAN_NEXT.md`)**: new
+  `Shape::Capsule { half_height, r }` (sphere-swept segment along the local y axis) with full
+  `support_local` / `contains_local` / `bounding_sphere_r` / `set_inertia_from_shape`, plus
+  analytic fast-path collisions `capsule_sphere` / `capsule_capsule` / `capsule_box`
+  (normal pointing from the first body to the second; box-interior ejection branch), and
+  `raycast` / `ccd` / `fracture` coverage. A Capsule dropped on a static box ground now rests
+  on it without tunneling. Note: this exposed a **pre-existing GJK robustness issue** — GJK
+  iterates unstably and reports non-intersection for "smooth-body + sharp-corner (Box)"
+  combinations (Sphere/Box are unaffected because they take fast paths; Convex-Convex that
+  falls back to GJK may need attention). Capsule sidesteps it via analytic paths. Verified by
+  `capsule_support_on_axis` / `capsule_contains_and_bounds` /
+  `capsule_rests_on_ground_via_gjk_epa`. 75 phy-rigid tests + full workspace green.
 - **Scene description DSL / prefab (B3, commercial-readiness plan §11)**: new
   `scene.rs` module with `SceneDesc<T>` (gravity + bodies + joints, reusing the
   already-serde `Body`/`JointConstraint` so the description is isomorphic to the

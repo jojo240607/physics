@@ -57,6 +57,7 @@ pub fn substep_count<T: RealField + Copy + ToPrimitive>(
         let feat = match &b.shape {
             Shape::Sphere { r } => *r,
             Shape::Box { half } => half.x.min(half.y).min(half.z),
+            Shape::Capsule { r, .. } => *r,
             Shape::Convex { .. } => r,
         };
         if feat < min_feat {

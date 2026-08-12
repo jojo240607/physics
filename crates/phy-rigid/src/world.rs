@@ -1087,6 +1087,48 @@ mod tests {
         );
     }
 
+    /// 胶囊体碰撞(D2):Capsule 在静态盒(地面)上方释放,应落地停在地面上(不穿透、不漂移),
+    /// 验证通用 GJK+EPA 窄相对 Capsule 的接触求解。
+    #[test]
+    fn capsule_rests_on_ground_via_gjk_epa() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, -9.81, 0.0);
+        // 静态地面:大扁盒。
+        let ground = world.add_body(Body::new(
+            Shape::Box {
+                half: Vec3::new(5.0, 0.5, 5.0),
+            },
+            Vec3::new(0.0, 0.0, 0.0),
+            0.0,
+        ));
+        let _ = ground;
+        // 动态 Capsule:半高 1 + 半径 0.5,沿 y,在 y=3 释放。
+        let cap = world.add_body(Body::new(
+            Shape::Capsule {
+                half_height: 1.0,
+                r: 0.5,
+            },
+            Vec3::new(0.0, 3.0, 0.0),
+            1.0,
+        ));
+        for _ in 0..400 {
+            world.step(1.0 / 120.0);
+        }
+        // Capsule 底部 = pos.y - (half_height + r),地面顶部 = 0.5。底部应 ≈ 0.5(不穿透)。
+        let bottom = world.bodies[cap].pos.y - 1.5;
+        assert!(
+            bottom > 0.45 && bottom < 0.9,
+            "Capsule 应停在地面上(底部≈0.5),实际 bottom={}",
+            bottom
+        );
+        // 落地后静止(速度≈0)。
+        assert!(
+            world.bodies[cap].vel.norm() < 0.5,
+            "Capsule 落地后应静止,实际 vel={}",
+            world.bodies[cap].vel.norm()
+        );
+    }
+
     /// Voronoi 破碎(M21 / #8):碎裂一个盒,碎片应继承母本线速度且总质量守恒。
     #[test]
     fn shatter_box_produces_fragments_conserving_mass() {

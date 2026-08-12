@@ -17,14 +17,15 @@
 | 求解扩展 | ✅ 关节求解升级为**含角冲量**：转动约束用 `inv_inertia_world` 有效质量，点约束含角速度项（Box2D 同款逐轴求解） |
 | 测试 | ✅ `weld_joint_keeps_relative_pose_and_syncs_angular_velocity` / `hinge_joint_with_motor_rotates_around_aligned_axis` / `prismatic_joint_with_motor_slides_along_axis`（约束收敛 + 锚点/轴对齐 + Motor 驱动 + 动量守恒），72 测试全绿 |
 
-### D2 — 碰撞器扩充
+### D2 — 碰撞器扩充（Capsule 已完成，Heightfield/Compound 待做）
 | 子项 | 说明 |
 |---|---|
-| `Capsule` | 线段 + 半径，球扫掠体。角色控制器 / 人形前提 |
-| `Heightfield`（高度场） | 地形。赛车 / 物理平台刚需 |
-| `Compound`（复合） | 一个刚体挂多个子碰撞器。机械臂 / 车辆底盘 |
-| narrow-phase | Capsule-Capsule / Capsule-Plane / Capsule-Convex / Capsule-Heightfield |
-| 测试 | 每种新碰撞器命中/未中 + 稳定堆叠 |
+| `Capsule` | ✅ 线段 + 半径，沿局部 y 轴。`support_local`/`contains_local`/`bounding_sphere_r`/`set_inertia_from_shape` 全实现 |
+| narrow-phase（Capsule） | ✅ 解析快速路径：`capsule_sphere` / `capsule_capsule` / `capsule_box`（法线由第一个参数指向第二个，含盒内推出分支）；raycast/ccd/fracture 补全 |
+| **发现** | ⚠️ 既有 **GJK 对"平滑体 + 尖角(Box)"组合不稳健**(迭代发散,判相交失败;Sphere/Box 因走快速路径不受影响,Convex-Convex 若走 GJK 需注意)。Capsule 已走解析路径规避。 |
+| `Heightfield`（高度场） | ⏳ 地形。赛车 / 物理平台刚需 |
+| `Compound`（复合） | ⏳ 一个刚体挂多个子碰撞器。机械臂 / 车辆底盘 |
+| 测试 | ✅ 3 个：`capsule_support_on_axis` / `capsule_contains_and_bounds` / `capsule_rests_on_ground_via_gjk_epa`(落地不穿透、静止) |
 
 ### D3 — 求解器增强（堆叠稳定性）
 | 子项 | 说明 |

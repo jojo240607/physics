@@ -370,6 +370,192 @@ pub fn sphere_box<T: RealField + Copy>(s: &Body<T>, b: &Body<T>) -> Option<Conta
     }
 }
 
+/// 胶囊世界系线段端点(half 沿局部 y 轴)。
+fn capsule_segment_world<T: RealField + Copy>(c: &Body<T>) -> (Vec3<T>, Vec3<T>, T) {
+    let (half_height, r) = match &c.shape {
+        Shape::Capsule { half_height, r } => (*half_height, *r),
+        _ => return (Vec3::zeros(), Vec3::zeros(), T::zero()),
+    };
+    let d = c.rot * Vec3::new(T::zero(), half_height, T::zero());
+    (c.pos - d, c.pos + d, r)
+}
+
+/// 点到线段(世界系)最近点与最近距离平方。
+fn closest_on_segment<T: RealField + Copy>(
+    p: &Vec3<T>,
+    seg_a: &Vec3<T>,
+    seg_b: &Vec3<T>,
+) -> (Vec3<T>, T) {
+    let ab = *seg_b - *seg_a;
+    let ab2 = ab.norm_squared();
+    let t = if ab2 > T::from_f64(1e-12).unwrap() {
+        ((*p - *seg_a).dot(&ab) / ab2).clamp(T::zero(), T::one())
+    } else {
+        T::zero()
+    };
+    let q = *seg_a + ab * t;
+    let d2 = (*p - q).norm_squared();
+    (q, d2)
+}
+
+/// 胶囊-球快速相交:胶囊线段 + 球,点到线段最近距离 ≤ ra+rb。
+/// 返回法线由胶囊指向球。
+pub fn capsule_sphere<T: RealField + Copy>(cap: &Body<T>, s: &Body<T>) -> Option<Contact<T>> {
+    let (ra, rb) = match (&cap.shape, &s.shape) {
+        (Shape::Capsule { r, .. }, Shape::Sphere { r: rb }) => (*r, *rb),
+        _ => return None,
+    };
+    let (ea, eb, r) = capsule_segment_world(cap);
+    let (q, d2) = closest_on_segment(&s.pos, &ea, &eb);
+    let sum = r + ra; // 胶囊半径 + 球半径
+    if d2 > sum * sum {
+        return None;
+    }
+    let d = s.pos - q;
+    let dist = d2.sqrt();
+    let n = if dist > T::from_f64(1e-9).unwrap() {
+        d / dist
+    } else {
+        Vec3::new(T::zero(), T::one(), T::zero())
+    };
+    let depth = sum - dist;
+    // 接触点在球面上。
+    let point = s.pos - n * ra;
+    Some(Contact::new(point, n, depth))
+}
+
+/// 胶囊-胶囊快速相交:两线段最近距离 ≤ ra+rb。
+/// 返回法线由 a 指向 b。
+pub fn capsule_capsule<T: RealField + Copy>(a: &Body<T>, b: &Body<T>) -> Option<Contact<T>> {
+    let (ra, rb) = match (&a.shape, &b.shape) {
+        (Shape::Capsule { r: ra, .. }, Shape::Capsule { r: rb, .. }) => (*ra, *rb),
+        _ => return None,
+    };
+    let (a1, a2, _) = capsule_segment_world(a);
+    let (b1, b2, _) = capsule_segment_world(b);
+    // 两线段最近距离(标准公式)。
+    let (p, q, d2) = closest_between_segments(&a1, &a2, &b1, &b2);
+    let sum = ra + rb;
+    if d2 > sum * sum {
+        return None;
+    }
+    let dist = d2.sqrt();
+    // 法线约定:由 a 指向 b。p 在 a 线段、q 在 b 线段 → (q-p) 由 a→b。
+    let n = if dist > T::from_f64(1e-9).unwrap() {
+        (q - p) / dist
+    } else {
+        // 平行/重叠:沿 b→a 质心方向兜底。
+        (b.pos - a.pos).normalize()
+    };
+    let depth = sum - dist;
+    let point = p + n * ra; // a 表面接触点(朝向 b 侧)
+    Some(Contact::new(point, n, depth))
+}
+
+/// 两线段(世界系)之间最近的一对点 `(p, q)` 与距离平方。
+fn closest_between_segments<T: RealField + Copy>(
+    a1: &Vec3<T>,
+    a2: &Vec3<T>,
+    b1: &Vec3<T>,
+    b2: &Vec3<T>,
+) -> (Vec3<T>, Vec3<T>, T) {
+    let u = *a2 - *a1;
+    let v = *b2 - *b1;
+    let w = *a1 - *b1;
+    let a = u.norm_squared();
+    let b = u.dot(&v);
+    let c = v.norm_squared();
+    let d = u.dot(&w);
+    let e = v.dot(&w);
+    let det = a * c - b * b;
+    let (s, t) = if det > T::from_f64(1e-12).unwrap() {
+        let s = (b * e - c * d) / det;
+        let t = (a * e - b * d) / det;
+        let s = s.clamp(T::zero(), T::one());
+        let t = t.clamp(T::zero(), T::one());
+        (s, t)
+    } else {
+        (T::zero(), T::zero())
+    };
+    let p = *a1 + u * s;
+    let q = *b1 + v * t;
+    let d2 = (p - q).norm_squared();
+    (p, q, d2)
+}
+
+/// 胶囊-盒快速相交:把胶囊线段端点的盒内最近点夹取,求胶囊线段到盒表面的最近距离。
+/// 返回法线由胶囊指向盒。
+pub fn capsule_box<T: RealField + Copy>(cap: &Body<T>, b: &Body<T>) -> Option<Contact<T>> {
+    let (rc, half) = match (&cap.shape, &b.shape) {
+        (Shape::Capsule { r, .. }, Shape::Box { half }) => (*r, *half),
+        _ => return None,
+    };
+    let (ea, eb, _) = capsule_segment_world(cap);
+    // 把胶囊两端的盒内最近点夹取。
+    let closest_box = |p: Vec3<T>| -> (Vec3<T>, bool) {
+        let l = b.rot.inverse() * (p - b.pos);
+        let mut cl = l;
+        let mut inside = true;
+        for k in 0..3 {
+            if cl[k] > half[k] {
+                cl[k] = half[k];
+                inside = false;
+            } else if cl[k] < -half[k] {
+                cl[k] = -half[k];
+                inside = false;
+            }
+        }
+        (b.pos + b.rot * cl, inside)
+    };
+    let (q_a, in_a) = closest_box(ea);
+    let (q_b, in_b) = closest_box(eb);
+    // 胶囊线段到盒表面最近距离 ≈ 两端点到盒最近点的最小距离。
+    // 处理线段在盒内(任一端在盒内)的情形。
+    if in_a || in_b {
+        // 胶囊在盒内:沿穿透最浅的面推出。
+        // 简化:找线段端点在盒内最浅的穿透面。
+        let l = b.rot.inverse() * (cap.pos - b.pos);
+        // 到最近面的距离(取绝对值,中心可在盒内或略外)。
+        let mut axis = 0usize;
+        let mut best = (half[0] - l[0].abs()).abs();
+        for k in 1..3 {
+            let pen = (half[k] - l[k].abs()).abs();
+            if pen < best {
+                best = pen;
+                axis = k;
+            }
+        }
+        let sign = if l[axis] >= T::zero() {
+            T::one()
+        } else {
+            -T::one()
+        };
+        let mut n_local = Vec3::zeros();
+        n_local[axis] = sign;
+        let normal = b.rot * n_local; // 盒→胶囊
+        let depth = rc + best;
+        let point = cap.pos + normal * rc;
+        return Some(Contact::new(point, normal, depth));
+    }
+    // 两端都在盒外:取到最近盒点距离最小者。
+    let d_a2 = (ea - q_a).norm_squared();
+    let d_b2 = (eb - q_b).norm_squared();
+    let (p, q, d2) = if d_a2 <= d_b2 { (ea, q_a, d_a2) } else { (eb, q_b, d_b2) };
+    if d2 > rc * rc {
+        return None;
+    }
+    let dist = d2.sqrt();
+    // 法线约定:由胶囊指向盒。p 在胶囊、q 在盒 → (q-p) 由胶囊→盒。
+    let n = if dist > T::from_f64(1e-9).unwrap() {
+        (q - p) / dist
+    } else {
+        Vec3::new(T::zero(), -T::one(), T::zero())
+    };
+    let depth = rc - dist;
+    let point = p + n * rc; // 胶囊表面接触点(朝向盒侧)
+    Some(Contact::new(point, n, depth))
+}
+
 /// 通用 Narrow-phase 入口:优先快速路径,回退 GJK+EPA。
 pub fn collide<T: RealField + Copy>(a: &Body<T>, b: &Body<T>) -> Option<Contact<T>> {
     if matches!(a.shape, Shape::Sphere { .. }) && matches!(b.shape, Shape::Sphere { .. }) {
@@ -391,6 +577,37 @@ pub fn collide<T: RealField + Copy>(a: &Body<T>, b: &Body<T>) -> Option<Contact<
     if matches!(a.shape, Shape::Box { .. }) && matches!(b.shape, Shape::Sphere { .. }) {
         if let Some(c) = sphere_box(b, a) {
             // sphere_box 返回法线 球→盒(=b→a),翻转成 a→b。
+            return Some(Contact::new(c.point, -c.normal, c.depth));
+        }
+    }
+    // 胶囊快速路径(解析,避免 GJK 对平滑+尖角组合的数值不稳定)。
+    // capsule-capsule。
+    if matches!(a.shape, Shape::Capsule { .. }) && matches!(b.shape, Shape::Capsule { .. }) {
+        if let Some(c) = capsule_capsule(a, b) {
+            return Some(c);
+        }
+    }
+    // capsule-sphere(两种顺序)。
+    if matches!(a.shape, Shape::Capsule { .. }) && matches!(b.shape, Shape::Sphere { .. }) {
+        if let Some(c) = capsule_sphere(a, b) {
+            return Some(c);
+        }
+    }
+    if matches!(a.shape, Shape::Sphere { .. }) && matches!(b.shape, Shape::Capsule { .. }) {
+        if let Some(c) = capsule_sphere(b, a) {
+            // capsule_sphere 返回法线 胶囊→球(=b→a),翻转成 a→b。
+            return Some(Contact::new(c.point, -c.normal, c.depth));
+        }
+    }
+    // capsule-box(两种顺序)。
+    if matches!(a.shape, Shape::Capsule { .. }) && matches!(b.shape, Shape::Box { .. }) {
+        if let Some(c) = capsule_box(a, b) {
+            return Some(c);
+        }
+    }
+    if matches!(a.shape, Shape::Box { .. }) && matches!(b.shape, Shape::Capsule { .. }) {
+        if let Some(c) = capsule_box(b, a) {
+            // capsule_box 返回法线 胶囊→盒(=b→a),翻转成 a→b。
             return Some(Contact::new(c.point, -c.normal, c.depth));
         }
     }

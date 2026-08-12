@@ -384,6 +384,26 @@ fn body_to_convex_local<T: RealField + Copy + NumCast>(body: &Body<T>) -> (Vec<V
             ];
             (v, f)
         }
+        Shape::Capsule { half_height, r } => {
+            // 用覆盖胶囊体积的盒近似破碎(半长 (r, h+r, r)),产生方块碎片。
+            let (hx, hy, hz) = (*r, *half_height + *r, *r);
+            let v = vec![
+                Vec3::new(-hx, -hy, -hz),
+                Vec3::new(hx, -hy, -hz),
+                Vec3::new(hx, hy, -hz),
+                Vec3::new(-hx, hy, -hz),
+                Vec3::new(-hx, -hy, hz),
+                Vec3::new(hx, -hy, hz),
+                Vec3::new(hx, hy, hz),
+                Vec3::new(-hx, hy, hz),
+            ];
+            let f = vec![
+                [0, 1, 2], [0, 2, 3], [4, 6, 5], [4, 7, 6],
+                [0, 5, 1], [0, 4, 5], [2, 6, 7], [2, 7, 3],
+                [1, 6, 2], [1, 5, 6], [3, 7, 4], [3, 4, 0],
+            ];
+            (v, f)
+        }
         Shape::Convex { vertices, faces } => (vertices.clone(), faces.clone()),
     }
 }

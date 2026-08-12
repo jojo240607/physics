@@ -480,6 +480,16 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
             Shape::Box { half } => {
                 half.x * half.y * half.z * T::from_f64(8.0).unwrap()
             }
+            Shape::Capsule { half_height, r } => {
+                // 圆柱(π r² · 2·half) + 两半球(4/3 π r³)
+                let pi = T::from_f64(std::f64::consts::PI).unwrap();
+                pi * (*r) * (*r) * T::from_f64(2.0).unwrap() * (*half_height)
+                    + T::from_f64(4.0).unwrap() / T::from_f64(3.0).unwrap()
+                        * pi
+                        * (*r)
+                        * (*r)
+                        * (*r)
+            }
             Shape::Convex { .. } => T::zero(),
         }
     }

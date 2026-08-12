@@ -48,11 +48,59 @@ pub fn ray_cast<T: RealField + Copy>(
             normal: n,
         }),
         Shape::Box { half } => ray_box(origin, dir, body, *half),
+        Shape::Capsule { half_height, r } => {
+            // 射线 vs 胶囊:胶囊 = y 轴线段 ± 半径球扫掠,等价于射线平移 −r 后与线段求距。
+            ray_capsule(origin, dir, body, *half_height, *r)
+        }
         Shape::Convex { vertices, faces } => {
             // 保守近似:先把射线变换到局部空间,对每个三角形求交取最近。
             ray_convex(origin, dir, body, vertices, faces)
         }
     }
+}
+
+/// 射线 vs 胶囊(局部 y 轴线段半长 `half_height`,半径 `r`)。
+/// 用"射线到线段的最近距离 ≤ r"判定(平移射线 ±r 后与线段求距,取最近 t)。
+fn ray_capsule<T: RealField + Copy>(
+    origin: &Vec3<T>,
+    dir: &Vec3<T>,
+    body: &Body<T>,
+    half_height: T,
+    r: T,
+) -> Option<RayHit<T>> {
+    // 局部空间:把射线变换到胶囊局部系(线段 = 局部 y 轴 [−h, h])。
+    let inv_rot = body.rot.inverse();
+    let o_local = inv_rot * (*origin - body.pos);
+    let d_local = inv_rot * *dir;
+
+    // 射线-线段最近参数 t(标准公式):线段端点 e1/e2。
+    let e1 = Vec3::new(T::zero(), -half_height, T::zero());
+    let e2 = Vec3::new(T::zero(), half_height, T::zero());
+    let seg = e2 - e1;
+    let ro = o_local - e1;
+    let d2 = d_local.dot(&d_local);
+    let seg2 = seg.dot(&seg);
+    let ddv = d_local.dot(&seg);
+    let dv = d_local.dot(&ro);
+    let sv = seg.dot(&ro);
+    let det = d2 * seg2 - ddv * ddv;
+    let (t, s) = if det.abs() > T::from_f64(1e-12).unwrap() {
+        let t = (ddv * sv - dv * seg2) / det;
+        let s = (d2 * sv - ddv * dv) / det;
+        (t, s.clamp(T::zero(), T::one()))
+    } else {
+        (T::zero(), T::zero())
+    };
+    // 该 t 下射线点到线段的最近距离。
+    let closest = e1 + seg * s;
+    let d = (o_local + d_local * t) - closest;
+    if d.norm() <= r && t >= T::zero() {
+        let t_world = t; // 局部 t = 世界 t(旋转保距)
+        let point = *origin + *dir * t_world;
+        let normal = (point - body.pos - (body.rot * closest)).normalize();
+        return Some(RayHit { t: t_world, point, normal });
+    }
+    None
 }
 
 /// 射线 vs 球(中心 `c`,半径 `r`)。返回 `(t, 命中法线)`,未命中 None。

@@ -92,6 +92,14 @@ pub mod serde_geom {
 pub enum Shape<T: RealField + Copy> {
     /// 球:中心在局部原点,半径 r。
     Sphere { r: T },
+    /// 胶囊体:沿局部 **y 轴**的线段(半长 `half_height`)+ 半径 `r`(球扫掠线段)。
+    /// 角色控制器 / 人形肢体 / 车辆轮胎的常用碰撞体。凸体,走通用 GJK+EPA 窄相。
+    Capsule {
+        /// 线段半长(沿局部 y 轴)。
+        half_height: T,
+        /// 半径。
+        r: T,
+    },
     /// 轴对齐盒(局部空间半长 extents)。
     Box {
         #[serde(with = "serde_geom")]
@@ -114,6 +122,19 @@ impl<T: RealField + Copy> Shape<T> {
                 // 球面最远点 = 沿 dir 的单位向量 * r(退化方向给 +X)。
                 let n = dir.normalize();
                 n * *r
+            }
+            Shape::Capsule { half_height, r } => {
+                // 线段上沿 dir 投影最大的端点(投影 = ±h*dir.y),再加 r*单位方向。
+                // dir.y==0 时线段上任意点投影相同,取中点使纯 x/z 方向无 y 偏移。
+                let n = dir.normalize();
+                let end = if dir.y > T::zero() {
+                    Vec3::new(T::zero(), *half_height, T::zero())
+                } else if dir.y < T::zero() {
+                    Vec3::new(T::zero(), -*half_height, T::zero())
+                } else {
+                    Vec3::zeros()
+                };
+                end + n * *r
             }
             Shape::Box { half } => Vec3::new(
                 if dir.x >= T::zero() { half.x } else { -half.x },
@@ -139,6 +160,7 @@ impl<T: RealField + Copy> Shape<T> {
     pub fn bounding_sphere_r(&self) -> T {
         match self {
             Shape::Sphere { r } => *r,
+            Shape::Capsule { half_height, r } => *half_height + *r,
             Shape::Box { half } => half.norm(),
             Shape::Convex { vertices, .. } => vertices
                 .iter()
@@ -152,6 +174,12 @@ impl<T: RealField + Copy> Shape<T> {
     pub fn contains_local(&self, p: &Vec3<T>) -> bool {
         match self {
             Shape::Sphere { r } => p.norm() <= *r,
+            Shape::Capsule { half_height, r } => {
+                // 到 y 轴线段 [−h,h] 的最近点距离 ≤ r。
+                let y = p.y.clamp(-*half_height, *half_height);
+                let cx = p.x * p.x + (p.y - y) * (p.y - y) + p.z * p.z;
+                cx <= (*r) * (*r)
+            }
             Shape::Box { half } => {
                 p.x.abs() <= half.x && p.y.abs() <= half.y && p.z.abs() <= half.z
             }
@@ -346,6 +374,10 @@ impl<T: RealField + Copy> Body<T> {
         // 用包围盒半长作为等效惯量估计(对角张量,局部主轴 = 世界轴)。
         let half = match &self.shape {
             Shape::Sphere { r } => Vec3::new(*r, *r, *r),
+            Shape::Capsule { half_height, r } => {
+                let e = *half_height + *r;
+                Vec3::new(*r, e, *r)
+            }
             Shape::Box { half } => *half,
             Shape::Convex { vertices, .. } => {
                 // 取各轴最大投影作为半长。
@@ -390,6 +422,34 @@ mod tests {
         };
         let p = s.support_local(&Vec3::new(1.0, 1.0, 1.0));
         assert!((p - Vec3::new(1.0, 2.0, 3.0)).norm() < 1e-9);
+    }
+
+    #[test]
+    fn capsule_support_on_axis() {
+        // 半高 2 + 半径 1 的胶囊,沿 +y 支撑点应在 (0,3,0)。
+        let s = Shape::<f64>::Capsule {
+            half_height: 2.0,
+            r: 1.0,
+        };
+        let p = s.support_local(&Vec3::new(0.0, 1.0, 0.0));
+        assert!((p - Vec3::new(0.0, 3.0, 0.0)).norm() < 1e-9, "沿+y支撑 {}", p);
+        // 沿 +x:线段中心 (0,0,0) + r*+x = (1,0,0)。
+        let p2 = s.support_local(&Vec3::new(1.0, 0.0, 0.0));
+        assert!((p2 - Vec3::new(1.0, 0.0, 0.0)).norm() < 1e-9, "沿+x支撑 {}", p2);
+    }
+
+    #[test]
+    fn capsule_contains_and_bounds() {
+        let s = Shape::<f64>::Capsule {
+            half_height: 2.0,
+            r: 1.0,
+        };
+        // 内部点:胶囊轴上的点和侧面内点。
+        assert!(s.contains_local(&Vec3::new(0.0, 0.0, 0.0)));
+        assert!(s.contains_local(&Vec3::new(0.9, 1.5, 0.0)), "侧面内点应包含");
+        assert!(!s.contains_local(&Vec3::new(1.1, 1.5, 0.0)), "超出半径应不包含");
+        // 包围球半径 = h + r = 3。
+        assert!((s.bounding_sphere_r() - 3.0).abs() < 1e-9);
     }
 
     #[test]

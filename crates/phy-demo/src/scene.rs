@@ -1007,6 +1007,18 @@ fn render_body(fb: &mut Framebuffer, cam: &Camera, body: &Body<f64>) {
                 }
             }
         }
+        Shape::Capsule { r, .. } => {
+            // 简略渲染为胶囊所在位置的圆（可视化用）。
+            if let Some((sx, sy, depth)) = project_point(cam, fb, body.pos) {
+                let r_screen = (*r * depth) as i32;
+                let col = if body.inv_mass < 1e-9 {
+                    [90u8, 90u8, 90u8]
+                } else {
+                    [220u8, 60u8, 60u8]
+                };
+                fb.fill_circle(sx, sy, r_screen.max(1), depth as f32, col);
+            }
+        }
         Shape::Convex { .. } => { /* 凸体简略不渲染 */ }
     }
 }
