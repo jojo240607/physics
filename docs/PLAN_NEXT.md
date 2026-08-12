@@ -23,7 +23,7 @@
 | `Capsule` | ✅ 线段 + 半径，沿局部 y 轴。`support_local`/`contains_local`/`bounding_sphere_r`/`set_inertia_from_shape` 全实现 |
 | narrow-phase（Capsule） | ✅ 解析快速路径：`capsule_sphere` / `capsule_capsule` / `capsule_box`（法线由第一个参数指向第二个，含盒内推出分支）；raycast/ccd/fracture 补全 |
 | **发现** | ⚠️ 既有 **GJK 对"平滑体 + 尖角(Box)"组合不稳健**(迭代发散,判相交失败;Sphere/Box 因走快速路径不受影响,Convex-Convex 若走 GJK 需注意)。Capsule 已走解析路径规避。 |
-| `Heightfield`（高度场） | ⏳ 地形。赛车 / 物理平台刚需 |
+| `Heightfield`（高度场） | ✅ 静态地形 `nx×nz` 格点高度 + 双线性插值查询;`heightfield_vs_body` 窄相支持 Sphere/Box/Capsule(法线由地形指向动态体,垂直向上);raycast 待补。测试 `sphere_rests_on_heightfield_terrain`(球落地形停表面) |
 | `Compound`（复合） | ⏳ 一个刚体挂多个子碰撞器。机械臂 / 车辆底盘 |
 | 测试 | ✅ 3 个：`capsule_support_on_axis` / `capsule_contains_and_bounds` / `capsule_rests_on_ground_via_gjk_epa`(落地不穿透、静止) |
 

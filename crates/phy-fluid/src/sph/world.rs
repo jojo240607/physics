@@ -491,6 +491,18 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
                         * (*r)
             }
             Shape::Convex { .. } => T::zero(),
+            Shape::Heightfield { nx, nz, cell, heights } => {
+                // 地形体积近似:网格范围 × 平均高度。
+                let hx = T::from_f64(*nx as f64).unwrap() * *cell;
+                let hz = T::from_f64(*nz as f64).unwrap() * *cell;
+                let sum: T = heights.iter().fold(T::zero(), |a, &h| a + h);
+                let hy = if heights.is_empty() {
+                    T::zero()
+                } else {
+                    sum / T::from_f64(heights.len() as f64).unwrap()
+                };
+                hx * hz * hy.abs()
+            }
         }
     }
 

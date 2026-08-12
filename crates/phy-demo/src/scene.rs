@@ -1020,6 +1020,30 @@ fn render_body(fb: &mut Framebuffer, cam: &Camera, body: &Body<f64>) {
             }
         }
         Shape::Convex { .. } => { /* 凸体简略不渲染 */ }
+        Shape::Heightfield { nx, nz, cell, heights } => {
+            // 简略渲染为地形包围盒(可视化)。
+            let hx = *nx as f64 * *cell * 0.5;
+            let hz = *nz as f64 * *cell * 0.5;
+            let corners = [
+                Vec3::new(body.pos.x - hx, body.pos.y, body.pos.z - hz),
+                Vec3::new(body.pos.x + hx, body.pos.y, body.pos.z - hz),
+                Vec3::new(body.pos.x + hx, body.pos.y, body.pos.z + hz),
+                Vec3::new(body.pos.x - hx, body.pos.y, body.pos.z + hz),
+            ];
+            let pts: Vec<Option<(i32, i32, f64)>> = corners
+                .iter()
+                .map(|c| project_point(cam, fb, *c))
+                .collect();
+            let _ = heights;
+            if let [Some(a), Some(b), Some(c), Some(d)] = pts.as_slice() {
+                let col = [70u8, 120u8, 70u8];
+                let depth = (a.2 + b.2 + c.2 + d.2) / 4.0;
+                fb.draw_line(a.0, a.1, b.0, b.1, depth as f32, col);
+                fb.draw_line(b.0, b.1, c.0, c.1, depth as f32, col);
+                fb.draw_line(c.0, c.1, d.0, d.1, depth as f32, col);
+                fb.draw_line(d.0, d.1, a.0, a.1, depth as f32, col);
+            }
+        }
     }
 }
 

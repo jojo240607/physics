@@ -59,6 +59,8 @@ pub fn substep_count<T: RealField + Copy + ToPrimitive>(
             Shape::Box { half } => half.x.min(half.y).min(half.z),
             Shape::Capsule { r, .. } => *r,
             Shape::Convex { .. } => r,
+            // 高度场为静态地形，取网格尺寸作为特征尺度（不参与 CCD 保守估计）。
+            Shape::Heightfield { cell, .. } => *cell,
         };
         if feat < min_feat {
             min_feat = feat;

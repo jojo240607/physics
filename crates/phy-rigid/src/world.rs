@@ -45,7 +45,7 @@ pub struct RigidWorld<T: RealField + Copy> {
     pub last_sensor_contacts: Vec<Contact<T>>,
 }
 
-impl<T: RealField + Copy + num_traits::ToPrimitive> Default for RigidWorld<T> {
+impl<T: RealField + Copy + NumCast> Default for RigidWorld<T> {
     fn default() -> Self {
         Self::new()
     }
@@ -218,7 +218,7 @@ fn solve_islands_position<T: RealField + Copy>(
     (pseudo, ang_pseudo)
 }
 
-impl<T: RealField + Copy + num_traits::ToPrimitive> RigidWorld<T> {
+impl<T: RealField + Copy + NumCast> RigidWorld<T> {
     /// 创建空刚体世界(默认重力沿 -Y)。
     ///
     /// # 示例
@@ -1126,6 +1126,45 @@ mod tests {
             world.bodies[cap].vel.norm() < 0.5,
             "Capsule 落地后应静止,实际 vel={}",
             world.bodies[cap].vel.norm()
+        );
+    }
+
+    /// 高度场(D2):球从上方落在静态 Heightfield 平坦地形上,应停在地形表面(不穿透、静止),
+    /// 验证 heightfield_vs_body 窄相与接触求解。
+    #[test]
+    fn sphere_rests_on_heightfield_terrain() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, -9.81, 0.0);
+        // 平坦高度场:3×3 格点,格距 1,高度全 0。原点在 (-1.5, 0, -1.5)。
+        let heights = vec![0.0f64; 9];
+        let ground = world.add_body(Body {
+            shape: Shape::Heightfield {
+                nx: 3,
+                nz: 3,
+                cell: 1.0,
+                heights,
+            },
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            rot: na::one(),
+            inv_mass: 0.0, // 静态地形
+            ..Default::default()
+        });
+        let _ = ground;
+        // 球在 y=3 释放,半径 0.5。地形表面 y=0,球应停在 y=0.5。
+        let ball = world.add_body(Body::new(Shape::Sphere { r: 0.5 }, Vec3::new(0.0, 3.0, 0.0), 1.0));
+        for _ in 0..400 {
+            world.step(1.0 / 120.0);
+        }
+        let cy = world.bodies[ball].pos.y;
+        assert!(
+            (cy - 0.5).abs() < 0.1,
+            "球应停在地形表面 y=0.5,实际 y={}",
+            cy
+        );
+        assert!(
+            world.bodies[ball].vel.norm() < 0.5,
+            "球落地后应静止,实际 vel={}",
+            world.bodies[ball].vel.norm()
         );
     }
 

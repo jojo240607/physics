@@ -56,6 +56,8 @@ pub fn ray_cast<T: RealField + Copy>(
             // 保守近似:先把射线变换到局部空间,对每个三角形求交取最近。
             ray_convex(origin, dir, body, vertices, faces)
         }
+        // 高度场:射线命中需沿射线步进查询地形表面,暂保守返回 None(待补)。
+        Shape::Heightfield { .. } => None,
     }
 }
 

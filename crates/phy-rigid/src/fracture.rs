@@ -405,6 +405,31 @@ fn body_to_convex_local<T: RealField + Copy + NumCast>(body: &Body<T>) -> (Vec<V
             (v, f)
         }
         Shape::Convex { vertices, faces } => (vertices.clone(), faces.clone()),
+        Shape::Heightfield { nx, nz, cell, heights } => {
+            // 用覆盖地形范围的盒近似破碎(半长按网格范围,高度取最大 |h|)。
+            let hx = T::from_f64(*nx as f64).unwrap() * *cell * T::from_f64(0.5).unwrap();
+            let hz = T::from_f64(*nz as f64).unwrap() * *cell * T::from_f64(0.5).unwrap();
+            let hy = heights
+                .iter()
+                .fold(T::zero(), |a, &h| if h.abs() > a { h.abs() } else { a });
+            let (hx, hy, hz) = (hx, hy, hz);
+            let v = vec![
+                Vec3::new(-hx, -hy, -hz),
+                Vec3::new(hx, -hy, -hz),
+                Vec3::new(hx, hy, -hz),
+                Vec3::new(-hx, hy, -hz),
+                Vec3::new(-hx, -hy, hz),
+                Vec3::new(hx, -hy, hz),
+                Vec3::new(hx, hy, hz),
+                Vec3::new(-hx, hy, hz),
+            ];
+            let f = vec![
+                [0, 1, 2], [0, 2, 3], [4, 6, 5], [4, 7, 6],
+                [0, 5, 1], [0, 4, 5], [2, 6, 7], [2, 7, 3],
+                [1, 6, 2], [1, 5, 6], [3, 7, 4], [3, 4, 0],
+            ];
+            (v, f)
+        }
     }
 }
 

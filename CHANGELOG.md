@@ -152,6 +152,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   falls back to GJK may need attention). Capsule sidesteps it via analytic paths. Verified by
   `capsule_support_on_axis` / `capsule_contains_and_bounds` /
   `capsule_rests_on_ground_via_gjk_epa`. 75 phy-rigid tests + full workspace green.
+- **Heightfield terrain collider (D2, game-grade plan `PLAN_NEXT.md`)**: new
+  `Shape::Heightfield { nx, nz, cell, heights }` (2-D grid of heights on the world XZ plane,
+  bilinear-interpolated surface query) with analytic narrow-phase `heightfield_vs_body`
+  supporting **Sphere / Box / Capsule** resting on terrain (normal points up, from terrain to
+  body), plus bounding-sphere / inertia / broad-phase coverage and rendering in `phy-demo`.
+  A Sphere dropped on a flat heightfield rests on the surface without tunneling. Note: the
+  main `RigidWorld` impl bound was relaxed from `ToPrimitive` to `NumCast` so narrow-phase can
+  use index conversions for heightfield queries. Verified by
+  `sphere_rests_on_heightfield_terrain`. 76 phy-rigid tests + full workspace green.
 - **Scene description DSL / prefab (B3, commercial-readiness plan §11)**: new
   `scene.rs` module with `SceneDesc<T>` (gravity + bodies + joints, reusing the
   already-serde `Body`/`JointConstraint` so the description is isomorphic to the

@@ -108,6 +108,7 @@ impl<T: RealField + Copy> OpticBody<T> {
             Shape::Box { half } => box_hit(&ro, &rd_n, half),
             Shape::Capsule { .. } => None, // 光学暂不处理胶囊体
             Shape::Convex { vertices, faces } => convex_hit(&ro, &rd_n, vertices, faces),
+            Shape::Heightfield { .. } => None, // 光学暂不处理高度场
         }?;
         // 局部 t 需按世界方向长度还原(因为 rd 被旋转但长度不变,rd_len 即比例)。
         let t_world = t_local * rd_len;

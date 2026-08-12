@@ -4,10 +4,17 @@
 //! - 盒-盒: SAT(分离轴定理)。
 //! - 通用凸体(含球/盒/凸多面体):GJK 判相交,EPA 求接触法线+穿透深度。
 
+use num_traits::NumCast;
 use phy_math::{RealField, Vec3};
 
 use crate::contact::Contact;
 use crate::shape::{Body, Shape};
+
+/// 泛型标量转 f64(用于索引/边界计算)。
+#[allow(dead_code)]
+fn to_f64<T: RealField + Copy + NumCast>(x: T) -> f64 {
+    x.to_f64().unwrap_or(0.0)
+}
 
 /// 球-球快速相交:返回接触(若有)。
 pub fn sphere_sphere<T: RealField + Copy>(a: &Body<T>, b: &Body<T>) -> Option<Contact<T>> {
@@ -401,7 +408,7 @@ fn closest_on_segment<T: RealField + Copy>(
 /// 胶囊-球快速相交:胶囊线段 + 球,点到线段最近距离 ≤ ra+rb。
 /// 返回法线由胶囊指向球。
 pub fn capsule_sphere<T: RealField + Copy>(cap: &Body<T>, s: &Body<T>) -> Option<Contact<T>> {
-    let (ra, rb) = match (&cap.shape, &s.shape) {
+    let (ra, _rb) = match (&cap.shape, &s.shape) {
         (Shape::Capsule { r, .. }, Shape::Sphere { r: rb }) => (*r, *rb),
         _ => return None,
     };
@@ -556,8 +563,80 @@ pub fn capsule_box<T: RealField + Copy>(cap: &Body<T>, b: &Body<T>) -> Option<Co
     Some(Contact::new(point, n, depth))
 }
 
+// ===== Heightfield(高度场,静态地形)窄相 =====
+
+/// 查询高度场在局部 xz 处的表面高度(双线性插值)。返回 None 若 xz 超出网格范围。
+fn heightfield_height_at<T: RealField + Copy + NumCast>(hf: &Shape<T>, x: T, z: T) -> Option<T> {
+    let (nx, nz, cell, heights) = match hf {
+        Shape::Heightfield { nx, nz, cell, heights } => (*nx, *nz, *cell, heights),
+        _ => return None,
+    };
+    // 局部 xz 范围:中心在原点,范围 [-nx/2*cell, nx/2*cell]。
+    let half_x = T::from_f64(nx as f64).unwrap() * cell * T::from_f64(0.5).unwrap();
+    let half_z = T::from_f64(nz as f64).unwrap() * cell * T::from_f64(0.5).unwrap();
+    if x < -half_x || x > half_x || z < -half_z || z > half_z {
+        return None;
+    }
+    // 格点坐标:局部 x 从 -half_x 到 half_x,共 nx 格点。
+    let gx = (x + half_x) / cell;
+    let gz = (z + half_z) / cell;
+    let ix = gx.floor();
+    let iz = gz.floor();
+    let fx = gx - ix;
+    let fz = gz - iz;
+    let ix = ix.max(T::zero()).min(T::from_f64((nx - 1) as f64).unwrap());
+    let iz = iz.max(T::zero()).min(T::from_f64((nz - 1) as f64).unwrap());
+    let i0 = to_f64(ix.floor()).max(0.0) as usize;
+    let i1 = (i0 + 1).min(nx - 1);
+    let j0 = to_f64(iz.floor()).max(0.0) as usize;
+    let j1 = (j0 + 1).min(nz - 1);
+    let h00 = heights[i0 + nx * j0];
+    let h10 = heights[i1 + nx * j0];
+    let h01 = heights[i0 + nx * j1];
+    let h11 = heights[i1 + nx * j1];
+    // 双线性插值。
+    let h0 = h00 + (h10 - h00) * fx;
+    let h1 = h01 + (h11 - h01) * fx;
+    Some(h0 + (h1 - h0) * fz)
+}
+
+/// 高度场 vs 动态体:查询动态体(在 xz 处)表面高度,若动态体底部低于表面则产生接触。
+/// 法线约定:由高度场指向动态体(垂直向上),用于把动态体托在地形上。
+/// 支持 Sphere / Box / Capsule(取各自底部最低点)。
+pub fn heightfield_vs_body<T: RealField + Copy + NumCast>(hf: &Body<T>, b: &Body<T>) -> Option<Contact<T>> {
+    let (nx, nz, cell, _heights) = match &hf.shape {
+        Shape::Heightfield { nx, nz, cell, heights } => (*nx, *nz, *cell, heights),
+        _ => return None,
+    };
+    let _ = (nx, nz, cell);
+    // 把动态体质心变换到高度场局部系(高度场默认无旋转,世界系即可)。
+    let lpos = hf.rot.inverse() * (b.pos - hf.pos);
+    let x = lpos.x;
+    let z = lpos.z;
+    let surface_h = heightfield_height_at(&hf.shape, x, z)?;
+    // 动态体底部到质心的距离(半球/半盒/半胶囊)。
+    let bottom_offset = match &b.shape {
+        Shape::Sphere { r } => *r,
+        Shape::Capsule { half_height, r } => *half_height + *r,
+        Shape::Box { half } => half.y,
+        _ => return None,
+    };
+    // 动态体底部 y = lpos.y - bottom_offset。若低于表面则穿透。
+    let bottom = lpos.y - bottom_offset;
+    if bottom > surface_h {
+        return None; // 未接触
+    }
+    // 法线由高度场指向动态体:垂直向上(+y)。
+    let normal = hf.rot * Vec3::new(T::zero(), T::one(), T::zero());
+    let depth = surface_h - bottom;
+    // 接触点:动态体底部最低点。
+    let point_local = Vec3::new(x, surface_h, z);
+    let point = hf.pos + hf.rot * point_local;
+    Some(Contact::new(point, normal, depth))
+}
+
 /// 通用 Narrow-phase 入口:优先快速路径,回退 GJK+EPA。
-pub fn collide<T: RealField + Copy>(a: &Body<T>, b: &Body<T>) -> Option<Contact<T>> {
+pub fn collide<T: RealField + Copy + NumCast>(a: &Body<T>, b: &Body<T>) -> Option<Contact<T>> {
     if matches!(a.shape, Shape::Sphere { .. }) && matches!(b.shape, Shape::Sphere { .. }) {
         if let Some(c) = sphere_sphere(a, b) {
             return Some(c);
@@ -610,6 +689,26 @@ pub fn collide<T: RealField + Copy>(a: &Body<T>, b: &Body<T>) -> Option<Contact<
             // capsule_box 返回法线 胶囊→盒(=b→a),翻转成 a→b。
             return Some(Contact::new(c.point, -c.normal, c.depth));
         }
+    }
+    // Heightfield(静态地形)vs 动态体(Sphere/Box/Capsule)。两种顺序。
+    if matches!(a.shape, Shape::Heightfield { .. })
+        && matches!(b.shape, Shape::Sphere { .. } | Shape::Box { .. } | Shape::Capsule { .. })
+    {
+        if let Some(c) = heightfield_vs_body(a, b) {
+            return Some(c);
+        }
+    }
+    if matches!(b.shape, Shape::Heightfield { .. })
+        && matches!(a.shape, Shape::Sphere { .. } | Shape::Box { .. } | Shape::Capsule { .. })
+    {
+        if let Some(c) = heightfield_vs_body(b, a) {
+            // 法线由地形→动态体(=b→a),翻转成 a→b。
+            return Some(Contact::new(c.point, -c.normal, c.depth));
+        }
+    }
+    // Heightfield 之间或 Heightfield vs Convex:非凸不支持,返回 None。
+    if matches!(a.shape, Shape::Heightfield { .. }) || matches!(b.shape, Shape::Heightfield { .. }) {
+        return None;
     }
     if gjk_intersect(a, b) {
         if let Some(c) = gjk_epa_contact(a, b) {

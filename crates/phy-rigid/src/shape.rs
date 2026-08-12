@@ -111,6 +111,19 @@ pub enum Shape<T: RealField + Copy> {
         vertices: Vec<Vec3<T>>,
         faces: Vec<[usize; 3]>,
     },
+    /// 高度场(静态地形):二维格点高度,世界 XZ 平面内 `nx × nz` 个高度值,格距 `cell`。
+    /// 高度值按 **z-major** 存储(`heights[x + nx*z]`),原点在局部 `(-nx/2*cell, 0, -nz/2*cell)`。
+    /// 非凸,走专用窄相(heightfield_sphere/capsule/box),不可用于 GJK。
+    Heightfield {
+        /// X 方向格点数。
+        nx: usize,
+        /// Z 方向格点数。
+        nz: usize,
+        /// 相邻格点间距。
+        cell: T,
+        /// 高度值(z-major,长度 `nx*nz`;T 为 f32/f64,serde 默认支持)。
+        heights: Vec<T>,
+    },
 }
 
 impl<T: RealField + Copy> Shape<T> {
@@ -153,6 +166,8 @@ impl<T: RealField + Copy> Shape<T> {
                 }
                 best
             }
+            // 高度场非凸,不用于 GJK;支撑返回局部原点(仅防误用崩溃)。
+            Shape::Heightfield { .. } => Vec3::zeros(),
         }
     }
 
@@ -166,6 +181,15 @@ impl<T: RealField + Copy> Shape<T> {
                 .iter()
                 .map(|v| v.norm())
                 .fold(T::zero(), |a, b| if a > b { a } else { b }),
+            // 高度场包围球取对角线半长(覆盖整个地形,供 broad-phase)。
+            Shape::Heightfield { nx, nz, cell, heights } => {
+                let hx = T::from_f64(*nx as f64).unwrap() * *cell * T::from_f64(0.5).unwrap();
+                let hz = T::from_f64(*nz as f64).unwrap() * *cell * T::from_f64(0.5).unwrap();
+                let hy = heights
+                    .iter()
+                    .fold(T::zero(), |a, &h| if h.abs() > a { h.abs() } else { a });
+                (hx * hx + hy * hy + hz * hz).sqrt()
+            }
         }
     }
 
@@ -200,6 +224,8 @@ impl<T: RealField + Copy> Shape<T> {
                 }
                 true
             }
+            // 高度场非凸,不支持点包含(走专用窄相)。
+            Shape::Heightfield { .. } => false,
         }
     }
 }
@@ -388,6 +414,15 @@ impl<T: RealField + Copy> Body<T> {
                     h.z = if v.z.abs() > h.z { v.z.abs() } else { h.z };
                 }
                 h
+            }
+            Shape::Heightfield { nx, nz, cell, heights } => {
+                // 地形惯量估计:半长取网格范围,高度取最大 |h|。
+                let hx = T::from_f64(*nx as f64).unwrap() * *cell * T::from_f64(0.5).unwrap();
+                let hz = T::from_f64(*nz as f64).unwrap() * *cell * T::from_f64(0.5).unwrap();
+                let hy = heights
+                    .iter()
+                    .fold(T::zero(), |a, &h| if h.abs() > a { h.abs() } else { a });
+                Vec3::new(hx, hy, hz)
             }
         };
         // 实心长方体主惯量: I_x = m/12 (y²+z²) 等(球用 r 等价)。
