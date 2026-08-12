@@ -1759,6 +1759,7 @@ dependencies = [
  "phy-math",
  "phy-optics",
  "phy-rigid",
+ "phy-soft",
  "pollster",
  "wasm-bindgen",
  "wasm-bindgen-futures",

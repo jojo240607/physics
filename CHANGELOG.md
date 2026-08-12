@@ -39,6 +39,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - CAUSTIC (W3):GPU `render_caustics_gpu` vs CPU `Caustics::accumulate`,**bit-exact 0.0**;
   - SPH (W4) / GRANULAR (W5):由 `examples/real_gpu_error.rs` 真机对比通过(acc MAX≈1.4e-4 / 投影 bit-exact 0.0);
   - SQUARE (W1) 内核 `out=in²` 经审阅确认。全部 5 个 wgsl 内核已数值审批;无 adapter 环境测试优雅跳过。
+- **A1 统一耦合闭环 demo (BEYOND_COMMERCIAL.md 超越路线)**: 新增
+  `crates/phy-demo-web/examples/coupled_world.rs`——一个 `World<f64>` 同时挂入
+  `RigidSubsystem`(地面+落球) / `FluidSubsystem`(SPH 水池) / `SoftSubsystem`(悬挂布帘) /
+  `OpticSubsystem`(实时焦散),**耦合全由引擎自动双向完成**(见 `FluidSubsystem::couple` /
+  `SoftSubsystem::step`),无手写胶水。实测证明:①落球受阿基米德浮力托在水面(ball_y 1.20→0.30 稳定);
+  ②软体布帘被流场推动(KE_s>0);③光学每帧实时投影焦散(焦散像素全屏)。这是商用单场引擎
+  (PhysX/Havok/Rapier/Jolt)无法表达的能力——它们需拼 3~4 个独立引擎 + 手写耦合。
+  同时**实测暴露 SPH 入水冲击数值刚性**(初始 KE_f≈223→入水帧暴涨至 3.5×10⁵, 之后耗散回落稳定),
+  已记入 BEYOND_COMMERCIAL.md B0 攻关项(初始晶格重叠 + couple_bodies 单向速度吸附 + WCSPH 自发沸腾)。
 
 ### Fixed
 - **真机复测暴露的 GPU 初始化 panic (PLAN_NEXT §2.3)**: `GpuPipelines` 中冗余的
