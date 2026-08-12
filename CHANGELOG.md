@@ -25,8 +25,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   各 `render_*_gpu` / `step_*_gpu` 不再每帧重建 pipeline/shader，只重建按输入尺寸变化的 data buffer +
   bind group 并复用常驻 pipeline。`GpuStrategy` 枚举 (Auto/ForceGpu/ForceCpu, 默认 Auto) 经
   `GpuContext::init_with(strategy)` 与 Web `DemoApp::set_gpu_strategy` 暴露，无 adapter / ForceCpu 时
-  自动回退 CPU 帧，确定性不破坏。顺带修复 `flatten_scene` 对 `Shape` 新变种 (Capsule/Heightfield/Compound)
+  自动回退 CPU 帧，确定性不破坏。  顺带修复 `flatten_scene` 对 `Shape` 新变种 (Capsule/Heightfield/Compound)
   的非穷尽匹配编译失败。
+- **§2.3 真机复测通过 (PLAN_NEXT §2.3)**: 在真实 WebGPU adapter (wgpu 30 / Vulkan /
+  NVIDIA Quadro P2200, `stable-x86_64-pc-windows-msvc --release` 跑 `examples/gpu_perf.rs`)
+  测得 GRAN 10k 由管线未持久化时的 ~1.88 ms 降到 **1.150 ms/帧 (≈1.6×)**，证明常驻缓存生效；
+  SPH/GRAN 全场景满足 30/60fps 预算，SPH 50k 达 140fps。报告落
+  `crates/phy-demo-web/gpu_real_perf_report.txt`。
+
+### Fixed
+- **真机复测暴露的 GPU 初始化 panic (PLAN_NEXT §2.3)**: `GpuPipelines` 中冗余的
+  `sph` / `granular` 两个管线用 `mk_pipeline("...", "main")`，但其 WGSL 并无 `main`
+  entry（SPH 用 `density_main`/`force_main`、GRAN 用 `clear_main`/`contact_main`/`apply_main`），
+  导致 `GpuContext::init` 在真实 adapter 上 `create_compute_pipeline` 报 "Unable to find entry
+  point 'main'" 而 panic。渲染路径本就用 `build_sph_pipelines` / `build_granular_pipelines` 的
+  常驻版本，故删除这两个死字段，init 现可在真机通过。
 - **Rigid body sleeping (B1, commercial-readiness plan §11)**: `Body` gains
   `sleeping` / `sleep_time` flags; `SolverParams` gains `sleep_lin_vel2`,
   `sleep_ang_vel2`, `sleep_time` thresholds (default ~0.1 m/s, 0.5 s). Near-rest

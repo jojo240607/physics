@@ -1,8 +1,8 @@
 G2 real-adapter perf report generated at windows
 adapter: Vulkan Quadro P2200 (vendor=0x10de device=1c31)
-SPH  sph_1k   n=  1000 | GPU 3.330 ms (300.3 fps) | vsCPU 0.5x | 30fps:✓ 60fps:✓
-SPH  sph_10k  n=  9261 | GPU 4.124 ms (242.5 fps) | vsCPU 1.6x | 30fps:✓ 60fps:✓
-SPH  sph_50k  n= 46656 | GPU 9.485 ms (105.4 fps) | vsCPU — | 30fps:✓ 60fps:✓
-GRAN gran_1k  n=  1000 | GPU 2.135 ms (468.3 fps) | vsCPU 1.4x | 30fps:✓ 60fps:✓
-GRAN gran_5k  n=  5000 | GPU 2.282 ms (438.1 fps) | vsCPU 5.5x | 30fps:✓ 60fps:✓
-GRAN gran_10k n= 10000 | GPU 2.311 ms (432.8 fps) | vsCPU 10.7x | 30fps:✓ 60fps:✓
+SPH  sph_1k   n=  1000 | GPU 0.749 ms (1334.6 fps) | vsCPU 2.1x | 30fps:✓ 60fps:✓
+SPH  sph_10k  n=  9261 | GPU 1.501 ms (666.2 fps) | vsCPU 4.5x | 30fps:✓ 60fps:✓
+SPH  sph_50k  n= 46656 | GPU 7.133 ms (140.2 fps) | vsCPU — | 30fps:✓ 60fps:✓
+GRAN gran_1k  n=  1000 | GPU 0.439 ms (2279.0 fps) | vsCPU 6.9x | 30fps:✓ 60fps:✓
+GRAN gran_5k  n=  5000 | GPU 1.158 ms (863.5 fps) | vsCPU 10.8x | 30fps:✓ 60fps:✓
+GRAN gran_10k n= 10000 | GPU 1.150 ms (869.5 fps) | vsCPU 21.6x | 30fps:✓ 60fps:✓

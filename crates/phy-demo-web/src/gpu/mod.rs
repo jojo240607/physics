@@ -59,8 +59,6 @@ pub struct GpuPipelines {
     pub square: wgpu::ComputePipeline,
     pub optic: wgpu::ComputePipeline,
     pub caustic: wgpu::ComputePipeline,
-    pub sph: wgpu::ComputePipeline,
-    pub granular: wgpu::ComputePipeline,
     // SPH 用自定义 bind group layout + pipeline layout(两个 entry point 共享),需一并常驻。
     pub sph_bgl: wgpu::BindGroupLayout,
     pub sph_pl: wgpu::PipelineLayout,
@@ -169,8 +167,6 @@ impl GpuContext {
             square: mk_pipeline(&device, "square", SQUARE_WGSL),
             optic: mk_pipeline(&device, "optic", OPTIC_WGSL),
             caustic: mk_pipeline(&device, "caustic", CAUSTIC_WGSL),
-            sph: mk_pipeline(&device, "sph", SPH_WGSL),
-            granular: mk_pipeline(&device, "granular", GRANULAR_WGSL),
             sph_bgl,
             sph_pl,
             sph_dens,

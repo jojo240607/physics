@@ -84,5 +84,22 @@
 
 ## 四、优先级建议
 1. **D1 关节扩充**（游戏向价值最高，求解器可扩展）—— ✅ 已完成。
-2. **GPU pipeline 持久化 + `GpuStrategy` 默认 Auto**（省 CPU 可交付能力）—— ✅ 已完成（复测待办）。
+2. **GPU pipeline 持久化 + `GpuStrategy` 默认 Auto**（省 CPU 可交付能力）—— ✅ 已完成（2026-08-12 真机复测：见下表）。
+
+   **§2.3 真机复测结果（真实 WebGPU adapter，wgpu 30 / Vulkan / NVIDIA Quadro P2200）**
+   工具链 `stable-x86_64-pc-windows-msvc --release` 跑 `examples/gpu_perf.rs`（3 预热 + 20 计时帧，单帧 ms）：
+
+   | 场景 | n | GPU ms/frame | fps | vsCPU(f64 单线程) |
+   |---|---|---|---|---|
+   | SPH   sph_1k  | 1000  | 0.749 | 1334.6 | 2.1x |
+   | SPH   sph_10k | 9261  | 1.501 | 666.2  | 4.5x |
+   | SPH   sph_50k | 46656 | 7.133 | 140.2  | —    |
+   | GRAN  gran_1k | 1000  | 0.439 | 2279.0 | 6.9x |
+   | GRAN  gran_5k | 5000  | 1.158 | 863.5  | 10.8x |
+   | GRAN  gran_10k| 10000 | 1.150 | 869.5  | 21.6x |
+
+   - **GRAN 10k 由管线未持久化时的 ~1.88 ms 降到 1.150 ms/帧（≈1.6×）**，证明 §2.3 的 `GpuPipelines` 常驻缓存生效（每帧不再 `create_compute_pipeline`）。
+   - 全部场景满足 30fps 与 60fps 预算；SPH 50k 140fps 远超实时。
+   - 复测同时修复了两个真实 bug：`GpuPipelines.sph` / `GpuPipelines.granular` 是 `mk_pipeline("...", "main")` 冗余管线，但其 WGSL 没有 `main` entry（SPH 用 `density_main`/`force_main`、GRAN 用 `clear_main`/`contact_main`/`apply_main`），导致 `GpuContext::init` 在真实 adapter 上 panic；已删除这两个死字段，渲染路径本就用 `build_sph_pipelines` / `build_granular_pipelines` 的常驻版本。
+   - 注：GLSL→WGSL 内核全量审批（M3）仍待做；M1 adapter 验收 + G2 性能基准已在真机跑通。
 3. D2 → D3 → D4（D2 ✅、D3 块求解 ✅、D4 ragdoll 装配 ✅ 均已完成；四项补齐计划全部收口）。
