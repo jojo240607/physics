@@ -100,7 +100,37 @@ pub mod fluid {
 }
 pub mod rigid {
     //! 刚体。
-    pub use phy_rigid::{RigidSubsystem, RigidWorld};
+    //!
+    //! # 角色控制器 (D4)
+    //! 用 kinematic 胶囊体做带碰撞 slide 的角色移动:先创建,再每帧用玩家输入驱动
+    //! `update`,最后 `step`。角色不会因碰撞被推开(kinematic),由控制器手动处理 slide。
+    //!
+    //! ```
+    //! use phy_sdk::{PhysicsBuilder, World, get_as_mut};
+    //! use phy_sdk::rigid::{RigidSubsystem, RigidWorld, CharacterController};
+    //! use phy_math::Vec3;
+    //!
+    //! let mut world: World<f64> = PhysicsBuilder::new().rigid().build();
+    //! let mut rigid = get_as_mut::<RigidSubsystem<f64>>(&mut world, 0)
+    //!     .expect("刚体子系统");
+    //! // 静态地面
+    //! rigid.world.add_body(phy_rigid::shape::Body {
+    //!     shape: phy_rigid::shape::Shape::Box { half: Vec3::new(20.0, 0.5, 20.0) },
+    //!     pos: Vec3::new(0.0, -0.5, 0.0),
+    //!     inv_mass: 0.0,
+    //!     ..Default::default()
+    //! });
+    //! // 创建角色(kinematic 胶囊)
+    //! let mut cc = CharacterController::new(&mut rigid.world, Vec3::new(0.0, 3.0, 0.0));
+    //! cc.speed = 5.0; cc.jump_speed = 6.0;
+    //! // 每帧:玩家输入驱动 + step(此处模拟静止下落)
+    //! for _ in 0..240 {
+    //!     cc.update(&mut rigid.world, 1.0 / 120.0, Vec3::zeros(), false);
+    //!     rigid.world.step(1.0 / 120.0);
+    //! }
+    //! assert!(cc.grounded, "角色应落到地面");
+    //! ```
+    pub use phy_rigid::{CharacterController, RigidSubsystem, RigidWorld};
 }
 pub mod granular {
     //! 颗粒(粉末/PBD)。

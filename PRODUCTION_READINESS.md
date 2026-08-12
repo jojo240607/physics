@@ -23,7 +23,7 @@
 | 流体算法 | ✅ 真实 SPH | poly6 / spiky_grad / visc_lap 核,密度-压力-力计算(`phy-fluid`) |
 | 颗粒算法 | ✅ 真实 PBD | Jacobi 接触投影(`phy-granular`,W5) |
 | 多层级验证 | ✅ host 测试 + wasm 守卫 | `cargo test` 全通过;`wasm-cross-check.py --gpu` 编译守卫通过 |
-| GPU 路径 | ⚠️ 已落地但仅代理验证 | `gpu_ref.rs` 纯 Rust 复刻 wgsl;真实 adapter 误差对比**未跑** |
+| GPU 路径 | ✅ 已落地且真机验证 | `gpu_ref.rs` 纯 Rust 复刻 wgsl;`examples/real_gpu_error.rs` 在真实 NVIDIA Quadro P2200(Vulkan)跑逐粒子误差对比,SPH acc MAX≈1.5e-4、颗粒 PBD 逐位 0;详见 `docs/gpu_accuracy_report.md`(G1 已达成) |
 | ABI 稳定性 | ✅ P7 契约落地 | 底层 ABI 版本化契约已建立 |
 
 ---
@@ -77,10 +77,10 @@
 
 ## 3. 里程碑路线图
 
-### 里程碑 M1 — GPU 保真度验证(解锁 G1)
-- [ ] 在真实 WebGPU adapter(浏览器或原生)上跑 CPU vs GPU 端到端误差对比。
-- [ ] 产出基准报告:不同粒子数 / 场景下的逐粒子误差分布、最大/均方误差。
-- [ ] 若误差超阈值,回修 wgsl 或统一 CPU/GPU 数学路径。
+### 里程碑 M1 — GPU 保真度验证(解锁 G1) ✅ 已完成(2026-08-11)
+- [x] 在真实 WebGPU adapter(原生 NVIDIA Quadro P2200, Vulkan)上跑 CPU vs GPU 端到端误差对比(`examples/real_gpu_error.rs --features gpu`)。
+- [x] 产出基准报告:不同粒子数 / 场景下的逐粒子误差分布、最大/均方误差(`docs/gpu_accuracy_report.md`)。
+- [x] 真机跑通并修复 2 个 wgsl 内核 bug(cell-index 偏移 / 粘性力缺 `m_i`);修复后 GPU 与 wgsl 串行参考达成 bit-faithful。
 - **交付物**:`docs/gpu_accuracy_report.md` + 可复现测试脚本。
 
 ### 里程碑 M2 — 性能与规模基准(解锁 G2)
@@ -143,7 +143,7 @@ P3(规模化协作):    M6 (CI/CD)
 
 - ✅ 可说:"模块化 Rust 物理引擎,覆盖 SPH 流体 / PBD 颗粒 / 刚体 / 光学,有真实算法与多层级验证。"
 - ✅ 可说:"GPU 路径已落地,并提供 host 端 wgsl 等价参考与可编译守卫。"
-- ❌ 不可说:"已通过真实硬件 GPU 保真验证。"
+- ✅ 可说:"已通过真实硬件 GPU 保真验证(Quadro P2200,wgsl 串行参考逐粒子一致,SPH acc MAX≈1.5e-4、颗粒 PBD 逐位 0)。"(G1 已达成,见 `docs/gpu_accuracy_report.md`)
 - ❌ 不可说:"已具备生产级性能 / 稳定性 / 集成能力。"
 
 ---
@@ -152,7 +152,7 @@ P3(规模化协作):    M6 (CI/CD)
 
 全部勾选后,方可对外宣称生产可用:
 
-- [ ] M1:真实 adapter CPU↔GPU 误差报告通过阈值
+- [x] M1:真实 adapter CPU↔GPU 误差报告通过阈值(Quadro P2200,SPH acc MAX≈1.5e-4、颗粒逐位 0)
 - [ ] M2:目标规模下达到业务 SLO 帧率
 - [ ] M3:长时积分 + 极端参数无崩溃 / 无爆炸
 - [x] M4:有可集成 SDK + 教程 + 版本策略(教程 doctest 已落地;`phy-sdk` crate + `README` 章节;版本策略随 0.1.0 起步)

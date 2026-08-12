@@ -48,6 +48,8 @@ struct App {
     frames: u32,
     fps_timer: f64,
     started: bool,
+    /// D4 角色模式:当前按住的按键(用于持续移动,而非单次按下)。
+    keys_down: std::collections::HashSet<winit::keyboard::Key>,
 }
 
 impl App {
@@ -67,16 +69,18 @@ impl App {
             frames: 0,
             fps_timer: 0.0,
             started: false,
+            keys_down: std::collections::HashSet::new(),
         }
     }
 
     /// 物理步进 + 渲染一帧到帧缓冲,并呈现到窗口。
     fn render_frame(&mut self) {
+        // D4 角色模式:每帧由按住键推导移动方向 + 跳跃请求,喂给角色控制器。
+        self.update_character_input();
         if !self.paused {
             self.scene.step();
         }
         self.fb.clear();
-
         self.scene.render(&mut self.fb, &self.cam);
 
         // 呈现
@@ -107,6 +111,33 @@ impl App {
             self.frames = 0;
             self.fps_timer = 0.0;
         }
+    }
+
+    /// D4 角色模式:由当前按住键推导移动方向(世界 XZ 平面)+ 跳跃请求。
+    /// 输入存入 `Scene.character_input`,供 `Scene::step` 驱动 `CharacterController`。
+    fn update_character_input(&mut self) {
+        use phy_math::Vec3;
+        let mut dir = Vec3::new(0.0, 0.0, 0.0);
+        let mut jump = false;
+        for k in &self.keys_down {
+            if let winit::keyboard::Key::Character(c) = k {
+                match c.as_str() {
+                    "w" => dir.z -= 1.0,
+                    "s" => dir.z += 1.0,
+                    "a" => dir.x -= 1.0,
+                    "d" => dir.x += 1.0,
+                    " " => jump = true,
+                    _ => {}
+                }
+            }
+        }
+        if dir.x != 0.0 || dir.z != 0.0 {
+            let len = (dir.x * dir.x + dir.z * dir.z) as f64;
+            let len = len.sqrt();
+            dir.x /= len;
+            dir.z /= len;
+        }
+        self.scene.character_input = (dir, jump);
     }
 }
 
@@ -181,47 +212,55 @@ impl ApplicationHandler<DemoEvent> for App {
                 self.cam.distance = self.cam.distance.clamp(5.0, 200.0);
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if event.state == ElementState::Pressed {
-                    match &event.logical_key {
-                        winit::keyboard::Key::Character(c) => match c.as_str() {
-                            "p" => self.paused = !self.paused,
-                            "o" => self.scene.toggle_mode(),
-                            "f" => self.scene.set_mode(DemoMode::Fluid),
-                            "h" => self.scene.set_mode(DemoMode::Heat),
-                            "s" => self.scene.set_mode(DemoMode::Soft),
-                            "a" => self.scene.set_mode(DemoMode::All),
-                            "r" => self.scene.reset(),
-                            "q" => self.scene.set_mode(DemoMode::FluidHeat),
-                            "7" => self.scene.set_mode(DemoMode::Em),
-                            "8" => self.scene.set_mode(DemoMode::Grav),
-                            "9" => self.scene.set_mode(DemoMode::Wave),
-                            "0" => self.scene.set_mode(DemoMode::Acoustic),
-                            "i" => {
-                                println!(
-                                    "[demo] mode={} bodies={} steps={} paused={}",
-                                    self.scene.mode.name(),
-                                    self.scene.body_count(),
-                                    self.scene.steps,
-                                    self.paused
-                                )
-                            }
-                            _ => {}
-                        },
-                        winit::keyboard::Key::Named(n) => match n {
-                            winit::keyboard::NamedKey::F5 => {
-                                match save_world(&self.scene.world, std::path::Path::new(SAVE_PATH)) {
-                                    Ok(_) => println!("[demo] 已存档 -> {} (mode={}, steps={})", SAVE_PATH, self.scene.mode.name(), self.scene.steps),
-                                    Err(e) => println!("[demo] 存档失败: {}", e),
+                match event.state {
+                    ElementState::Pressed => {
+                        // 持续移动键进入 keys_down 集合(角色模式用)。
+                        self.keys_down.insert(event.logical_key.clone());
+                        match &event.logical_key {
+                            winit::keyboard::Key::Character(c) => match c.as_str() {
+                                "p" => self.paused = !self.paused,
+                                "o" => self.scene.toggle_mode(),
+                                "c" => self.scene.set_mode(DemoMode::Character),
+                                "f" => self.scene.set_mode(DemoMode::Fluid),
+                                "h" => self.scene.set_mode(DemoMode::Heat),
+                                "s" => self.scene.set_mode(DemoMode::Soft),
+                                "a" => self.scene.set_mode(DemoMode::All),
+                                "r" => self.scene.reset(),
+                                "q" => self.scene.set_mode(DemoMode::FluidHeat),
+                                "7" => self.scene.set_mode(DemoMode::Em),
+                                "8" => self.scene.set_mode(DemoMode::Grav),
+                                "9" => self.scene.set_mode(DemoMode::Wave),
+                                "0" => self.scene.set_mode(DemoMode::Acoustic),
+                                "i" => {
+                                    println!(
+                                        "[demo] mode={} bodies={} steps={} paused={}",
+                                        self.scene.mode.name(),
+                                        self.scene.body_count(),
+                                        self.scene.steps,
+                                        self.paused
+                                    )
                                 }
-                            }
-                            winit::keyboard::NamedKey::F9 => {
-                                let w = load_world(std::path::Path::new(SAVE_PATH));
-                                self.scene.world = w;
-                                println!("[demo] 已读档 <- {} (子系统数={})", SAVE_PATH, self.scene.world.subsystem_count());
-                            }
+                                _ => {}
+                            },
+                            winit::keyboard::Key::Named(n) => match n {
+                                winit::keyboard::NamedKey::F5 => {
+                                    match save_world(&self.scene.world, std::path::Path::new(SAVE_PATH)) {
+                                        Ok(_) => println!("[demo] 已存档 -> {} (mode={}, steps={})", SAVE_PATH, self.scene.mode.name(), self.scene.steps),
+                                        Err(e) => println!("[demo] 存档失败: {}", e),
+                                    }
+                                }
+                                winit::keyboard::NamedKey::F9 => {
+                                    let w = load_world(std::path::Path::new(SAVE_PATH));
+                                    self.scene.world = w;
+                                    println!("[demo] 已读档 <- {} (子系统数={})", SAVE_PATH, self.scene.world.subsystem_count());
+                                }
+                                _ => {}
+                            },
                             _ => {}
-                        },
-                        _ => {}
+                        }
+                    }
+                    ElementState::Released => {
+                        self.keys_down.remove(&event.logical_key);
                     }
                 }
             }
@@ -239,7 +278,8 @@ impl ApplicationHandler<DemoEvent> for App {
 fn main() {
     println!("phy-demo · multi-physics (software rasterizer)");
     println!("拖拽旋转 · 滚轮缩放 · P 暂停 · O 循环模式");
-    println!("物理模式: 1 刚体 · 2 流体 · 3 热场 · 4 软体 · 5 光学 · 6 流体+热 · 7 电磁场 · 8 引力场 · 9 波动 · 0 声场 · A 全耦合");
+    println!("物理模式: 1 刚体 · 2 流体 · 3 热场 · 4 软体 · 5 光学 · 6 流体+热 · 7 电磁场 · 8 引力场 · 9 波动 · 0 声场 · A 全耦合 · C 角色控制器");
+    println!("角色模式: WASD 移动 · 空格 跳跃(撞墙自动 slide)");
     println!("F5 存档(world_save.json) · F9 读档 · R 重置 · I 统计 · 关闭窗口退出");
 
     let event_loop = EventLoop::<DemoEvent>::with_user_event().build().unwrap();

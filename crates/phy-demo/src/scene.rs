@@ -10,7 +10,7 @@ use phy_field::{AcousticField, EmField, GravField, HeatField, ScalarField, WaveF
 use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
 use phy_math::{na, RealField, Vec3};
 use phy_optics::{OpticBody, OpticScene, OpticSubsystem, Precision, Surface};
-use phy_rigid::{Body, RigidSubsystem, RigidWorld, Shape};
+use phy_rigid::{Body, CharacterController, RigidSubsystem, RigidWorld, Shape};
 use phy_soft::{SoftBody, SoftSubsystem};
 
 use crate::camera::Camera;
@@ -41,6 +41,8 @@ pub enum DemoMode {
     Wave,
     /// 声场(M22):标量声压切片。
     Acoustic,
+    /// D4 角色控制器:kinematic 胶囊体 + 玩家输入驱动的移动/跳跃/撞墙 slide。
+    Character,
 }
 
 impl DemoMode {
@@ -57,7 +59,8 @@ impl DemoMode {
             DemoMode::Em => DemoMode::Grav,
             DemoMode::Grav => DemoMode::Wave,
             DemoMode::Wave => DemoMode::Acoustic,
-            DemoMode::Acoustic => DemoMode::Rigid,
+            DemoMode::Acoustic => DemoMode::Character,
+            DemoMode::Character => DemoMode::Rigid,
         }
     }
 
@@ -75,6 +78,7 @@ impl DemoMode {
             DemoMode::Grav => "Grav Field (M13)",
             DemoMode::Wave => "Wave Field (M22)",
             DemoMode::Acoustic => "Acoustic Field (M22)",
+            DemoMode::Character => "Character (D4)",
         }
     }
 }
@@ -93,6 +97,11 @@ pub struct Scene {
     pub mode: DemoMode,
     /// 累计步数。
     pub steps: u64,
+    /// D4 角色控制器场景(自包含 RigidWorld,Character 模式专用)。
+    /// 用 `Option` 包起,仅 Character 模式有值,避免污染其他模式的统一 World。
+    pub character: Option<(RigidWorld<f64>, CharacterController<f64>)>,
+    /// 角色输入:每帧由 main 写入(水平移动方向 + 是否请求跳跃)。
+    pub character_input: (Vec3<f64>, bool),
 }
 
 impl Scene {
@@ -255,6 +264,8 @@ impl Scene {
             world,
             mode: DemoMode::Rigid,
             steps: 0,
+            character: None,
+            character_input: (Vec3::zeros(), false),
         }
     }
 
@@ -304,6 +315,8 @@ impl Scene {
             world,
             mode: DemoMode::FluidHeat,
             steps: 0,
+            character: None,
+            character_input: (Vec3::zeros(), false),
         }
     }
 
@@ -337,7 +350,7 @@ impl Scene {
         let mut em = EmField::<f64>::build(rho, 1.0);
         em.b_ext = Vec3::new(0.0, 0.0, 0.2);
         world.add_subsystem(Box::new(em));
-        Self { world, mode: DemoMode::Em, steps: 0 }
+        Self { world, mode: DemoMode::Em, steps: 0, character: None, character_input: (Vec3::zeros(), false) }
     }
 
     /// 引力场演示(M13):均匀质量密度网格 + 中心一个大质量天体,
@@ -360,7 +373,7 @@ impl Scene {
         }
         let grav = GravField::<f64>::build(rho, 1.0);
         world.add_subsystem(Box::new(grav));
-        Self { world, mode: DemoMode::Grav, steps: 0 }
+        Self { world, mode: DemoMode::Grav, steps: 0, character: None, character_input: (Vec3::zeros(), false) }
     }
 
     /// 波动场演示(M22):中心脉冲初始位移,渲染标量位移切片。
@@ -380,7 +393,7 @@ impl Scene {
         }
         let wave = WaveField::<f64>::new(f, 30.0 * 30.0);
         world.add_subsystem(Box::new(wave));
-        Self { world, mode: DemoMode::Wave, steps: 0 }
+        Self { world, mode: DemoMode::Wave, steps: 0, character: None, character_input: (Vec3::zeros(), false) }
     }
 
     /// 声场演示(M22):中心声源脉冲,渲染标量声压切片。
@@ -400,16 +413,70 @@ impl Scene {
         }
         let ac = AcousticField::<f64>::new(f, 343.0 * 343.0, 0.01);
         world.add_subsystem(Box::new(ac));
-        Self { world, mode: DemoMode::Acoustic, steps: 0 }
+        Self { world, mode: DemoMode::Acoustic, steps: 0, character: None, character_input: (Vec3::zeros(), false) }
+    }
+
+    /// D4 角色控制器演示场景:地面 + 几段障碍盒 + 斜坡,玩家用 WASD 移动、空格跳跃。
+    /// 角色是自包含 `RigidWorld` 中的 kinematic 胶囊体,由 `CharacterController` 驱动。
+    pub fn character() -> Self {
+        let mut rw = RigidWorld::<f64>::new();
+        // 地面
+        rw.add_body(Body {
+            shape: Shape::Box { half: Vec3::new(20.0, 0.5, 20.0) },
+            pos: Vec3::new(0.0, -0.5, 0.0),
+            inv_mass: 0.0,
+            ..Default::default()
+        });
+        // 两堵挡墙(演示撞墙 slide)
+        rw.add_body(Body {
+            shape: Shape::Box { half: Vec3::new(0.5, 2.0, 4.0) },
+            pos: Vec3::new(4.0, 2.0, 0.0),
+            inv_mass: 0.0,
+            ..Default::default()
+        });
+        rw.add_body(Body {
+            shape: Shape::Box { half: Vec3::new(4.0, 2.0, 0.5) },
+            pos: Vec3::new(0.0, 2.0, 5.0),
+            inv_mass: 0.0,
+            ..Default::default()
+        });
+        // 斜坡(演示爬坡)
+        rw.add_body(Body {
+            shape: Shape::Box { half: Vec3::new(3.0, 0.3, 3.0) },
+            pos: Vec3::new(-4.0, 1.0, -4.0),
+            rot: na::UnitQuaternion::from_axis_angle(&na::Vector3::z_axis(), 0.4),
+            inv_mass: 0.0,
+            ..Default::default()
+        });
+        // 角色(kinematic 胶囊)
+        let mut cc = CharacterController::new(&mut rw, Vec3::new(0.0, 3.0, 0.0));
+        cc.speed = 5.0;
+        cc.jump_speed = 7.0;
+        Self {
+            world: World::default(),
+            mode: DemoMode::Character,
+            steps: 0,
+            character: Some((rw, cc)),
+            character_input: (Vec3::zeros(), false),
+        }
     }
 
     /// 推进一帧(固定子步)。
     ///
     /// `World::step` 内部已按 `step` → `couple` 顺序驱动所有子系统,
     /// 软体↔刚体的双向耦合在 `SoftSubsystem::couple` 中经 `World` 完成。
+    /// Character 模式单独推进自包含的 `RigidWorld`(角色控制器驱动 + step)。
     pub fn step(&mut self) {
         let dt = 1.0 / 60.0;
-        self.world.step(dt);
+        if self.mode == DemoMode::Character {
+            if let Some((rw, cc)) = self.character.as_mut() {
+                let (dir, jump) = self.character_input;
+                cc.update(rw, dt, dir, jump);
+                rw.step(dt);
+            }
+        } else {
+            self.world.step(dt);
+        }
         self.steps += 1;
     }
 
@@ -448,6 +515,15 @@ impl Scene {
             };
             return;
         }
+        // 切到/离开角色模式时重建(自包含 RigidWorld)。
+        if mode == DemoMode::Character || self.mode == DemoMode::Character {
+            *self = if mode == DemoMode::Character {
+                Scene::character()
+            } else {
+                Scene::new()
+            };
+            return;
+        }
         self.mode = mode;
     }
 
@@ -459,12 +535,16 @@ impl Scene {
             DemoMode::Grav => Scene::grav(),
             DemoMode::Wave => Scene::wave(),
             DemoMode::Acoustic => Scene::acoustic(),
+            DemoMode::Character => Scene::character(),
             _ => Scene::new(),
         };
     }
 
     /// 当前刚体数量(用于 HUD)。非刚体模式下安全返回 0(无刚体子系统)。
     pub fn body_count(&self) -> usize {
+        if self.mode == DemoMode::Character {
+            return self.character.as_ref().map(|(rw, _)| rw.bodies.len()).unwrap_or(0);
+        }
         match self.world.get(IDX_RIGID) {
             Some(sub) => match sub.as_any().downcast_ref::<RigidSubsystem<f64>>() {
                 Some(r) => r.world.bodies.len(),
@@ -500,6 +580,22 @@ impl Scene {
             DemoMode::Grav => self.render_grav(fb, cam),
             DemoMode::Wave => self.render_wave(fb, cam),
             DemoMode::Acoustic => self.render_acoustic(fb, cam),
+            DemoMode::Character => self.render_character(fb, cam),
+        }
+    }
+
+    fn render_character(&self, fb: &mut Framebuffer, cam: &Camera) {
+        let (rw, cc) = match self.character.as_ref() {
+            Some(c) => c,
+            None => return,
+        };
+        for (i, body) in rw.bodies.iter().enumerate() {
+            // 角色体用醒目颜色(青色),其余(地面/墙/斜坡)用默认刚体渲染。
+            if Some(i) == cc.body_id {
+                render_body_ex(fb, cam, body, Some([40u8, 230u8, 200u8]));
+            } else {
+                render_body(fb, cam, body);
+            }
         }
     }
 
@@ -956,15 +1052,20 @@ fn project_point(cam: &Camera, fb: &Framebuffer, world: Vec3<f64>) -> Option<(i3
 
 /// 渲染单个刚体(地面 + 球体/盒)。
 fn render_body(fb: &mut Framebuffer, cam: &Camera, body: &Body<f64>) {
+    render_body_ex(fb, cam, body, None)
+}
+
+/// `render_body` 的颜色可覆盖变体(角色体用醒目色区分)。
+fn render_body_ex(fb: &mut Framebuffer, cam: &Camera, body: &Body<f64>, override_col: Option<[u8; 3]>) {
     match &body.shape {
         Shape::Sphere { r } => {
             if let Some((sx, sy, depth)) = project_point(cam, fb, body.pos) {
                 let r_screen = (*r * depth) as i32;
-                let col = if body.inv_mass < 1e-9 {
+                let col = override_col.unwrap_or_else(|| if body.inv_mass < 1e-9 {
                     [90u8, 90u8, 90u8]
                 } else {
                     [220u8, 60u8, 60u8]
-                };
+                });
                 fb.fill_circle(sx, sy, r_screen.max(1), depth as f32, col);
             }
         }
@@ -996,11 +1097,11 @@ fn render_body(fb: &mut Framebuffer, cam: &Camera, body: &Body<f64>) {
             if minx > maxx || miny > maxy {
                 return;
             }
-            let col = if body.inv_mass < 1e-9 {
+            let col = override_col.unwrap_or_else(|| if body.inv_mass < 1e-9 {
                 [90u8, 90u8, 90u8]
             } else {
                 [220u8, 60u8, 60u8]
-            };
+            });
             for y in miny..=maxy {
                 for x in minx..=maxx {
                     fb.set_depth(x, y, depth as f32, col);
@@ -1011,11 +1112,11 @@ fn render_body(fb: &mut Framebuffer, cam: &Camera, body: &Body<f64>) {
             // 简略渲染为胶囊所在位置的圆（可视化用）。
             if let Some((sx, sy, depth)) = project_point(cam, fb, body.pos) {
                 let r_screen = (*r * depth) as i32;
-                let col = if body.inv_mass < 1e-9 {
+                let col = override_col.unwrap_or_else(|| if body.inv_mass < 1e-9 {
                     [90u8, 90u8, 90u8]
                 } else {
                     [220u8, 60u8, 60u8]
-                };
+                });
                 fb.fill_circle(sx, sy, r_screen.max(1), depth as f32, col);
             }
         }

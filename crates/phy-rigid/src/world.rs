@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::broadphase::broadphase;
 use crate::ccd;
+use crate::character_controller::CharacterController;
 use crate::contact::Contact;
 use crate::fracture::fracture_body;
 use crate::joint::{Joint, JointConstraint};
@@ -47,6 +48,12 @@ pub struct RigidWorld<T: RealField + Copy> {
     /// 跨帧保留作为下一帧接触求解的初值,消除静止堆叠抖动。运行时临时数据,不序列化。
     #[serde(skip)]
     pub contact_impulses: HashMap<(usize, usize), (T, Vec3<T>)>,
+    /// D4 角色控制器(kinematic 胶囊体 + 手动碰撞 slide)。由 `CharacterController::new`
+    /// 或场景 DSL `character_spawn` 创建并绑定一个 kinematic body;每帧需外部调用
+    /// `character.as_mut().unwrap().update(&mut world, dt, move_dir, want_jump)` 再 `step`。
+    /// 运行时状态(含 vel_y 跨帧累积),不序列化。
+    #[serde(skip)]
+    pub character: Option<CharacterController<T>>,
 }
 
 impl<T: RealField + Copy + NumCast> Default for RigidWorld<T> {
@@ -253,6 +260,7 @@ impl<T: RealField + Copy + NumCast> RigidWorld<T> {
             params: SolverParams::default(),
             last_sensor_contacts: Vec::new(),
             contact_impulses: HashMap::new(),
+            character: None,
         }
     }
 
@@ -1823,6 +1831,7 @@ mod tests {
                 vec![g, b]
             },
             joints: vec![],
+            character_spawn: None,
         };
         let json = desc.to_json().expect("序列化场景 JSON 应成功");
         world.load_scene_json(&json).expect("加载场景 JSON 应成功");

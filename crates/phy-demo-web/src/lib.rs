@@ -108,6 +108,7 @@ impl DemoApp {
             "9" => st.scene.set_mode(DemoMode::Wave),
             "0" => st.scene.set_mode(DemoMode::Acoustic),
             "a" | "A" => st.scene.set_mode(DemoMode::All),
+            "c" | "C" => st.scene.set_mode(DemoMode::Character),
             "p" | "P" => st.paused = !st.paused,
             "r" | "R" => st.scene.reset(),
             "o" | "O" => {
@@ -123,7 +124,8 @@ impl DemoApp {
                     DemoMode::Grav => DemoMode::Wave,
                     DemoMode::Wave => DemoMode::Acoustic,
                     DemoMode::Acoustic => DemoMode::All,
-                    DemoMode::All => DemoMode::Rigid,
+                    DemoMode::All => DemoMode::Character,
+                    DemoMode::Character => DemoMode::Rigid,
                 };
                 st.scene.set_mode(next);
             }
