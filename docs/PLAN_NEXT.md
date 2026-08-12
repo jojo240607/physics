@@ -101,5 +101,9 @@
    - **GRAN 10k 由管线未持久化时的 ~1.88 ms 降到 1.150 ms/帧（≈1.6×）**，证明 §2.3 的 `GpuPipelines` 常驻缓存生效（每帧不再 `create_compute_pipeline`）。
    - 全部场景满足 30fps 与 60fps 预算；SPH 50k 140fps 远超实时。
    - 复测同时修复了两个真实 bug：`GpuPipelines.sph` / `GpuPipelines.granular` 是 `mk_pipeline("...", "main")` 冗余管线，但其 WGSL 没有 `main` entry（SPH 用 `density_main`/`force_main`、GRAN 用 `clear_main`/`contact_main`/`apply_main`），导致 `GpuContext::init` 在真实 adapter 上 panic；已删除这两个死字段，渲染路径本就用 `build_sph_pipelines` / `build_granular_pipelines` 的常驻版本。
-   - 注：GLSL→WGSL 内核全量审批（M3）仍待做；M1 adapter 验收 + G2 性能基准已在真机跑通。
+   - 注：M1 adapter 验收 + G2 性能基准已在真机跑通；**M3 GLSL→WGSL 内核全量审批已完成（2026-08-12）**：
+     SPH/GRANULAR 由 `examples/real_gpu_error.rs` 真机对比通过(acc MAX≈1.4e-4 / 投影 bit-exact 0.0)；
+     OPTIC/CAUSTIC 由新增 `crates/phy-demo-web/src/gpu_audit.rs`（`audit_optic`/`audit_caustics`/`audit_all`）
+     + `examples/real_gpu_audit.rs` 真机逐像素/逐单元对比通过（OPTIC max_abs=1.46e-5、CAUSTIC bit-exact 0.0）；
+     SQUARE 内核 `out=in²` 经审阅确认。全部 5 个 wgsl 内核已数值审批，M3 ✅。
 3. D2 → D3 → D4（D2 ✅、D3 块求解 ✅、D4 ragdoll 装配 ✅ 均已完成；四项补齐计划全部收口）。

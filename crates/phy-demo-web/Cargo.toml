@@ -55,3 +55,7 @@ required-features = ["gpu"]
 [[example]]
 name = "gpu_perf"
 required-features = ["gpu"]
+
+[[example]]
+name = "real_gpu_audit"
+required-features = ["gpu"]

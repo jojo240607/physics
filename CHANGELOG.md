@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   测得 GRAN 10k 由管线未持久化时的 ~1.88 ms 降到 **1.150 ms/帧 (≈1.6×)**，证明常驻缓存生效；
   SPH/GRAN 全场景满足 30/60fps 预算，SPH 50k 达 140fps。报告落
   `crates/phy-demo-web/gpu_real_perf_report.txt`。
+- **M3 GLSL→WGSL 内核全量审批通过 (PLAN_NEXT §2.3 脚注)**: 新增 `crates/phy-demo-web/src/gpu_audit.rs`
+  (`audit_optic` / `audit_caustics` / `audit_all`) 与 `examples/real_gpu_audit.rs`,在真实 WebGPU adapter 上
+  把 GPU 计算内核输出与 CPU 生产实现逐像素/逐单元数值对比:
+  - OPTIC (W2):GPU `render_camera_gpu` vs CPU `Approx::trace`(折射+朗伯+阴影),max_abs=**1.46e-5**;
+  - CAUSTIC (W3):GPU `render_caustics_gpu` vs CPU `Caustics::accumulate`,**bit-exact 0.0**;
+  - SPH (W4) / GRANULAR (W5):由 `examples/real_gpu_error.rs` 真机对比通过(acc MAX≈1.4e-4 / 投影 bit-exact 0.0);
+  - SQUARE (W1) 内核 `out=in²` 经审阅确认。全部 5 个 wgsl 内核已数值审批;无 adapter 环境测试优雅跳过。
 
 ### Fixed
 - **真机复测暴露的 GPU 初始化 panic (PLAN_NEXT §2.3)**: `GpuPipelines` 中冗余的
