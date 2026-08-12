@@ -971,6 +971,122 @@ mod tests {
         );
     }
 
+    /// 焊点关节(D1):两动态体 Weld 后,给初始角速度 → 步进后相对位姿保持(锚点间距≈0)
+    /// 且两体角速度趋于一致(角对齐),总动量守恒。
+    #[test]
+    fn weld_joint_keeps_relative_pose_and_syncs_angular_velocity() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, 0.0, 0.0); // 关重力,专测约束
+        let a = world.add_body(Body::new(Shape::Sphere { r: 0.2 }, Vec3::zeros(), 1.0));
+        let b = world.add_body(Body::new(Shape::Sphere { r: 0.2 }, Vec3::new(1.0, 0.0, 0.0), 1.0));
+        // Weld 焊住:b 上局部点 (-1,0,0) 与 a 质心重合 → 保持两体质心间距 1。
+        world.add_joint(a, b, Joint::Weld {
+            pa: Vec3::zeros(),
+            pb: Vec3::new(-1.0, 0.0, 0.0),
+        });
+        // 给 b 一个角速度,期望 Weld 把它同步到 a(角对齐)。
+        world.bodies[b].ang_vel = Vec3::new(0.0, 3.0, 0.0);
+
+        let p0 = world.bodies[a].vel + world.bodies[b].vel;
+        for _ in 0..300 {
+            world.step(1.0 / 120.0);
+        }
+        // 两体质心间距应保持初始 1(Weld 平动约束)。
+        let dist = (world.bodies[b].pos - world.bodies[a].pos).norm();
+        assert!((dist - 1.0).abs() < 0.03, "Weld 后间距应保持 1,实际 {}", dist);
+        // 两体角速度应趋于一致(角对齐)。
+        let dw = (world.bodies[b].ang_vel - world.bodies[a].ang_vel).norm();
+        assert!(dw < 0.5, "Weld 应使两体角速度一致,差值 {}", dw);
+        // 无外力总动量守恒(角动量也大致守恒,这里验证线动量)。
+        let p1 = world.bodies[a].vel + world.bodies[b].vel;
+        assert!((p1 - p0).norm() < 1e-6, "无外力下总线动量应守恒");
+    }
+
+    /// 铰链关节(D1):动态体经 Hinge 连到静态锚点,Motor 驱动 → 应绕铰链轴持续旋转,
+    /// 且两锚点保持重合、铰链轴保持对齐(沿轴旋转自由)。
+    #[test]
+    fn hinge_joint_with_motor_rotates_around_aligned_axis() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, 0.0, 0.0); // 关重力,专测铰链
+        // 静态锚点在原点。
+        let anchor = world.add_body(Body::new(Shape::Sphere { r: 0.1 }, Vec3::zeros(), 0.0));
+        // 动态体在 (0,0,1),经铰链(轴沿 y)连到锚点。
+        let dynb = world.add_body(Body::new(
+            Shape::Sphere { r: 0.2 },
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+        ));
+        world.add_joint(anchor, dynb, Joint::Hinge {
+            pa: Vec3::zeros(),
+            pb: Vec3::new(0.0, 0.0, -1.0), // b 质心下方 1,使锚点初始与 a 质心重合
+            axis_a: Vec3::new(0.0, 1.0, 0.0),
+            axis_b: Vec3::new(0.0, 1.0, 0.0),
+            motor_vel: 3.0,      // 目标角速度 3 rad/s
+            max_motor_torque: 10.0,
+        });
+
+        for _ in 0..200 {
+            world.step(1.0 / 120.0);
+        }
+        // 锚点保持静止。
+        assert!(
+            (world.bodies[anchor].pos - Vec3::zeros()).norm() < 1e-9,
+            "静态锚点不应移动"
+        );
+        // 动态体被 Motor 驱动绕 y 轴旋转:角速度的 y 分量应>0。
+        assert!(
+            world.bodies[dynb].ang_vel.y > 1.0,
+            "Motor 应驱动动态体绕 y 轴旋转,实际 ang_vel.y={}",
+            world.bodies[dynb].ang_vel.y
+        );
+        // 铰链轴保持对齐(沿 y):动态体局部 y 轴经旋转后应仍基本沿世界 y。
+        let dy_local_y = world.bodies[dynb].rot * Vec3::new(0.0, 1.0, 0.0);
+        let align = dy_local_y.dot(&Vec3::new(0.0, 1.0, 0.0));
+        assert!(
+            align.abs() > 0.99,
+            "铰链轴应保持对齐(绕 y 旋转),对齐度 {}",
+            align
+        );
+    }
+
+    /// 滑块关节(D1):动态体经 Prismatic 连到静态锚点,Motor 驱动 → 应沿轴滑动(线速度沿轴),
+    /// 且两体角对齐(不产生旋转)。
+    #[test]
+    fn prismatic_joint_with_motor_slides_along_axis() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, 0.0, 0.0); // 关重力,专测滑块
+        let anchor = world.add_body(Body::new(Shape::Sphere { r: 0.1 }, Vec3::zeros(), 0.0));
+        let slib = world.add_body(Body::new(
+            Shape::Sphere { r: 0.2 },
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+        ));
+        world.add_joint(anchor, slib, Joint::Prismatic {
+            pa: Vec3::zeros(),
+            pb: Vec3::new(0.0, 0.0, -1.0),
+            axis_a: Vec3::new(0.0, 0.0, 1.0), // 沿 z 滑动
+            motor_vel: 2.0,                   // 目标线速度 2 m/s 沿 z
+            max_motor_force: 10.0,
+        });
+
+        for _ in 0..200 {
+            world.step(1.0 / 120.0);
+        }
+        // 锚点保持静止。
+        assert!(
+            (world.bodies[anchor].pos - Vec3::zeros()).norm() < 1e-9,
+            "静态锚点不应移动"
+        );
+        // 动态体被 Motor 驱动沿 z 轴滑动:角速度应≈0(不旋转),线速度沿 z 的分量应>0。
+        let ang_norm = world.bodies[slib].ang_vel.norm();
+        assert!(ang_norm < 0.5, "滑块不应旋转,实际角速度 {}", ang_norm);
+        assert!(
+            world.bodies[slib].vel.z > 1.0,
+            "Motor 应驱动滑块沿 z 轴移动,实际 vel.z={}",
+            world.bodies[slib].vel.z
+        );
+    }
+
     /// Voronoi 破碎(M21 / #8):碎裂一个盒,碎片应继承母本线速度且总质量守恒。
     #[test]
     fn shatter_box_produces_fragments_conserving_mass() {

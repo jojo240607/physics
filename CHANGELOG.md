@@ -127,6 +127,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   → phy-field → phy-rigid → phy-fluid/solid/granular/optics → phy-soft → phy-io →
   phy-ffi/phy-sdk). Actual publishing still requires `cargo login` (crates.io token) and is
   intentionally not executed here.
+- **Joint expansion — Hinge / Prismatic / Weld / Motor (D1, game-grade plan `PLAN_NEXT.md`)**:
+  the rigid-body joint solver now supports **angular constraints** (rotational impulse via
+  `inv_inertia_world`, Box2D-style per-axis solve; point constraints now include the
+  angular-velocity term), unlocking three new joint types beyond `Ball`/`Distance`:
+  - `Weld`: locks all 6 DOF (3 point + 3 angular-alignment) — weld fragments / rigid composites.
+  - `Hinge`: aligned hinge axis + free rotation about it (3 point + 2 angular constraints),
+    with optional `motor_vel` / `max_motor_torque` driving rotation (wheels, doors, gears).
+  - `Prismatic`: slide along one axis (2 perpendicular point + 3 angular-locked), with
+    optional `motor_vel` / `max_motor_force` driving linear travel (hydraulics, pistons).
+  Verified by `weld_joint_keeps_relative_pose_and_syncs_angular_velocity` (pose held + angular
+  sync), `hinge_joint_with_motor_rotates_around_aligned_axis` (axis-aligned spin under motor),
+  and `prismatic_joint_with_motor_slides_along_axis` (axis slide, no spin). 72 phy-rigid tests
+  + full workspace green.
 - **Scene description DSL / prefab (B3, commercial-readiness plan §11)**: new
   `scene.rs` module with `SceneDesc<T>` (gravity + bodies + joints, reusing the
   already-serde `Body`/`JointConstraint` so the description is isomorphic to the
