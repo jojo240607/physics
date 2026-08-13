@@ -72,3 +72,32 @@ fn long_run_stays_finite() {
     }
     assert!(g.all_finite(), "长时间混合输入后世界含非有限数");
 }
+
+#[test]
+fn keyboard_keys_drive_movement_like_gui() {
+    use phy_game_demo::winit_key_codes::KeyCode;
+    let mut g = Game::new();
+    // 先落地
+    for _ in 0..240 {
+        g.step();
+    }
+    let p0 = g.player_pos();
+    // 模拟 GUI 按住 W(forward)
+    g.keys.insert(KeyCode::KeyW);
+    for _ in 0..120 {
+        g.step();
+    }
+    let p1 = g.player_pos();
+    assert!(
+        (p1.z - p0.z).abs() > 0.5 || (p1.x - p0.x).abs() > 0.5,
+        "键盘 W 未驱动角色移动: dp=({:.2},{:.2},{:.2})",
+        p1.x - p0.x,
+        p1.y - p0.y,
+        p1.z - p0.z
+    );
+    // 释放 W,按住 Space 起跳
+    g.keys.remove(&KeyCode::KeyW);
+    g.keys.insert(KeyCode::Space);
+    g.step();
+    assert!(!g.cc.grounded, "键盘 Space 未触发起跳");
+}

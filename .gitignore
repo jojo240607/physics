@@ -14,6 +14,10 @@ patch_impls.py
 # Web 自测截图产物
 crates/phy-demo-web/shot_*.png
 
+# 无头渲染测试产物(渲染验证落盘帧 + 日志)
+headless_frame_*.png
+headless_log.txt
+
 # 临时构建/日志产物(含诊断 stdout 捕获与中间构建日志)
 build_tmp.txt
 b4_build.txt

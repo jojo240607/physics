@@ -27,9 +27,9 @@ impl Framebuffer {
         }
     }
 
-    /// 清空为深蓝背景。
+    /// 清空为天蓝灰背景(提亮,避免与暗色物体混淆)。
     pub fn clear(&mut self) {
-        let bg = pack(0.05, 0.07, 0.10);
+        let bg = pack(0.40, 0.52, 0.62);
         for p in self.pixels.iter_mut() {
             *p = bg;
         }
@@ -119,13 +119,42 @@ impl Framebuffer {
     }
 }
 
-/// 打包 f32 RGB(0..1) 为 0xAARRGGBB。
+/// 打包 f32 RGB(0..1) 为 0xAARRGGBB(NALGEBRA/内部格式,alpha 固定 0xFF)。
+///
+/// 注意:screen-space 光栅化内部统一用此格式;上传到 softbuffer 等
+/// 期望 `0xARGB`(字节序 R,G,B,A)的后端前,需用 [`pack_argb`] 转换。
 pub fn pack(r: f32, g: f32, b: f32) -> u32 {
     let c = |v: f32| -> u32 {
         let v = (v.clamp(0.0, 1.0) * 255.0).round() as u32;
         v & 0xFF
     };
     (0xFF << 24) | (c(r) << 16) | (c(g) << 8) | c(b)
+}
+
+/// 打包 f32 RGB(0..1) 为 softbuffer/winit 期望的 0xARGB(字节序 R,G,B,A)。
+/// 与 [`pack`] 的区别仅在于 RGB 通道的位布局:softbuffer 在 Windows 上
+/// 把 `u32` 当作 native-endian 的 ARGB,故 R 应在最高字节。
+pub fn pack_argb(r: f32, g: f32, b: f32) -> u32 {
+    let c = |v: f32| -> u32 {
+        let v = (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+        v & 0xFF
+    };
+    (0xFF << 24) | (c(r) << 16) | (c(g) << 8) | c(b)
+}
+
+/// 把内部 `0xAARRGGBB` 像素缓冲转换为 softbuffer 的 `0xARGB` 布局。
+/// 两者仅 RGBA 通道位置不同(B 与 R 互换),这里做字节重排。
+pub fn to_softbuffer(pixels: &[u32]) -> Vec<u32> {
+    pixels
+        .iter()
+        .map(|&px| {
+            let a = (px >> 24) & 0xff;
+            let r = (px >> 16) & 0xff;
+            let g = (px >> 8) & 0xff;
+            let b = px & 0xff;
+            (a << 24) | (r << 16) | (g << 8) | b
+        })
+        .collect()
 }
 
 /// 一个三角形:三个顶点(位置 + 法线,模型空间)。
@@ -243,10 +272,10 @@ fn raster_triangle(
             let depth = iw;
 
             let diff = (nx * light.x + ny * light.y + nz * light.z).max(0.0);
-            let ambient = 0.25;
-            let r = color[0] * (ambient + 0.75 * diff);
-            let g = color[1] * (ambient + 0.75 * diff);
-            let b = color[2] * (ambient + 0.75 * diff);
+            let ambient = 0.45;
+            let r = color[0] * (ambient + 0.55 * diff);
+            let g = color[1] * (ambient + 0.55 * diff);
+            let b = color[2] * (ambient + 0.55 * diff);
             fb.put(x, y, depth, pack(r, g, b));
         }
     }

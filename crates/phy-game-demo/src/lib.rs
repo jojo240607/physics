@@ -5,6 +5,10 @@
 
 pub mod meshgen;
 
+// GPU 渲染后端仅在 MSVC 工具链下可用(wgpu 的 D3D12 后端需 MSVC 链接器)。
+#[cfg(target_env = "msvc")]
+pub mod render_wgpu;
+
 use std::collections::HashSet;
 
 use phy_core::World;
@@ -151,10 +155,10 @@ impl Game {
 
         let cam = Camera {
             target: spawn.cast::<f32>().into(),
-            distance: 12.0,
+            distance: 18.0,
             yaw: 0.0,
-            pitch: 0.35,
-            fov: std::f32::consts::FRAC_PI_4,
+            pitch: 0.55,
+            fov: std::f32::consts::FRAC_PI_3,
         };
 
         Self {
@@ -185,7 +189,8 @@ impl Game {
 
     /// 用当前按住键集合推进一帧(窗口循环用)。
     pub fn step(&mut self) {
-        let fwd = Vector3::new(self.cam.yaw.sin() as f64, 0.0, self.cam.yaw.cos() as f64);
+        // 相机在 +Z 看向 -Z(yaw=0 时),故"前"为 -Z。
+        let fwd = Vector3::new(-(self.cam.yaw.sin() as f64), 0.0, -(self.cam.yaw.cos() as f64));
         let right = Vector3::new(self.cam.yaw.cos() as f64, 0.0, -self.cam.yaw.sin() as f64);
         let mut dir = Vector3::zeros();
         use winit_key_codes::KeyCode;
@@ -258,5 +263,17 @@ impl Game {
                 );
             }
         }
+    }
+
+    /// 收集每个 body 的模型矩阵(f64),供 GPU 后端 `render_wgpu` 每帧上传实例数据。
+    #[cfg(target_env = "msvc")]
+    pub fn body_model_matrices(&self) -> Vec<phy_math::na::Matrix4<f64>> {
+        let rigid = get_as::<RigidSubsystem<f64>>(&self.world, 0).unwrap();
+        rigid
+            .world
+            .bodies
+            .iter()
+            .map(|b| meshgen::model_matrix(&b.pos, &b.rot))
+            .collect()
     }
 }
