@@ -288,7 +288,27 @@ pub fn box_box_sat<T: RealField + Copy>(a: &Body<T>, b: &Body<T>) -> Option<Cont
     } else {
         min_axis.clone()
     };
-    let point = a.pos + normal.clone() * (min_pen / T::from_f64(2.0).unwrap());
+    // 接触点:必须贴近真实接触面,而非任意一方的中心。
+    //
+    // 原实现 `point = a.pos + normal*(pen/2)` 把接触点放在 **a 的中心**。当 a 是
+    // 尺寸悬殊的大盒(如地面)而 b 是非对齐的小盒时,接触点会远离 b 的质心正下方,
+    // 导致求解器在偏心点施加法向冲量 → 产生巨大角速度 → 数值爆炸。
+    //
+    // 修复:当一方静态(质量无限)、另一方动态时,接触点横向对齐**动态体**的中心,
+    // 沿法线缩进穿透的一半。这样冲量方向与动态体质心对齐(无偏心角动量),稳定。
+    // 对双方都动态/都静态的常规情形,保留原中点近似(两体尺寸相近时偏心误差小)。
+    let inv_zero = T::from_f64(0.0).unwrap();
+    let half = T::from_f64(0.5).unwrap();
+    let point = if a.inv_mass > inv_zero && b.inv_mass <= inv_zero {
+        // a 动态,b 静态 -> 对齐 a。
+        a.pos + normal.clone() * (min_pen * half)
+    } else if b.inv_mass > inv_zero && a.inv_mass <= inv_zero {
+        // a 静态,b 动态 -> 对齐 b。
+        b.pos - normal.clone() * (min_pen * half)
+    } else {
+        // 两动态或两静态 -> 原中点近似。
+        a.pos + normal.clone() * (min_pen * half)
+    };
     Some(Contact::new(point, normal, min_pen))
 }
 

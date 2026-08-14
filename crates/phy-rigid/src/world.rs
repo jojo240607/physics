@@ -1647,6 +1647,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn noncentered_box_on_large_floor_stays_stable() {
+        // 回归:动态小盒落在静态大盒地板上,**非对齐**位置(偏离地板中心)。
+        // 曾因 box_box_sat 的接触点取 a(地板)中心,导致接触点远离箱子质心正下方,
+        // 求解器在偏心点施法向冲量 → 巨大角速度 → 数值爆炸(pos 跳到 ~1e6)。
+        // 修复后接触点对齐动态体中心,应稳定落地不爆炸。
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, -9.81, 0.0);
+        world.add_body(Body::new(
+            Shape::Box {
+                half: Vec3::new(10.0, 0.5, 10.0),
+            },
+            Vec3::new(0.0, -0.5, 0.0),
+            0.0,
+        ));
+        let id = world.add_body(Body::new(
+            Shape::Box {
+                half: Vec3::new(0.4, 0.4, 0.4),
+            },
+            Vec3::new(1.0, 1.0, 0.5), // 非对齐
+            0.5,                      // mass=2
+        ));
+        for step in 0..400 {
+            world.step(1.0 / 120.0);
+            let b = &world.bodies[id];
+            assert!(
+                b.pos.y.is_finite() && b.pos.y.abs() < 100.0,
+                "step {step}: box exploded to pos=({:.1},{:.1},{:.1})",
+                b.pos.x,
+                b.pos.y,
+                b.pos.z
+            );
+            if b.sleeping {
+                break;
+            }
+        }
+        // 最终稳定停在地板顶面(半高 0.4,故 y≈0.4)。
+        let b = &world.bodies[id];
+        assert!(
+            b.pos.y.is_finite() && (b.pos.y - 0.4).abs() < 0.1,
+            "box should rest at y≈0.4, got y={} (pos={:?})",
+            b.pos.y,
+            b.pos
+        );
+        assert!(b.vel.norm() < 1e-3, "box velocity should be ~0, got {:?}", b.vel);
+    }
+
     /// B1 唤醒:掉落球砸中已休眠的盒,盒被唤醒(恢复运动、sleeping=false)。
     #[test]
     fn falling_ball_wakes_sleeping_box() {
