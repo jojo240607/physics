@@ -22,3 +22,6 @@ pub use gpu_flat::GranularFlatData;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod sand_pile;

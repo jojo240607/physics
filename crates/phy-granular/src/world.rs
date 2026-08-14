@@ -81,8 +81,12 @@ pub struct GranularWorld<T: RealField + Copy> {
     pub iterations: usize,
     /// 速度阻尼(<1 衰减,1 无)。
     pub vel_damp: T,
-    /// 切向摩擦系数(0 = 无摩擦,1 = 强摩擦)。
+    /// 切向摩擦系数(0 = 无摩擦,1 = 强摩擦)。用于步骤 4 的速度级动摩擦。
     pub friction: T,
+    /// 位置级摩擦强度(0 = 无,1 = 强咬合)。用于步骤 2 的接触投影:在法向分离之外,
+    /// 按此比例把接触对的**切向相对位移**拉回,使颗粒能抵抗切向滑动、维持安息角
+    /// (PBD static friction, Macklin 2014)。无此则堆被摊平(安息角≈0)。默认 = friction。
+    pub pos_friction: T,
     /// 当前仿真时间。
     pub t: T,
 }
@@ -108,6 +112,7 @@ impl<T: RealField + Copy> GranularWorld<T> {
             iterations: 4,
             vel_damp: T::from_f64(0.99).unwrap(),
             friction: T::from_f64(0.3).unwrap(),
+            pos_friction: T::from_f64(0.3).unwrap(),
             t: T::zero(),
         }
     }
@@ -251,6 +256,36 @@ impl<T: RealField + Copy> GranularWorld<T> {
                                 *dk -= dir * (wa / wsum);
                             }
                         }
+                        // 位置级摩擦(PBD static friction, Macklin 2014):
+                        // 法向约束只分离重叠、不阻止切向滑动,故堆会被摊平。这里补充
+                        // 切向位置约束——把接触对的切向相对位移 `d_t` 按摩擦锥拉回,
+                        // 使接触颗粒"咬合"、抵抗切向滑动,维持堆积角(安息角)。
+                        // 稳定实现:用**法向修正量 Δn** 作为摩擦锥度量(不引入迭代放大):
+                        //   Δn = 法向分离位移(已算出的 corr·d 向量)
+                        //   若 |d_t| <= μ·|Δn| → 完全咬合(拉回全部 d_t)
+                        //   否则 → 只拉回 μ·|Δn| 方向(滑动摩擦)
+                        // d_t = d - n(d·n) 是几何相对位置在切平面的投影(接触几何偏移)。
+                        let mu_p = self.pos_friction;
+                        if mu_p > T::zero() && dist < min_dist + T::from_f64(2e-2).unwrap() {
+                            let wa = self.grains[a].inv_mass;
+                            let wb = self.grains[b].inv_mass;
+                            let wsum = wa + wb;
+                            if wsum > T::zero() {
+                                let n = d / dist; // a→b 法线。
+                                let d_t = d - n * (d.dot(&n)); // 切向相对位移(几何)。
+                                let d_t_len = d_t.norm();
+                                // 法向修正量(本步已施加法向分离的大小)。
+                                let dn_len = (min_dist - dist).abs();
+                                // 摩擦锥:可锁定的切向位移上限 = μ·Δn。
+                                let max_t = dn_len * mu_p;
+                                let pull = if d_t_len <= max_t {
+                                    d_t // 完全咬合。
+                                } else {
+                                    d_t * (max_t / d_t_len) // 滑动摩擦,限到 μ·Δn。
+                                };
+                                *dk -= pull * (wa / wsum);
+                            }
+                        }
                     }
                 });
 
@@ -287,9 +322,10 @@ impl<T: RealField + Copy> GranularWorld<T> {
             }
         }
 
-        // 3. 速度回写 + 4. 摩擦/边界法向消去。
+        // 3. 速度回写(位置增量 + 边界法向消去 + 全局阻尼)。
         let damp = self.vel_damp;
-        let fr = self.friction;
+        let zero_v = Vec3::zeros();
+        let mut new_vels: Vec<Vec3<T>> = vec![zero_v; n];
         for k in 0..n {
             if self.grains[k].inv_mass <= T::zero() {
                 continue;
@@ -332,15 +368,72 @@ impl<T: RealField + Copy> GranularWorld<T> {
                 }
             }
 
-            // 近似切向摩擦:对速度施加轻微衰减(全局,简易堆积角维持)。
-            if fr > T::zero() {
-                new_vel *= T::one() - fr * (T::one() - damp);
-            } else {
-                new_vel *= damp;
-            }
+            // 全局阻尼(真实切向摩擦在下一步骤对接触对施加)。
+            new_vel *= damp;
+            new_vels[k] = new_vel;
+        }
 
-            self.grains[k].vel = new_vel;
-            self.grains[k].pos = np;
+        // 4. 切向摩擦(Jacobi 就地累加,确定性):对每个接触对削减**切向相对速度**。
+        //    真正的摩擦是接触级约束——沿接触法线垂直方向削减相对切向速度,
+        //    使颗粒能抵抗切向滑动、维持堆积角(替代旧的全局速度衰减近似)。
+        //
+        //    公式(Macklin & Müller PBD 摩擦):
+        //      vn = (v_b - v_a)·n   (法向相对速度,n 从 a 指向 b)
+        //      若 vn < 0(接触中),vt = (v_b - v_a) - n·vn
+        //      jt = min(μ·|vn|, |vt|)   (摩擦冲量上限 = 库仑摩擦锥)
+        //      v_a -= vt·(jt/|vt|)·(w_a/(w_a+w_b)); v_b += ...
+        let mu = self.friction;
+        if mu > T::zero() {
+            let eps = T::from_f64(1e-9).unwrap();
+            let friction_iter = 2usize;
+            for _ in 0..friction_iter {
+                let mut dvel: Vec<Vec3<T>> = vec![zero_v; n];
+                dvel.par_iter_mut().enumerate().for_each(|(k, dvk)| {
+                    let s = adj_row[k];
+                    let e = adj_row[k + 1];
+                    for q in s..e {
+                        let p = adj_col[q];
+                        let (i, j) = pairs[p];
+                        let (a, b) = if i == k { (i, j) } else { (j, i) };
+                        let wa = self.grains[a].inv_mass;
+                        let wb = self.grains[b].inv_mass;
+                        let wsum = wa + wb;
+                        if wsum <= T::zero() {
+                            continue;
+                        }
+                        // 法线 n 从 a 指向 b(用预测位置,接触面方向)。
+                        let diff = predicted[b] - predicted[a];
+                        let dlen = diff.norm();
+                        if dlen <= eps {
+                            continue;
+                        }
+                        let n = diff / dlen;
+                        // 相对速度。
+                        let va = new_vels[a];
+                        let vb = new_vels[b];
+                        let vrel = vb - va;
+                        let vn = vrel.dot(&n);
+                        if vn < T::zero() {
+                            // 接触中:削减切向相对速度。
+                            let vt = vrel - n * vn;
+                            let vt_len = vt.norm();
+                            if vt_len > eps {
+                                let jt = (mu * vn.abs()).min(vt_len);
+                                let scale = jt / vt_len * (wa / wsum);
+                                *dvk -= vt * scale;
+                            }
+                        }
+                    }
+                });
+                for k in 0..n {
+                    new_vels[k] += dvel[k];
+                }
+            }
+        }
+
+        for k in 0..n {
+            self.grains[k].vel = new_vels[k];
+            self.grains[k].pos = predicted[k];
         }
         self.t += dt;
     }
@@ -456,6 +549,7 @@ impl<T: RealField + Copy> GranularWorld<T> {
             iterations: self.iterations as u32,
             vel_damp: f(self.vel_damp),
             friction: f(self.friction),
+            pos_friction: f(self.pos_friction),
             dt: 1.0f32 / 60.0,
         }
     }

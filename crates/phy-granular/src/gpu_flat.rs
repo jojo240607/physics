@@ -31,8 +31,10 @@ pub struct GranularFlatData {
     pub iterations: u32,
     /// 速度阻尼(<1 衰减)。
     pub vel_damp: f32,
-    /// 切向摩擦系数。
+    /// 切向摩擦系数(速度级)。
     pub friction: f32,
+    /// 位置级摩擦强度(PBD static friction,咬合维持安息角)。
+    pub pos_friction: f32,
     /// 时间步长。
     pub dt: f32,
 }
