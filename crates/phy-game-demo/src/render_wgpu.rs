@@ -38,6 +38,18 @@ pub struct FrameUniform {
     bg: [f32; 4],
 }
 
+/// 单个 body 的 GPU 资源:独立顶点缓冲(几何固定,init 上传) + 独立实例缓冲
+/// (每帧写一次模型矩阵 + 颜色)。
+///
+/// 必须每 body 独立缓冲:wgpu 的 `queue.write_buffer` 与 `queue.submit` 是两组
+/// 独立队列提交,所有 write_buffer 在 submit 前执行完毕 —— 若多个 body 共用
+/// 同一实例缓冲并反复写同一偏移,只有最后一次生效,其余 body 会拿错模型矩阵。
+struct BodyGpu {
+    vertex_buf: wgpu::Buffer,
+    vertex_count: u32,
+    instance_buf: wgpu::Buffer,
+}
+
 pub struct GpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -46,30 +58,25 @@ pub struct GpuRenderer {
     pipeline: wgpu::RenderPipeline,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
-    vertex_buf: wgpu::Buffer,
-    vertex_count: u32,
-    instance_buf: wgpu::Buffer,
-    instance_capacity: u32,
+    /// 每个 body 的 GPU 资源(顶点 + 实例缓冲)。
+    bodies: Vec<BodyGpu>,
     frame_buf: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
 }
 
 impl GpuRenderer {
-    /// 收集所有 body 的三角网格到一个交错顶点缓冲。
-    pub fn collect_vertices(meshes: &[Vec<phy_demo::raster::Tri>]) -> (Vec<Vertex>, u32) {
-        let mut verts: Vec<Vertex> = Vec::new();
-        for mesh in meshes {
-            for tri in mesh {
-                for i in 0..3 {
-                    verts.push(Vertex {
-                        pos: tri.p[i],
-                        nrm: tri.n[i],
-                    });
-                }
+    /// 把一个 body 的三角网格拍平成交错顶点数组。
+    pub fn collect_vertices(mesh: &[phy_demo::raster::Tri]) -> Vec<Vertex> {
+        let mut verts: Vec<Vertex> = Vec::with_capacity(mesh.len() * 3);
+        for tri in mesh {
+            for i in 0..3 {
+                verts.push(Vertex {
+                    pos: tri.p[i],
+                    nrm: tri.n[i],
+                });
             }
         }
-        let count = verts.len() as u32;
-        (verts, count)
+        verts
     }
 
     pub async fn new(window: Arc<Window>, meshes: &[Vec<phy_demo::raster::Tri>]) -> Self {
@@ -104,23 +111,35 @@ impl GpuRenderer {
         let surface_config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .expect("surface config");
+        // 允许抓帧诊断(copy_texture_to_buffer 需要 COPY_SRC)。
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: surface_config.usage | wgpu::TextureUsages::COPY_SRC,
+            ..surface_config
+        };
         surface.configure(&device, &surface_config);
 
-        let (verts, vcount) = Self::collect_vertices(meshes);
-        let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("vertices"),
-            contents: bytemuck::cast_slice(&verts),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        // 初始实例缓冲(容量先按 body 数给,后续按需扩容)。
-        let initial_cap = meshes.len().max(1) as u32;
-        let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("instances"),
-            size: (initial_cap * std::mem::size_of::<Instance>() as u32) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // 每个 body 独立顶点 + 实例缓冲。
+        let mut bodies: Vec<BodyGpu> = Vec::with_capacity(meshes.len());
+        for mesh in meshes.iter() {
+            let verts = Self::collect_vertices(mesh);
+            let vertex_count = verts.len() as u32;
+            let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("vertices"),
+                contents: bytemuck::cast_slice(&verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("instances"),
+                size: std::mem::size_of::<Instance>() as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            bodies.push(BodyGpu {
+                vertex_buf,
+                vertex_count,
+                instance_buf,
+            });
+        }
 
         let frame_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame uniform"),
@@ -216,7 +235,12 @@ impl GpuRenderer {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
+                // 关闭背面剔除:meshgen 中立方体 6 面绕序并非全部严格外 CCW
+                // (部分面实际为顺时针),球面/胶囊经纬网格的上下半球绕序也可能
+                // 不一致。开启 Back 剔除会在相机转到特定角度(如 180°)时把本应
+                // 保留的正面错误剔除,造成"穿模"假象。这些几何体均为封闭凸体,
+                // 配合深度写入关闭剔除即可获得正确遮挡结果,代价可忽略。
+                cull_mode: None,
                 front_face: wgpu::FrontFace::Ccw,
                 ..Default::default()
             },
@@ -239,10 +263,7 @@ impl GpuRenderer {
             pipeline,
             depth_texture,
             depth_view,
-            vertex_buf,
-            vertex_count: vcount,
-            instance_buf,
-            instance_capacity: initial_cap,
+            bodies,
             frame_buf,
             bind_group,
         }
@@ -278,6 +299,12 @@ impl GpuRenderer {
     }
 
     /// 用当前世界状态绘制一帧。
+    ///
+    /// 每个 body 已在 `new` 时拥有独立的顶点 + 实例缓冲;这里逐 body:
+    /// 1) 把该 body 的模型矩阵 + 颜色写入它**自己**的实例缓冲(每缓冲每帧
+    ///    只写一次,避免共用缓冲被 `write_buffer` 覆盖);
+    /// 2) 绑定它自己的顶点/实例缓冲,单实例 draw。
+    /// 这样每个 body 只绘制自己的三角形,且用各自的模型矩阵。
     pub fn render_frame(
         &mut self,
         vp: &Matrix4<f32>,
@@ -286,36 +313,7 @@ impl GpuRenderer {
         light: &Vector3<f32>,
         bg: [f32; 3],
     ) {
-        let n = body_models.len().min(body_colors.len());
-        if n as u32 > self.instance_capacity {
-            self.instance_capacity = n as u32;
-            self.instance_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("instances"),
-                size: (self.instance_capacity * std::mem::size_of::<Instance>() as u32) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-
-        let mut inst_data: Vec<Instance> = Vec::with_capacity(n);
-        for i in 0..n {
-            let m = body_models[i].cast::<f32>();
-            let c = &body_colors[i];
-            inst_data.push(Instance {
-                model: [
-                    [m[(0, 0)], m[(0, 1)], m[(0, 2)], m[(0, 3)]],
-                    [m[(1, 0)], m[(1, 1)], m[(1, 2)], m[(1, 3)]],
-                    [m[(2, 0)], m[(2, 1)], m[(2, 2)], m[(2, 3)]],
-                    [m[(3, 0)], m[(3, 1)], m[(3, 2)], m[(3, 3)]],
-                ],
-                color: [c[0], c[1], c[2], 1.0],
-            });
-        }
-        self.queue.write_buffer(
-            &self.instance_buf,
-            0,
-            bytemuck::cast_slice(&inst_data),
-        );
+        let n = body_models.len().min(body_colors.len()).min(self.bodies.len());
 
         // WGSL 用列主序 mat4x4<f32>:nalgebra Matrix4 本身就是列主序,
         // 直接逐列铺开即可。
@@ -371,12 +369,86 @@ impl GpuRenderer {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buf.slice(..));
-            pass.set_vertex_buffer(1, self.instance_buf.slice(..));
-            pass.draw(0..self.vertex_count, 0..n as u32);
+
+            for i in 0..n {
+                let m = body_models[i].cast::<f32>();
+                let c = &body_colors[i];
+                let inst = Instance {
+                    // nalgebra Matrix4 是列主序存储,WGSL mat4x4 也是列主序。
+                    // 必须按**列**(col)逐元素铺开,不能按行(row)——否则矩阵被
+                    // 隐式转置,平移变成旋转/缩放混合,物体塌缩到原点呈放射状。
+                    model: [
+                        [m[(0, 0)], m[(1, 0)], m[(2, 0)], m[(3, 0)]], // 列0
+                        [m[(0, 1)], m[(1, 1)], m[(2, 1)], m[(3, 1)]], // 列1
+                        [m[(0, 2)], m[(1, 2)], m[(2, 2)], m[(3, 2)]], // 列2
+                        [m[(0, 3)], m[(1, 3)], m[(2, 3)], m[(3, 3)]], // 列3(平移)
+                    ],
+                    color: [c[0], c[1], c[2], 1.0],
+                };
+                self.queue
+                    .write_buffer(&self.bodies[i].instance_buf, 0, bytemuck::bytes_of(&inst));
+
+                pass.set_vertex_buffer(0, self.bodies[i].vertex_buf.slice(..));
+                pass.set_vertex_buffer(1, self.bodies[i].instance_buf.slice(..));
+                pass.draw(0..self.bodies[i].vertex_count, 0..1);
+            }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
+        if std::env::var_os("GPU_DUMP").is_some() {
+            self.dump(&frame.texture);
+        }
         frame.present();
+    }
+
+    /// 把当前 surface 纹理拷回 CPU 并写成 `gpu_dump.png`(诊断用,需 surface
+    /// 配置含 COPY_SRC)。
+    fn dump(&self, tex: &wgpu::Texture) {
+        let (w, h) = self.size();
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("dump"),
+            size: (w as u64 * h as u64 * 4).max(4),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: None,
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &buf,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(enc.finish()));
+        let slice = buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::Maintain::Wait);
+        let data = slice.get_mapped_range();
+        // 用 png crate 写出(RGBA8),与 main.rs 的 headless 导出保持一致。
+        let mut png_enc = png::Encoder::new(
+            std::io::BufWriter::new(std::fs::File::create("gpu_dump.png").expect("create png")),
+            w,
+            h,
+        );
+        png_enc.set_color(png::ColorType::Rgba);
+        png_enc.set_depth(png::BitDepth::Eight);
+        let mut out = png_enc.write_header().expect("png header");
+        out.write_image_data(&data).expect("png data");
     }
 }
 

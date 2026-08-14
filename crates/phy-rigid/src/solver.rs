@@ -10,11 +10,32 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::contact::Contact;
+use crate::material::PhysicsMaterial;
 use crate::shape::Body;
+
+/// 计算一对 body 在接触层应使用的最终材质属性(P2-a)。
+///
+/// 规则:若双方均使用默认材质(`PhysicsMaterial::default()`,即调用方未显式赋材质),
+/// 则回退到全局 `SolverParams` 的 `restitution`/`friction`(保持与旧版行为一致、
+/// 向后兼容);否则取两 body 材质的组合(`PhysicsMaterial::combine`:恢复取 max、
+/// 摩擦取几何平均)。返回 `{friction, restitution}`,供速度层求解直接使用。
+pub fn effective_material<T: RealField + Copy>(
+    a: &PhysicsMaterial<T>,
+    b: &PhysicsMaterial<T>,
+    params: &SolverParams<T>,
+) -> PhysicsMaterial<T> {
+    let dflt = PhysicsMaterial::default();
+    if *a == dflt && *b == dflt {
+        PhysicsMaterial::new(params.friction, params.restitution)
+    } else {
+        a.combine(b)
+    }
+}
 
 /// 求解参数。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
+#[non_exhaustive]
 pub struct SolverParams<T: RealField> {
     /// 恢复系数 (0 = 完全非弹性, 1 = 完全弹性)。
     pub restitution: T,
@@ -144,8 +165,8 @@ pub fn solve_velocity<T: RealField + Copy>(
     constraints: &mut [ContactConstraint<T>],
     params: &SolverParams<T>,
 ) {
-    let e = params.restitution;
-    let mu = params.friction;
+    // P2-a:per-pair 材质组合在约束循环内层基于两 body 的材质计算;`params` 仅作为
+    // 全默认材质(双方均默认)时的回退值,故此处不再提前取 e/mu。
 
     // D3 warm-start:把上一帧累积的接触冲量作为初值打入速度,减少迭代收敛次数、
     // 消除静止堆叠抖动(Box2D 同款)。仅对 `warm_started` 的约束施加一次(迭代前)。
@@ -170,6 +191,13 @@ pub fn solve_velocity<T: RealField + Copy>(
     for _ in 0..params.iterations {
         for c in constraints.iter_mut() {
             let n = c.contact.normal;
+            // P2-a:per-pair 组合材质。两 body 均用默认材质时退化为全局 params
+            // (保持向后兼容);任一方显式设过材质则按其物理属性组合。
+            let mat_a = bodies[c.a].material;
+            let mat_b = bodies[c.b].material;
+            let pair_mat = effective_material(&mat_a, &mat_b, params);
+            let e = pair_mat.restitution;
+            let mu = pair_mat.friction;
             // 由法向构造正交切向基(Contact 只存法向,切向基数值求解时现算)。
             let (t1, t2) = tangent_basis(&n);
 

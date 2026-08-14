@@ -656,6 +656,7 @@ fn sub_body<T: RealField + Copy>(parent: &Body<T>, s: &SubShape<T>) -> Body<T> {
         collision_mask: parent.collision_mask,
         kinematic: parent.kinematic,
         is_sensor: parent.is_sensor,
+        material: parent.material,
     }
 }
 

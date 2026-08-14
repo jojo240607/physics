@@ -16,13 +16,15 @@ use serde::{Deserialize, Serialize};
 use crate::broadphase::broadphase;
 use crate::ccd;
 use crate::character_controller::CharacterController;
+use crate::collision_events::{CollisionEvent, CollisionTracker};
 use crate::contact::Contact;
 use crate::fracture::fracture_body;
 use crate::joint::{Joint, JointConstraint};
 use crate::narrowphase::collide;
 use crate::profile::StepProfile;
 use crate::profile_stage;
-use crate::shape::Body;
+use crate::shape::{Body, Shape};
+use crate::shape_cast::ShapeCastHit;
 use crate::solver::{ContactConstraint, SolverParams};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -54,6 +56,14 @@ pub struct RigidWorld<T: RealField + Copy> {
     /// 运行时状态(含 vel_y 跨帧累积),不序列化。
     #[serde(skip)]
     pub character: Option<CharacterController<T>>,
+    /// B2 碰撞事件三态追踪器:维护上一帧末态活跃接触 pair 集合,与当前帧 diff
+    /// 生成 Begin/Stay/End 事件。运行时状态,不序列化。
+    #[serde(skip)]
+    pub collision_tracker: CollisionTracker,
+    /// B2 本帧待取碰撞事件(由 `step` 填充,`drain_collision_events()` 取出并清空)。
+    /// 运行时临时数据,不序列化。
+    #[serde(skip)]
+    pub pending_collision_events: Vec<CollisionEvent<T>>,
 }
 
 impl<T: RealField + Copy + NumCast> Default for RigidWorld<T> {
@@ -261,6 +271,8 @@ impl<T: RealField + Copy + NumCast> RigidWorld<T> {
             last_sensor_contacts: Vec::new(),
             contact_impulses: HashMap::new(),
             character: None,
+            collision_tracker: CollisionTracker::new(),
+            pending_collision_events: Vec::new(),
         }
     }
 
@@ -500,6 +512,22 @@ impl<T: RealField + Copy + NumCast> RigidWorld<T> {
             next_cache.insert(key, (cc.normal_impulse, cc.tangent_impulse));
         }
         self.contact_impulses = next_cache;
+
+        // B2 碰撞事件三态:用本帧末态活跃接触(含求解后法向冲量)与上一帧末态 diff,
+        // 生成 Begin/Stay/End 事件。覆盖式写入 pending(事件语义为"本帧接触状态",
+        // 非跨帧累积),业务方每帧 `drain_collision_events()` 取走即可。
+        let mut ev_src: Vec<(usize, usize, Vec3<T>, Vec3<T>, T)> = Vec::new();
+        for cc in last_constraints.iter() {
+            ev_src.push((
+                cc.a,
+                cc.b,
+                cc.contact.normal,
+                cc.contact.point,
+                cc.contact.depth,
+            ));
+        }
+        self.pending_collision_events = self.collision_tracker.update(&ev_src);
+
         prof.total_ns = prof.broad_narrow_ns
             + prof.velocity_ns
             + prof.advance_ns
@@ -513,6 +541,42 @@ impl<T: RealField + Copy + NumCast> RigidWorld<T> {
     /// 传感器不施加冲量、不阻止穿透,仅用于触发器/拾取/进入判定。每次 `step` 刷新。
     pub fn sensor_contacts(&self) -> &[Contact<T>] {
         &self.last_sensor_contacts
+    }
+
+    /// B2 取出并清空本帧待处理的碰撞事件(三态:Begin/Stay/End + 穿透深度)。
+    ///
+    /// 每个 `step` 会覆盖式写入本帧事件(见 `step_with_profile` 末尾),故多次调用
+    /// 只有首次返回最新帧事件,后续返回空,直到下一次 `step`。典型用法:每帧
+    /// `step` 后调用一次,遍历事件驱动游戏逻辑(播放音效 / 触发伤害 / 铰链解锁等)。
+    ///
+    /// `a`/`b` 为 body 全局索引(已保证 `a < b`)。`Begin`/`Stay` 携带 `depth`(穿透深度,
+    /// >0),可作为碰撞强度指标(游戏侧如需更精确接触力,可结合 solver 内部冲量另接钩子)。
+    pub fn drain_collision_events(&mut self) -> Vec<CollisionEvent<T>> {
+        std::mem::take(&mut self.pending_collision_events)
+    }
+
+    /// 形状扫掠查询(P2-b):把一个形状从 `from`(姿态 `from_rot`)沿直线扫掠到 `to`
+    /// (姿态 `to_rot`),返回第一个受阻的世界 body。常用于角色胶囊移动前的"是否会撞墙"、
+    /// 子弹/射线类投射的广义化(支持任意形状而非仅线段)。
+    ///
+    /// 过滤与常规碰撞一致:按 `layers`/`collision_mask` 与世界 body 的碰撞层位与,
+    /// 传感器 body 不阻挡。`ignore` 可跳过自身(投射体 body 索引)。
+    ///
+    /// 返回 `None` 表示整段路径畅通。实现为对扫掠参数 `α∈[0,1]` 的二分搜索(复用
+    /// `narrowphase::collide`),精度由 `max_iters`(默认 20)控制。
+    pub fn cast_shape(
+        &self,
+        shape: &Shape<T>,
+        from: &Vec3<T>,
+        from_rot: &na::UnitQuaternion<T>,
+        to: &Vec3<T>,
+        to_rot: &na::UnitQuaternion<T>,
+        layers: u32,
+        mask: u32,
+        ignore: Option<usize>,
+        max_iters: usize,
+    ) -> Option<ShapeCastHit<T>> {
+        crate::shape_cast::shape_cast(shape, from, from_rot, to, to_rot, &self.bodies, layers, mask, ignore, max_iters)
     }
 
     /// 把所有可动体按时间步 `h` 推进位置(线速度)与姿态(角速度)。
@@ -705,6 +769,7 @@ mod tests {
 
     use crate::shape::{Shape, SubShape};
     use crate::solver::SolverParams;
+    use crate::PhysicsMaterial;
 
     /// 热浮力应让热区中的刚体获得向上的速度修正(抵消部分重力)。
     #[test]
@@ -1114,6 +1179,157 @@ mod tests {
             "Motor 应驱动滑块沿 z 轴移动,实际 vel.z={}",
             world.bodies[slib].vel.z
         );
+    }
+
+    /// B2 碰撞事件三态端到端:两球接触 → Begin,持续 → Stay,分离 → End。
+    #[test]
+    fn collision_events_begin_stay_end_e2e() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, 0.0, 0.0); // 关重力,专测事件
+        // 两球半径 0.5,初始间距 0.8(轻微重叠 0.2,确保 narrow-phase 判定为接触)。
+        let a = world.add_body(Body::new(Shape::Sphere { r: 0.5 }, Vec3::new(-0.4, 0.0, 0.0), 1.0));
+        let b = world.add_body(Body::new(Shape::Sphere { r: 0.5 }, Vec3::new(0.4, 0.0, 0.0), 1.0));
+        let _ = (a, b);
+
+        // 帧1:进入接触 → Begin,且穿透深度 > 0。
+        world.step(1.0 / 120.0);
+        let e1 = world.drain_collision_events();
+        assert_eq!(e1.len(), 1, "应恰好一个接触 pair");
+        match &e1[0] {
+            CollisionEvent::Begin { a, b, depth, .. } => {
+                assert!(*a < *b, "a 应小于 b");
+                assert!(*depth > 0.0, "重叠球穿透深度应 > 0");
+            }
+            _ => panic!("帧1应为 Begin"),
+        }
+
+        // 帧2:仍接触 → Stay(覆盖式,drain 取走后再次 drain 应空),穿透仍存在。
+        world.step(1.0 / 120.0);
+        let e2 = world.drain_collision_events();
+        assert_eq!(e2.len(), 1);
+        match &e2[0] {
+            CollisionEvent::Stay { depth, .. } => assert!(*depth > 0.0, "持续接触穿透应 > 0"),
+            _ => panic!("帧2应为 Stay"),
+        }
+        assert!(
+            world.drain_collision_events().is_empty(),
+            "drain 后再次 drain 应为空(覆盖式)"
+        );
+
+        // 帧3:把 b 移远使其分离 → End。
+        world.bodies[b].pos = Vec3::new(3.0, 0.0, 0.0);
+        world.step(1.0 / 120.0);
+        let e3 = world.drain_collision_events();
+        assert_eq!(e3.len(), 1);
+        assert!(matches!(e3[0], CollisionEvent::End { .. }), "帧3应为 End");
+    }
+
+    /// B2 碰撞事件:落球接触时报告穿透深度 > 0(depth 即碰撞强度指标;split-impulse 下
+    /// 速度层法向冲量恒为 0,故游戏侧应以 depth 判断碰撞强度)。
+    #[test]
+    fn collision_event_reports_depth() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, -9.81, 0.0); // 开重力
+        // 上方球自由下落到静止地面球上,接触时应产生 depth > 0 的事件。
+        let ground = world.add_body(Body::new(Shape::Sphere { r: 0.5 }, Vec3::new(0.0, 0.0, 0.0), 0.0));
+        let _drop = world.add_body(Body::new(Shape::Sphere { r: 0.5 }, Vec3::new(0.0, 2.0, 0.0), 1.0));
+        let _ = ground;
+
+        let mut saw_depth = false;
+        for _ in 0..120 {
+            world.step(1.0 / 120.0);
+            for ev in world.drain_collision_events() {
+                if let CollisionEvent::Begin { depth, a, b, .. }
+                | CollisionEvent::Stay { depth, a, b, .. } = ev
+                {
+                    // drop=1, ground=0 → pair 应为 (0,1)。
+                    assert!((a, b) == (0, 1), "接触 pair 应为 (0,1)");
+                    if depth > 0.0 {
+                        saw_depth = true;
+                    }
+                }
+            }
+        }
+        assert!(saw_depth, "接触时应报告穿透深度 > 0");
+    }
+
+    /// 物理材质(P2-a):`effective_material` 在双方均默认材质时回退到全局
+    /// `SolverParams`,否则取两 body 材质组合(恢复 max、摩擦几何平均)。
+    /// 这是求解器实际读取材质路径的单点验证,与旧版全局 params 行为向后兼容。
+    #[test]
+    fn effective_material_wiring() {
+        use crate::solver::effective_material;
+        use crate::material::PhysicsMaterial;
+        // 双方默认 → 回退全局 params(摩擦 0.5 / 恢复 0.9)。
+        let p = SolverParams::<f64> {
+            restitution: 0.9,
+            friction: 0.5,
+            ..SolverParams::default()
+        };
+        let d = PhysicsMaterial::default();
+        let m = effective_material(&d, &d, &p);
+        assert!((m.friction - 0.5).abs() < 1e-12);
+        assert!((m.restitution - 0.9).abs() < 1e-12);
+
+        // 任一方显式赋材质 → 取组合,忽略全局。
+        let steel = PhysicsMaterial::metal(); // e=0.6, mu=0.4
+        let wood = PhysicsMaterial::wood(); // e=0.2, mu=0.5
+        let m2 = effective_material(&steel, &wood, &p);
+        // 恢复取 max → 0.6;摩擦取几何平均 sqrt(0.4*0.5)=0.4472
+        assert!((m2.restitution - 0.6).abs() < 1e-12, "组合恢复应取 max");
+        let expected_mu = (0.4 * 0.5f64).sqrt();
+        assert!((m2.friction - expected_mu).abs() < 1e-12, "组合摩擦应取几何平均");
+    }
+
+    /// 物理材质(P2-a)集成:带 per-body 材质的 world 能正常步进且碰撞事件报告 depth。
+    /// (注:求解器恢复系数动力学受既有 split-impulse 块求解实现限制,回弹强度不在
+    /// 本测试范围;此处仅验证材质接线不影响既有稳定性与事件链路。)
+    #[test]
+    fn world_with_body_materials_steps_and_reports_depth() {
+        let mut world = RigidWorld::<f64>::new();
+        world.gravity = Vec3::new(0.0, -9.81, 0.0);
+        // 地面:钢材质。落球:橡胶材质。
+        let ground = world.add_body(Body {
+            material: PhysicsMaterial::metal(),
+            ..Body::new(Shape::Box { half: Vec3::new(5.0, 0.5, 5.0) }, Vec3::zeros(), 0.0)
+        });
+        let ball = world.add_body(Body {
+            material: PhysicsMaterial::rubber(),
+            ..Body::new(Shape::Sphere { r: 0.5 }, Vec3::new(0.0, 2.0, 0.0), 1.0)
+        });
+        let _ = (ground, ball);
+        let mut saw_depth = false;
+        for _ in 0..200 {
+            world.step(1.0 / 120.0);
+            for ev in world.drain_collision_events() {
+                if let CollisionEvent::Begin { depth, .. } | CollisionEvent::Stay { depth, .. } = ev {
+                    if depth > 0.0 {
+                        saw_depth = true;
+                    }
+                }
+            }
+        }
+        assert!(saw_depth, "带材质 body 的碰撞应仍报告 depth > 0");
+    }
+
+    /// 形状扫掠查询(P2-b):`RigidWorld::cast_shape` 应能检测沿直线扫掠的命中比例。
+    /// 球从 z=-5 沿 +z 扫掠到 z=+5,途中穿过原点处的障碍球(半径 1),命中比例≈0.35。
+    #[test]
+    fn world_cast_shape_detects_obstacle() {
+        let mut world = RigidWorld::<f64>::new();
+        let obstacle = world.add_body(Body::new(Shape::Sphere { r: 1.0 }, Vec3::zeros(), 0.0));
+        let _ = obstacle;
+        let shape = Shape::Sphere { r: 0.5 };
+        let from = Vec3::new(0.0, 0.0, -5.0);
+        let to = Vec3::new(0.0, 0.0, 5.0);
+        let rot = na::UnitQuaternion::identity();
+        let hit = world.cast_shape(
+            &shape, &from, &rot, &to, &rot, u32::MAX, u32::MAX, None, 24,
+        );
+        assert!(hit.is_some(), "应命中障碍球");
+        let h = hit.unwrap();
+        assert!((h.fraction - 0.35).abs() < 1e-3, "命中比例应≈0.35,实际 {}", h.fraction);
+        assert_eq!(h.body_index, 0);
     }
 
     /// 胶囊体碰撞(D2):Capsule 在静态盒(地面)上方释放,应落地停在地面上(不穿透、不漂移),

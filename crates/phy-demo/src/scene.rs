@@ -1155,6 +1155,7 @@ fn render_body_ex(fb: &mut Framebuffer, cam: &Camera, body: &Body<f64>, override
                 }
             }
         }
+        _ => {} // Shape 新变体:可视化安全跳过
     }
 }
 

@@ -105,6 +105,7 @@ fn bits_to_f64(v: &mut Value) {
     serialize = "T: RealField + Copy + Serialize + DeserializeOwned + Default + nalgebra::Scalar + num_traits::ToPrimitive",
     deserialize = "T: RealField + Copy + Serialize + DeserializeOwned + Default + nalgebra::Scalar + num_traits::ToPrimitive"
 ))]
+#[non_exhaustive]
 pub enum SubArchive<T: RealField + Copy + num_traits::ToPrimitive> {
     Rigid(RigidSubsystem<T>),
     Soft(SoftSubsystem<T>),

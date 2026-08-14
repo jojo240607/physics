@@ -11,6 +11,7 @@ use crate::csv::CsvWriter;
 
 /// 切片平面方向。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SliceAxis {
     /// 固定 z = k,导出 (x,y) 平面。
     XY,

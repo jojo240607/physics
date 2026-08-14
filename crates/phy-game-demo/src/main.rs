@@ -57,6 +57,8 @@ struct App {
     #[cfg(target_env = "msvc")]
     gpu: Option<GpuBackend>,
     last_frame: Instant,
+    /// 已渲染帧数(用于 GPU_DUMP 诊断模式自动退出)。
+    frames: u32,
 }
 
 impl Default for App {
@@ -73,6 +75,7 @@ impl Default for App {
             #[cfg(target_env = "msvc")]
             gpu: None,
             last_frame: Instant::now(),
+            frames: 0,
         }
     }
 }
@@ -209,6 +212,15 @@ impl ApplicationHandler for App {
                         let light = Vector3::new(0.4f32, 0.85, 0.3).normalize();
                         let bg = [0.40f32, 0.52, 0.62];
                         gpu.render_frame(&vp, &models, &game.body_colors, &light, bg);
+                    }
+
+                    // 诊断模式:渲染 2 帧后自动退出并留下 gpu_dump.png。
+                    if std::env::var_os("GPU_DUMP").is_some() {
+                        self.frames += 1;
+                        if self.frames >= 2 {
+                            eprintln!("[GPU_DUMP] wrote gpu_dump.png and exit");
+                            std::process::exit(0);
+                        }
                     }
                 }
 

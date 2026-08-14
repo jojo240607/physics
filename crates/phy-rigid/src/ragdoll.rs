@@ -21,6 +21,7 @@ use crate::world::RigidWorld;
 
 /// 布偶的肢体 id(供外部查询/施加外力)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum RagdollLimb {
     Head,
     Torso,
@@ -63,6 +64,7 @@ pub struct Ragdoll<T: RealField + Copy> {
 
 /// 布偶尺寸/质量配置(全部为相对默认比例的可覆盖项)。
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct RagdollParams<T: RealField + Copy> {
     /// 胶囊肢体半径(统一)。
     pub limb_radius: T,
@@ -102,6 +104,7 @@ impl<T: RealField + Copy + num_traits::NumCast> Default for RagdollParams<T> {
 
 /// 布偶装配器:链式配置后调用 `build` 注入 `RigidWorld`。
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct RagdollBuilder<T: RealField + Copy> {
     /// 根部(骨盆/躯干底)世界位置。
     root: Vec3<T>,

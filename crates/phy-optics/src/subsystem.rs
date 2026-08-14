@@ -12,6 +12,7 @@ use crate::scene::OpticScene;
 
 /// 光学后端精度开关。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Precision {
     /// 离线 Whitted 递归追踪(高保真)。
     Offline,

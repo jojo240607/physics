@@ -50,6 +50,7 @@ pub struct JointConstraint<T: RealField + Copy> {
 /// 关节几何定义。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
+#[non_exhaustive]
 pub enum Joint<T: RealField + Copy> {
     /// 球窝:局部锚点 `pa`(a 上)/`pb`(b 上)世界位置应重合。
     Ball {

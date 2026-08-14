@@ -1,0 +1,2990 @@
+diff --git a/.gitignore b/.gitignore
+index 0631079..58099bd 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -35,3 +35,4 @@ _*.txt
+ # 打包产物(build_package.py 输出,非源码)
+ /pkg
+ *.log  
++gpu_dump.png 
+diff --git a/Cargo.lock b/Cargo.lock
+index e2fba04..985e3f3 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -68,7 +68,7 @@ dependencies = [
+  "ndk-context",
+  "ndk-sys 0.6.0+11769913",
+  "num_enum",
+- "thiserror 2.0.19",
++ "thiserror 2.0.20",
+ ]
+ 
+ [[package]]
+@@ -350,9 +350,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "cc"
+-version = "1.4.1"
++version = "1.4.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "9066c49992464636f92905fa096ec58baaa4d57ec19a5c096c68d3e25ef3d136"
++checksum = "5d262e149917187838d5b42777c8253bcb64500067342904e7d429499a6f277e"
+ dependencies = [
+  "find-msvc-tools",
+  "jobserver",
+@@ -439,7 +439,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "3538270d33cc669650c4b093848450d380def10c331d38c768e34cac80576e6e"
+ dependencies = [
+  "termcolor",
+- "unicode-width",
++ "unicode-width 0.1.14",
+ ]
+ 
+ [[package]]
+@@ -450,7 +450,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
+ dependencies = [
+  "serde",
+  "termcolor",
+- "unicode-width",
++ "unicode-width 0.2.2",
+ ]
+ 
+ [[package]]
+@@ -847,9 +847,9 @@ checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
+ 
+ [[package]]
+ name = "futures"
+-version = "0.3.33"
++version = "0.3.34"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a88cf1f829d945f548cf8fec32c61b1f202b6d93b45848602fc02af4b12ad218"
++checksum = "9a31d2a3fbaaeb2af2368bbdd904aa8e812d3c04a1ee10d3171f52d556e5d0a3"
+ dependencies = [
+  "futures-channel",
+  "futures-core",
+@@ -862,9 +862,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "futures-channel"
+-version = "0.3.33"
++version = "0.3.34"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "262590f4fe6afeb0bc83be1daa64e52657fe185690a958af7f3ad0e92085c5ae"
++checksum = "b1f9e3d69d39e4862ffed03ed071a76f9a13ba1d9109d355b0f0aa6b15e393c4"
+ dependencies = [
+  "futures-core",
+  "futures-sink",
+@@ -872,15 +872,15 @@ dependencies = [
+ 
+ [[package]]
+ name = "futures-core"
+-version = "0.3.33"
++version = "0.3.34"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "2cd50c473c80f6d7c3670a752354b8e569b1a7cbfdc0419ec88e5edad85e0dc7"
++checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
+ 
+ [[package]]
+ name = "futures-executor"
+-version = "0.3.33"
++version = "0.3.34"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "6754879cc9f2c66f88c6e5c35344bb0bdb0708b0352b1201815667c7eabc7458"
++checksum = "031b47cf1a3c6cc8bc2fc76cd437f521619387907d469316e7c0bc278f1f5432"
+ dependencies = [
+  "futures-core",
+  "futures-task",
+@@ -889,38 +889,38 @@ dependencies = [
+ 
+ [[package]]
+ name = "futures-io"
+-version = "0.3.33"
++version = "0.3.34"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "4577ecaa3c4f96589d473f679a71b596316f6641bc350038b962a5daf0085d7a"
++checksum = "53c0fa8157de1303bfffdaa1cc2a673bfffb60102f76b0ef4441659124373fed"
+ 
+ [[package]]
+ name = "futures-macro"
+-version = "0.3.33"
++version = "0.3.34"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "2d6d3cde68c518367be28956066ddfef33813991b77a55005a69dae04bf3b10b"
++checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+- "syn 2.0.119",
++ "syn 3.0.3",
+ ]
+ 
+ [[package]]
+ name = "futures-sink"
+-version = "0.3.33"
++version = "0.3.34"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "e34418ac499d6305c2fb5ad0ed2f6ac998c5f8ca209b4510f7f94242c647e307"
++checksum = "1944426bf7d03f1d14f708785e4b33efd750b36d48a157b836b3efc15ede8e1d"
+ 
+ [[package]]
+ name = "futures-task"
+-version = "0.3.33"
++version = "0.3.34"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "b231ed28831efb4a61a08580c4bc233ec56bc009f4cd8f52da2c3cb97df0c109"
++checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
+ 
+ [[package]]
+ name = "futures-util"
+-version = "0.3.33"
++version = "0.3.34"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a77a90a256fce34da66415271e30f94ee91c57b04b8a2c042d9cf3220179deaa"
++checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
+ dependencies = [
+  "futures-channel",
+  "futures-core",
+@@ -1074,7 +1074,7 @@ dependencies = [
+  "hashbrown 0.16.1",
+  "log",
+  "presser",
+- "thiserror 2.0.19",
++ "thiserror 2.0.20",
+  "windows 0.62.2",
+ ]
+ 
+@@ -1226,7 +1226,7 @@ dependencies = [
+  "jni-sys 0.4.1",
+  "log",
+  "simd_cesu8",
+- "thiserror 2.0.19",
++ "thiserror 2.0.20",
+  "walkdir",
+  "windows-link",
+ ]
+@@ -1284,9 +1284,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "js-sys"
+-version = "0.3.103"
++version = "0.3.104"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "53b44bfcdb3f8d5837a46dae1ca9660a837176eee74a28b229bc626816589102"
++checksum = "0e0c1080212aad755ea003d18543e8768dd432c48819efd73a7bf1e39b7a5a3a"
+ dependencies = [
+  "cfg-if",
+  "futures-util",
+@@ -1351,7 +1351,7 @@ dependencies = [
+  "bitflags 2.13.1",
+  "libc",
+  "plain",
+- "redox_syscall 0.9.1",
++ "redox_syscall 0.9.2",
+ ]
+ 
+ [[package]]
+@@ -1495,7 +1495,7 @@ dependencies = [
+  "once_cell",
+  "rustc-hash",
+  "spirv 0.4.0+sdk-1.4.341.0",
+- "thiserror 2.0.19",
++ "thiserror 2.0.20",
+  "unicode-ident",
+ ]
+ 
+@@ -1508,7 +1508,7 @@ dependencies = [
+  "hashbrown 0.17.1",
+  "indexmap",
+  "rustc-hash",
+- "thiserror 2.0.19",
++ "thiserror 2.0.20",
+ ]
+ 
+ [[package]]
+@@ -2500,9 +2500,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "redox_syscall"
+-version = "0.9.1"
++version = "0.9.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "07507be7b4a5f9f26eeb41eeaebb1f5a7ff29dfb29739facc21d35bf8b11c21e"
++checksum = "f1c93da5bb2c5d4e6c0ef7abeead62c89169a0a4882bfb83ac892f2423aea2fe"
+ dependencies = [
+  "bitflags 2.13.1",
+ ]
+@@ -2920,11 +2920,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "thiserror"
+-version = "2.0.19"
++version = "2.0.20"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "09a43598840e33d5b0331f38c5e30d13bb11c11210a4b58f0d9b18a5a5eefcd9"
++checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+ dependencies = [
+- "thiserror-impl 2.0.19",
++ "thiserror-impl 2.0.20",
+ ]
+ 
+ [[package]]
+@@ -2940,9 +2940,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "thiserror-impl"
+-version = "2.0.19"
++version = "2.0.20"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "43cbfe0cf76104d42a574802844187e84a305e531ed54455f11fbde0f10541cd"
++checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+@@ -3114,6 +3114,12 @@ version = "0.1.14"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
+ 
++[[package]]
++name = "unicode-width"
++version = "0.2.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
++
+ [[package]]
+ name = "unicode-xid"
+ version = "0.2.6"
+@@ -3159,9 +3165,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "wasm-bindgen"
+-version = "0.2.126"
++version = "0.2.127"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "4b067c0c11094aef6b7a801c1e34a26affafdf3d051dba08456b868789aaf9a4"
++checksum = "1b70935747edd64d89de3efa29d73789b806c15798f8e7dca4d8ac356b50ce70"
+ dependencies = [
+  "cfg-if",
+  "once_cell",
+@@ -3172,9 +3178,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "wasm-bindgen-futures"
+-version = "0.4.76"
++version = "0.4.77"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "c62df1340f32221cb9c54d6a27b030e3dba64361d4a95bed55f9aacb44da291d"
++checksum = "6b7777d5cc23d0e91404e53ce2d5e8ec7acae3026b16233dba62cd3246457950"
+ dependencies = [
+  "js-sys",
+  "wasm-bindgen",
+@@ -3182,9 +3188,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "wasm-bindgen-macro"
+-version = "0.2.126"
++version = "0.2.127"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "167ce5e579f6bcf889c4f7175a8a5a585de84e8ff93976ce393efa5f2837aab1"
++checksum = "77775f8f3f7217702089053b94958f8f54061a3f663417df76e19cbdcca29bc1"
+ dependencies = [
+  "quote",
+  "wasm-bindgen-macro-support",
+@@ -3192,9 +3198,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "wasm-bindgen-macro-support"
+-version = "0.2.126"
++version = "0.2.127"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "f3997c7839262f4ef12cf90b818d6340c18e80f263f1a94bf157d0ec4420380e"
++checksum = "e11d33f857dc2fb11b8bc75aee111aa9cbeb12cd9f25efd3d4c2a3dd4e235284"
+ dependencies = [
+  "bumpalo",
+  "proc-macro2",
+@@ -3205,9 +3211,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "wasm-bindgen-shared"
+-version = "0.2.126"
++version = "0.2.127"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
++checksum = "7ef64dbcc55df09c7e5a46182d181c2cfa3e925f3da937ea764728b4bbb9dcbf"
+ dependencies = [
+  "unicode-ident",
+ ]
+@@ -3323,9 +3329,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "web-sys"
+-version = "0.3.103"
++version = "0.3.104"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "8622dcb61c0bcc9fffa6938bed81210af2da9a7e4a1a834b2e37a59b6dfb6141"
++checksum = "c435338968042f4f59a557f690a253676d47ce13ceb55d70100e7facf6620a30"
+ dependencies = [
+  "js-sys",
+  "wasm-bindgen",
+@@ -3449,7 +3455,7 @@ dependencies = [
+  "raw-window-handle",
+  "rustc-hash",
+  "smallvec",
+- "thiserror 2.0.19",
++ "thiserror 2.0.20",
+  "wgpu-core-deps-apple",
+  "wgpu-core-deps-emscripten",
+  "wgpu-core-deps-windows-linux-android",
+@@ -3575,7 +3581,7 @@ dependencies = [
+  "renderdoc-sys",
+  "smallvec",
+  "static_assertions",
+- "thiserror 2.0.19",
++ "thiserror 2.0.20",
+  "wasm-bindgen",
+  "wayland-sys",
+  "web-sys",
+diff --git a/crates/phy-core/src/events.rs b/crates/phy-core/src/events.rs
+index 2cd42de..645254d 100644
+--- a/crates/phy-core/src/events.rs
++++ b/crates/phy-core/src/events.rs
+@@ -17,6 +17,7 @@ use phy_math::RealField;
+ /// 内置的世界事件(常用、可直接匹配的那些)。
+ ///
+ /// 自定义事件可走 [`EventBus::publish`] 的 `Box<dyn Any>` 通道,订阅者 downcast 取出。
++#[non_exhaustive]
+ pub enum WorldEvent<T: RealField> {
+     /// 世界完成一个时间步:`t` 为该步结束后的全局时间,`dt` 为步长。
+     Step { t: T, dt: T },
+@@ -41,6 +42,7 @@ pub struct EventBus<T: RealField> {
+ 
+ /// 事件种类标签:用于在分发时快速分流,避免每次都 downcast 全部订阅者。
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum EventKind {
+     /// 内置世界事件(对应 [`WorldEvent`])。
+     World,
+diff --git a/crates/phy-core/src/lib.rs b/crates/phy-core/src/lib.rs
+index 5acad40..33c2067 100644
+--- a/crates/phy-core/src/lib.rs
++++ b/crates/phy-core/src/lib.rs
+@@ -25,6 +25,7 @@ pub use replay::{FrameInput, Replay, ReplayPlayer, Rng};
+ 
+ /// 引擎错误类型。
+ #[derive(Debug, thiserror::Error)]
++#[non_exhaustive]
+ pub enum Error {
+     #[error("subsystem step failed: {0}")]
+     Step(String),
+@@ -35,6 +36,7 @@ pub enum Error {
+ /// 由 `World::step_checked` / `step_skipping_checked` 在子系统 `validate` 失败、
+ /// 或某子系统在一帧内时间未推进(`dt` 被吞掉)时抛出。
+ #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
++#[non_exhaustive]
+ pub enum WorldError {
+     /// 某子系统在步进后包含非有限数值(NaN / Inf)。
+     #[error("子系统 {subsystem} 字段 {field} 出现非有限值(NaN/Inf)")]
+diff --git a/crates/phy-core/src/timestep.rs b/crates/phy-core/src/timestep.rs
+index 1da09ef..1c22e73 100644
+--- a/crates/phy-core/src/timestep.rs
++++ b/crates/phy-core/src/timestep.rs
+@@ -16,6 +16,7 @@ use crate::world::World;
+ 
+ /// 时间步长控制模式。
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum StepMode {
+     /// 固定子步长 `max_dt`:尾数累积到下一帧,子步数 = ceil(frame_dt/max_dt)。
+     /// 最稳定,子步大小恒定,适合科研/确定性回放。
+diff --git a/crates/phy-demo/src/scene.rs b/crates/phy-demo/src/scene.rs
+index 660a9e5..f953a15 100644
+--- a/crates/phy-demo/src/scene.rs
++++ b/crates/phy-demo/src/scene.rs
+@@ -1155,6 +1155,7 @@ fn render_body_ex(fb: &mut Framebuffer, cam: &Camera, body: &Body<f64>, override
+                 }
+             }
+         }
++        _ => {} // Shape 新变体:可视化安全跳过
+     }
+ }
+ 
+diff --git a/crates/phy-ffi/src/lib.rs b/crates/phy-ffi/src/lib.rs
+index e0f978a..47aa656 100644
+--- a/crates/phy-ffi/src/lib.rs
++++ b/crates/phy-ffi/src/lib.rs
+@@ -44,14 +44,20 @@ use std::ffi::CStr;
+ use std::panic::{self, AssertUnwindSafe};
+ 
+ use phy_core::World;
++use phy_field::{HeatField, ScalarField, Bc};
+ use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
+ use phy_granular::subsystem::GranularSubsystem;
+ use phy_granular::world::GranularWorld;
+ use phy_math::Vec3;
++use phy_optics::{OpticScene, OpticSubsystem, Precision};
+ use phy_rigid::shape::Shape;
+ use phy_rigid::subsystem::RigidSubsystem;
+ use phy_rigid::world::RigidWorld;
+ use phy_rigid::Body;
++use phy_soft::SoftBody;
++use phy_soft::SoftSubsystem;
++use phy_solid::SolidSubsystem;
++use phy_solid::SolidWorld;
+ 
+ /// 不透明句柄。C/C++ 侧只见 `PhyWorldHandle *`,不可解引用;
+ /// 真实 `World<f64>` 由 Rust 侧 `Box` 拥有,经指针转换在边界传递。
+@@ -219,7 +225,7 @@ pub extern "C" fn phy_world_create_rigid() -> *mut PhyWorldHandle {
+ /// （如四旋翼仿真：调用方自行 `phy_world_rigid_add_body` 添加机体与可选地面）。
+ #[no_mangle]
+ pub extern "C" fn phy_world_create_rigid_empty() -> *mut PhyWorldHandle {
+-    let mut rworld = RigidWorld::<f64>::new();
++    let rworld = RigidWorld::<f64>::new();
+     let mut world = World::<f64>::new();
+     world.add_subsystem(Box::new(RigidSubsystem::new(rworld)));
+     box_world(world)
+@@ -241,6 +247,86 @@ pub extern "C" fn phy_world_create_coupled() -> *mut PhyWorldHandle {
+         .unwrap_or(std::ptr::null_mut())
+ }
+ 
++// ---- 空世界工厂(供 P3 跨语言调用方自行填充; 与 `phy-sdk::PhysicsBuilder` 能力对齐) ----
++
++fn build_soft_world() -> World<f64> {
++    let mut world = World::<f64>::new();
++    // 空软体(无质点/弹簧), 调用方经 `phy_world_*` 后续接口填充。
++    world.add_subsystem(Box::new(SoftSubsystem::new(SoftBody::new(0.0))));
++    world
++}
++
++fn build_field_world() -> World<f64> {
++    let mut world = World::<f64>::new();
++    // 默认 16³ 热扩散场, 间距 1.0, Neumann 边界(与 `PhysicsBuilder::field` 一致)。
++    let grid = ScalarField::new(16, 16, 16, 1.0, 0.0, Bc::Neumann);
++    world.add_subsystem(Box::new(HeatField::new(grid, 0.1)));
++    world
++}
++
++fn build_optics_world() -> World<f64> {
++    let mut world = World::<f64>::new();
++    // 空光学场景(默认精度), 调用方自行 `add` 光学体。
++    world.add_subsystem(Box::new(OpticSubsystem::new(OpticScene::new(), Precision::Realtime)));
++    world
++}
++
++fn build_solid_world() -> World<f64> {
++    let mut world = World::<f64>::new();
++    // 空可破坏实体(FEM): 钢参数 (young=200e9, poisson=0.3, rho=7850), 调用方自行建网格。
++    let sworld = SolidWorld::new(200e9, 0.3, 7850.0);
++    world.add_subsystem(Box::new(SolidSubsystem::new(sworld)));
++    world
++}
++
++/// 创建**空**软体(可变形)世界。调用方自行填充质点/弹簧。
++///
++/// # 示例
++/// ```
++/// use phy_ffi::{phy_world_create_soft_empty, phy_world_create_field_empty,
++///               phy_world_create_optics_empty, phy_world_create_solid_empty,
++///               phy_world_destroy};
++/// for w in [
++///     phy_world_create_soft_empty(),
++///     phy_world_create_field_empty(),
++///     phy_world_create_optics_empty(),
++///     phy_world_create_solid_empty(),
++/// ] {
++///     assert!(!w.is_null());
++///     phy_world_destroy(w); // 空指针安全 no-op
++/// }
++/// ```
++#[no_mangle]
++pub extern "C" fn phy_world_create_soft_empty() -> *mut PhyWorldHandle {
++    guard(build_soft_world)
++        .map(box_world)
++        .unwrap_or(std::ptr::null_mut())
++}
++
++/// 创建**空**标量热场世界(默认 16³ 网格)。调用方经 `phy_world_*` 注入热源/读取温度。
++#[no_mangle]
++pub extern "C" fn phy_world_create_field_empty() -> *mut PhyWorldHandle {
++    guard(build_field_world)
++        .map(box_world)
++        .unwrap_or(std::ptr::null_mut())
++}
++
++/// 创建**空**光学/波动世界。调用方自行添加光学体。
++#[no_mangle]
++pub extern "C" fn phy_world_create_optics_empty() -> *mut PhyWorldHandle {
++    guard(build_optics_world)
++        .map(box_world)
++        .unwrap_or(std::ptr::null_mut())
++}
++
++/// 创建**空**可破坏实体(FEM)世界(钢参数)。调用方自行建网格节点/单元。
++#[no_mangle]
++pub extern "C" fn phy_world_create_solid_empty() -> *mut PhyWorldHandle {
++    guard(build_solid_world)
++        .map(box_world)
++        .unwrap_or(std::ptr::null_mut())
++}
++
+ /// 推进仿真 `dt` 秒。返回 0 成功,-1 失败(空指针或 panic)。
+ #[no_mangle]
+ pub extern "C" fn phy_world_step(w: *mut PhyWorldHandle, dt: f64) -> i32 {
+@@ -271,6 +357,7 @@ pub extern "C" fn phy_world_step_checked(w: *mut PhyWorldHandle, dt: f64) -> i32
+         Some(Ok(())) => 0,
+         Some(Err(phy_core::WorldError::NonFinite { .. })) => 2,
+         Some(Err(phy_core::WorldError::Stalled { .. })) => 3,
++        Some(Err(_)) => 4, // 未来新增错误变体安全降级
+         None => -1,
+     }
+ }
+diff --git a/crates/phy-field/src/grid.rs b/crates/phy-field/src/grid.rs
+index d470b9e..44e1456 100644
+--- a/crates/phy-field/src/grid.rs
++++ b/crates/phy-field/src/grid.rs
+@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
+ 
+ /// 边界条件。
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
++#[non_exhaustive]
+ pub enum Bc {
+     /// 边界固定为 `bc_val`(狄利克雷)。
+     Dirichlet,
+diff --git a/crates/phy-fluid/src/sph/world.rs b/crates/phy-fluid/src/sph/world.rs
+index 3101247..d561989 100644
+--- a/crates/phy-fluid/src/sph/world.rs
++++ b/crates/phy-fluid/src/sph/world.rs
+@@ -535,6 +535,7 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
+                 .iter()
+                 .map(|sub| Self::body_volume(&sub.shape))
+                 .fold(T::zero(), |a, b| a + b),
++            _ => T::zero(), // Shape 新变体安全降级
+         }
+     }
+ 
+diff --git a/crates/phy-game-demo/src/main.rs b/crates/phy-game-demo/src/main.rs
+index 90f56f1..c1b3583 100644
+--- a/crates/phy-game-demo/src/main.rs
++++ b/crates/phy-game-demo/src/main.rs
+@@ -57,6 +57,8 @@ struct App {
+     #[cfg(target_env = "msvc")]
+     gpu: Option<GpuBackend>,
+     last_frame: Instant,
++    /// 已渲染帧数(用于 GPU_DUMP 诊断模式自动退出)。
++    frames: u32,
+ }
+ 
+ impl Default for App {
+@@ -73,6 +75,7 @@ impl Default for App {
+             #[cfg(target_env = "msvc")]
+             gpu: None,
+             last_frame: Instant::now(),
++            frames: 0,
+         }
+     }
+ }
+@@ -210,6 +213,15 @@ impl ApplicationHandler for App {
+                         let bg = [0.40f32, 0.52, 0.62];
+                         gpu.render_frame(&vp, &models, &game.body_colors, &light, bg);
+                     }
++
++                    // 诊断模式:渲染 2 帧后自动退出并留下 gpu_dump.png。
++                    if std::env::var_os("GPU_DUMP").is_some() {
++                        self.frames += 1;
++                        if self.frames >= 2 {
++                            eprintln!("[GPU_DUMP] wrote gpu_dump.png and exit");
++                            std::process::exit(0);
++                        }
++                    }
+                 }
+ 
+                 #[cfg(not(target_env = "msvc"))]
+diff --git a/crates/phy-game-demo/src/render_wgpu.rs b/crates/phy-game-demo/src/render_wgpu.rs
+index e70f498..cd7e0e4 100644
+--- a/crates/phy-game-demo/src/render_wgpu.rs
++++ b/crates/phy-game-demo/src/render_wgpu.rs
+@@ -38,6 +38,18 @@ pub struct FrameUniform {
+     bg: [f32; 4],
+ }
+ 
++/// 单个 body 的 GPU 资源:独立顶点缓冲(几何固定,init 上传) + 独立实例缓冲
++/// (每帧写一次模型矩阵 + 颜色)。
++///
++/// 必须每 body 独立缓冲:wgpu 的 `queue.write_buffer` 与 `queue.submit` 是两组
++/// 独立队列提交,所有 write_buffer 在 submit 前执行完毕 —— 若多个 body 共用
++/// 同一实例缓冲并反复写同一偏移,只有最后一次生效,其余 body 会拿错模型矩阵。
++struct BodyGpu {
++    vertex_buf: wgpu::Buffer,
++    vertex_count: u32,
++    instance_buf: wgpu::Buffer,
++}
++
+ pub struct GpuRenderer {
+     device: wgpu::Device,
+     queue: wgpu::Queue,
+@@ -46,30 +58,25 @@ pub struct GpuRenderer {
+     pipeline: wgpu::RenderPipeline,
+     depth_texture: wgpu::Texture,
+     depth_view: wgpu::TextureView,
+-    vertex_buf: wgpu::Buffer,
+-    vertex_count: u32,
+-    instance_buf: wgpu::Buffer,
+-    instance_capacity: u32,
++    /// 每个 body 的 GPU 资源(顶点 + 实例缓冲)。
++    bodies: Vec<BodyGpu>,
+     frame_buf: wgpu::Buffer,
+     bind_group: wgpu::BindGroup,
+ }
+ 
+ impl GpuRenderer {
+-    /// 收集所有 body 的三角网格到一个交错顶点缓冲。
+-    pub fn collect_vertices(meshes: &[Vec<phy_demo::raster::Tri>]) -> (Vec<Vertex>, u32) {
+-        let mut verts: Vec<Vertex> = Vec::new();
+-        for mesh in meshes {
+-            for tri in mesh {
+-                for i in 0..3 {
+-                    verts.push(Vertex {
+-                        pos: tri.p[i],
+-                        nrm: tri.n[i],
+-                    });
+-                }
++    /// 把一个 body 的三角网格拍平成交错顶点数组。
++    pub fn collect_vertices(mesh: &[phy_demo::raster::Tri]) -> Vec<Vertex> {
++        let mut verts: Vec<Vertex> = Vec::with_capacity(mesh.len() * 3);
++        for tri in mesh {
++            for i in 0..3 {
++                verts.push(Vertex {
++                    pos: tri.p[i],
++                    nrm: tri.n[i],
++                });
+             }
+         }
+-        let count = verts.len() as u32;
+-        (verts, count)
++        verts
+     }
+ 
+     pub async fn new(window: Arc<Window>, meshes: &[Vec<phy_demo::raster::Tri>]) -> Self {
+@@ -104,23 +111,35 @@ impl GpuRenderer {
+         let surface_config = surface
+             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
+             .expect("surface config");
++        // 允许抓帧诊断(copy_texture_to_buffer 需要 COPY_SRC)。
++        let surface_config = wgpu::SurfaceConfiguration {
++            usage: surface_config.usage | wgpu::TextureUsages::COPY_SRC,
++            ..surface_config
++        };
+         surface.configure(&device, &surface_config);
+ 
+-        let (verts, vcount) = Self::collect_vertices(meshes);
+-        let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+-            label: Some("vertices"),
+-            contents: bytemuck::cast_slice(&verts),
+-            usage: wgpu::BufferUsages::VERTEX,
+-        });
+-
+-        // 初始实例缓冲(容量先按 body 数给,后续按需扩容)。
+-        let initial_cap = meshes.len().max(1) as u32;
+-        let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
+-            label: Some("instances"),
+-            size: (initial_cap * std::mem::size_of::<Instance>() as u32) as u64,
+-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+-            mapped_at_creation: false,
+-        });
++        // 每个 body 独立顶点 + 实例缓冲。
++        let mut bodies: Vec<BodyGpu> = Vec::with_capacity(meshes.len());
++        for mesh in meshes.iter() {
++            let verts = Self::collect_vertices(mesh);
++            let vertex_count = verts.len() as u32;
++            let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
++                label: Some("vertices"),
++                contents: bytemuck::cast_slice(&verts),
++                usage: wgpu::BufferUsages::VERTEX,
++            });
++            let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
++                label: Some("instances"),
++                size: std::mem::size_of::<Instance>() as u64,
++                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
++                mapped_at_creation: false,
++            });
++            bodies.push(BodyGpu {
++                vertex_buf,
++                vertex_count,
++                instance_buf,
++            });
++        }
+ 
+         let frame_buf = device.create_buffer(&wgpu::BufferDescriptor {
+             label: Some("frame uniform"),
+@@ -216,7 +235,12 @@ impl GpuRenderer {
+             }),
+             primitive: wgpu::PrimitiveState {
+                 topology: wgpu::PrimitiveTopology::TriangleList,
+-                cull_mode: Some(wgpu::Face::Back),
++                // 关闭背面剔除:meshgen 中立方体 6 面绕序并非全部严格外 CCW
++                // (部分面实际为顺时针),球面/胶囊经纬网格的上下半球绕序也可能
++                // 不一致。开启 Back 剔除会在相机转到特定角度(如 180°)时把本应
++                // 保留的正面错误剔除,造成"穿模"假象。这些几何体均为封闭凸体,
++                // 配合深度写入关闭剔除即可获得正确遮挡结果,代价可忽略。
++                cull_mode: None,
+                 front_face: wgpu::FrontFace::Ccw,
+                 ..Default::default()
+             },
+@@ -239,10 +263,7 @@ impl GpuRenderer {
+             pipeline,
+             depth_texture,
+             depth_view,
+-            vertex_buf,
+-            vertex_count: vcount,
+-            instance_buf,
+-            instance_capacity: initial_cap,
++            bodies,
+             frame_buf,
+             bind_group,
+         }
+@@ -278,6 +299,12 @@ impl GpuRenderer {
+     }
+ 
+     /// 用当前世界状态绘制一帧。
++    ///
++    /// 每个 body 已在 `new` 时拥有独立的顶点 + 实例缓冲;这里逐 body:
++    /// 1) 把该 body 的模型矩阵 + 颜色写入它**自己**的实例缓冲(每缓冲每帧
++    ///    只写一次,避免共用缓冲被 `write_buffer` 覆盖);
++    /// 2) 绑定它自己的顶点/实例缓冲,单实例 draw。
++    /// 这样每个 body 只绘制自己的三角形,且用各自的模型矩阵。
+     pub fn render_frame(
+         &mut self,
+         vp: &Matrix4<f32>,
+@@ -286,36 +313,7 @@ impl GpuRenderer {
+         light: &Vector3<f32>,
+         bg: [f32; 3],
+     ) {
+-        let n = body_models.len().min(body_colors.len());
+-        if n as u32 > self.instance_capacity {
+-            self.instance_capacity = n as u32;
+-            self.instance_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+-                label: Some("instances"),
+-                size: (self.instance_capacity * std::mem::size_of::<Instance>() as u32) as u64,
+-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+-                mapped_at_creation: false,
+-            });
+-        }
+-
+-        let mut inst_data: Vec<Instance> = Vec::with_capacity(n);
+-        for i in 0..n {
+-            let m = body_models[i].cast::<f32>();
+-            let c = &body_colors[i];
+-            inst_data.push(Instance {
+-                model: [
+-                    [m[(0, 0)], m[(0, 1)], m[(0, 2)], m[(0, 3)]],
+-                    [m[(1, 0)], m[(1, 1)], m[(1, 2)], m[(1, 3)]],
+-                    [m[(2, 0)], m[(2, 1)], m[(2, 2)], m[(2, 3)]],
+-                    [m[(3, 0)], m[(3, 1)], m[(3, 2)], m[(3, 3)]],
+-                ],
+-                color: [c[0], c[1], c[2], 1.0],
+-            });
+-        }
+-        self.queue.write_buffer(
+-            &self.instance_buf,
+-            0,
+-            bytemuck::cast_slice(&inst_data),
+-        );
++        let n = body_models.len().min(body_colors.len()).min(self.bodies.len());
+ 
+         // WGSL 用列主序 mat4x4<f32>:nalgebra Matrix4 本身就是列主序,
+         // 直接逐列铺开即可。
+@@ -371,13 +369,87 @@ impl GpuRenderer {
+             });
+             pass.set_pipeline(&self.pipeline);
+             pass.set_bind_group(0, &self.bind_group, &[]);
+-            pass.set_vertex_buffer(0, self.vertex_buf.slice(..));
+-            pass.set_vertex_buffer(1, self.instance_buf.slice(..));
+-            pass.draw(0..self.vertex_count, 0..n as u32);
++
++            for i in 0..n {
++                let m = body_models[i].cast::<f32>();
++                let c = &body_colors[i];
++                let inst = Instance {
++                    // nalgebra Matrix4 是列主序存储,WGSL mat4x4 也是列主序。
++                    // 必须按**列**(col)逐元素铺开,不能按行(row)——否则矩阵被
++                    // 隐式转置,平移变成旋转/缩放混合,物体塌缩到原点呈放射状。
++                    model: [
++                        [m[(0, 0)], m[(1, 0)], m[(2, 0)], m[(3, 0)]], // 列0
++                        [m[(0, 1)], m[(1, 1)], m[(2, 1)], m[(3, 1)]], // 列1
++                        [m[(0, 2)], m[(1, 2)], m[(2, 2)], m[(3, 2)]], // 列2
++                        [m[(0, 3)], m[(1, 3)], m[(2, 3)], m[(3, 3)]], // 列3(平移)
++                    ],
++                    color: [c[0], c[1], c[2], 1.0],
++                };
++                self.queue
++                    .write_buffer(&self.bodies[i].instance_buf, 0, bytemuck::bytes_of(&inst));
++
++                pass.set_vertex_buffer(0, self.bodies[i].vertex_buf.slice(..));
++                pass.set_vertex_buffer(1, self.bodies[i].instance_buf.slice(..));
++                pass.draw(0..self.bodies[i].vertex_count, 0..1);
++            }
+         }
+         self.queue.submit(std::iter::once(encoder.finish()));
++        if std::env::var_os("GPU_DUMP").is_some() {
++            self.dump(&frame.texture);
++        }
+         frame.present();
+     }
++
++    /// 把当前 surface 纹理拷回 CPU 并写成 `gpu_dump.png`(诊断用,需 surface
++    /// 配置含 COPY_SRC)。
++    fn dump(&self, tex: &wgpu::Texture) {
++        let (w, h) = self.size();
++        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
++            label: Some("dump"),
++            size: (w as u64 * h as u64 * 4).max(4),
++            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
++            mapped_at_creation: false,
++        });
++        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
++            label: None,
++        });
++        enc.copy_texture_to_buffer(
++            wgpu::ImageCopyTexture {
++                texture: tex,
++                mip_level: 0,
++                origin: wgpu::Origin3d::ZERO,
++                aspect: wgpu::TextureAspect::All,
++            },
++            wgpu::ImageCopyBuffer {
++                buffer: &buf,
++                layout: wgpu::ImageDataLayout {
++                    offset: 0,
++                    bytes_per_row: Some(w * 4),
++                    rows_per_image: Some(h),
++                },
++            },
++            wgpu::Extent3d {
++                width: w,
++                height: h,
++                depth_or_array_layers: 1,
++            },
++        );
++        self.queue.submit(Some(enc.finish()));
++        let slice = buf.slice(..);
++        slice.map_async(wgpu::MapMode::Read, |_| {});
++        self.device.poll(wgpu::Maintain::Wait);
++        let data = slice.get_mapped_range();
++        // 用 png crate 写出(RGBA8),与 main.rs 的 headless 导出保持一致。
++        let mut png_enc = png::Encoder::new(
++            std::io::BufWriter::new(std::fs::File::create("gpu_dump.png").expect("create png")),
++            w,
++            h,
++        );
++        png_enc.set_color(png::ColorType::Rgba);
++        png_enc.set_depth(png::BitDepth::Eight);
++        let mut out = png_enc.write_header().expect("png header");
++        out.write_image_data(&data).expect("png data");
++    }
+ }
+ 
+ /// WGSL 着色器:顶点做 VP*model 变换 + 朗伯光照;片段输出光照后的颜色。
+diff --git a/crates/phy-io/src/archive.rs b/crates/phy-io/src/archive.rs
+index 3631dfa..ab6fd9f 100644
+--- a/crates/phy-io/src/archive.rs
++++ b/crates/phy-io/src/archive.rs
+@@ -105,6 +105,7 @@ fn bits_to_f64(v: &mut Value) {
+     serialize = "T: RealField + Copy + Serialize + DeserializeOwned + Default + nalgebra::Scalar + num_traits::ToPrimitive",
+     deserialize = "T: RealField + Copy + Serialize + DeserializeOwned + Default + nalgebra::Scalar + num_traits::ToPrimitive"
+ ))]
++#[non_exhaustive]
+ pub enum SubArchive<T: RealField + Copy + num_traits::ToPrimitive> {
+     Rigid(RigidSubsystem<T>),
+     Soft(SoftSubsystem<T>),
+diff --git a/crates/phy-io/src/field_slice.rs b/crates/phy-io/src/field_slice.rs
+index 632d786..d33f86c 100644
+--- a/crates/phy-io/src/field_slice.rs
++++ b/crates/phy-io/src/field_slice.rs
+@@ -11,6 +11,7 @@ use crate::csv::CsvWriter;
+ 
+ /// 切片平面方向。
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum SliceAxis {
+     /// 固定 z = k,导出 (x,y) 平面。
+     XY,
+diff --git a/crates/phy-optics/src/scene.rs b/crates/phy-optics/src/scene.rs
+index 6bc6ae4..2b3015a 100644
+--- a/crates/phy-optics/src/scene.rs
++++ b/crates/phy-optics/src/scene.rs
+@@ -110,6 +110,7 @@ impl<T: RealField + Copy> OpticBody<T> {
+             Shape::Convex { vertices, faces } => convex_hit(&ro, &rd_n, vertices, faces),
+             Shape::Heightfield { .. } => None, // 光学暂不处理高度场
+             Shape::Compound { .. } => None,    // 光学暂不处理复合体
++            _ => None,                          // Shape 为新变体时安全降级
+         }?;
+         // 局部 t 需按世界方向长度还原(因为 rd 被旋转但长度不变,rd_len 即比例)。
+         let t_world = t_local * rd_len;
+diff --git a/crates/phy-optics/src/subsystem.rs b/crates/phy-optics/src/subsystem.rs
+index 4a21582..d415101 100644
+--- a/crates/phy-optics/src/subsystem.rs
++++ b/crates/phy-optics/src/subsystem.rs
+@@ -12,6 +12,7 @@ use crate::scene::OpticScene;
+ 
+ /// 光学后端精度开关。
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
++#[non_exhaustive]
+ pub enum Precision {
+     /// 离线 Whitted 递归追踪(高保真)。
+     Offline,
+diff --git a/crates/phy-rigid/src/collision_events.rs b/crates/phy-rigid/src/collision_events.rs
+new file mode 100644
+index 0000000..29cd049
+--- /dev/null
++++ b/crates/phy-rigid/src/collision_events.rs
+@@ -0,0 +1,180 @@
++//! 碰撞事件三态回调(B2 / 游戏逻辑刚需)。
++//!
++//! 游戏逻辑常用"碰撞开始/持续/结束"三态事件 + 接触冲量大小(用于播放音效、触发
++//! 伤害、铰链解锁等)。求解器内部已算得每次接触的法向冲量(`ContactConstraint::
++//! normal_impulse`),此处仅做"跨帧活跃 pair 集合 diff"生成三态,不引入额外物理。
++//!
++//! 用法:`RigidWorld::step` 之后调用 `world.drain_collision_events()` 取出本帧事件
++//! (取出即清空)。事件基于"上一帧末态活跃接触 vs 本帧末态活跃接触"判定,符合游戏
++//! 每帧接触状态语义。
++
++use std::collections::{HashMap, HashSet};
++
++use phy_math::{RealField, Vec3};
++
++/// 碰撞事件三态。
++///
++/// - `Begin`：一对 body 在本帧首次进入接触(上一帧末态不在接触、本帧末态在接触)。
++/// - `Stay`：接触持续(上一帧与本帧末态都在接触)。
++/// - `End`：一对 body 在本帧结束接触(上一帧末态在接触、本帧末态不在接触)。
++///
++/// `a`/`b` 为 body 全局索引(已保证 `a < b`)。`normal` 由 a 指向 b(世界系,单位向量)。
++/// `point` 为本帧代表接触点(世界系)。`depth` 为本帧穿透深度(>0,米),**即碰撞强度指标**:
++///   - 本引擎用 split-impulse 求解器,穿透的位置修正走独立的 pseudo-velocity 通道,
++///     速度层法向冲量在接触帧趋于 0(不可用于强度估算)。故游戏侧应以 `depth` 判断碰撞
++///     强度:深度大=撞击猛(可触发破碎/重音效),稳态堆叠 depth≈slop(很小)≠剧烈。近似接触
++///     力可用 `depth / dt * effective_mass`(业务方按自身单位换算)。
++#[derive(Debug, Clone)]
++#[non_exhaustive]
++pub enum CollisionEvent<T: RealField> {
++    Begin {
++        a: usize,
++        b: usize,
++        normal: Vec3<T>,
++        point: Vec3<T>,
++        depth: T,
++    },
++    Stay {
++        a: usize,
++        b: usize,
++        normal: Vec3<T>,
++        point: Vec3<T>,
++        depth: T,
++    },
++    End {
++        a: usize,
++        b: usize,
++    },
++}
++
++/// 碰撞事件追踪器:维护"上一帧活跃接触 pair 集合",与当前帧 diff 生成三态事件。
++#[derive(Debug, Clone, Default)]
++pub struct CollisionTracker {
++    /// 上一帧末态的活跃接触 pair 集合(已归一化 `a < b`)。
++    prev: HashSet<(usize, usize)>,
++}
++
++impl CollisionTracker {
++    /// 创建空追踪器。
++    pub fn new() -> Self {
++        Self::default()
++    }
++
++    /// 给定本帧末态活跃接触,返回本帧事件序列,并更新内部 `prev` 为当前帧。
++    ///
++    /// `contacts` 每个元素为 `(a, b, normal, point, depth)`(全局索引,无需预先归一化
++    /// a<b,本函数内部归一化;depth 为穿透深度>0,作为碰撞强度指标)。一对 body 多个接触
++    /// 点时只取首个作代表几何(后续如需全部接触点可扩展为 `Vec<Contact>`)。
++    pub fn update<T: RealField + Copy>(
++        &mut self,
++        contacts: &[(usize, usize, Vec3<T>, Vec3<T>, T)],
++    ) -> Vec<CollisionEvent<T>> {
++        let mut cur = HashSet::new();
++        let mut map: HashMap<(usize, usize), (usize, usize, Vec3<T>, Vec3<T>, T)> =
++            HashMap::new();
++        for &(a, b, n, p, d) in contacts {
++            let key = if a < b { (a, b) } else { (b, a) };
++            cur.insert(key);
++            // 取第一个出现的接触几何作为代表(多接触点时可扩展)。
++            map.entry(key).or_insert((a.min(b), a.max(b), n, p, d));
++        }
++
++        let mut events = Vec::new();
++        // 当前帧的 pair:上一帧也在 → Stay,否则 Begin。
++        for &key in &cur {
++            let (a, b, n, p, d) = map[&key];
++            if self.prev.contains(&key) {
++                events.push(CollisionEvent::Stay {
++                    a,
++                    b,
++                    normal: n,
++                    point: p,
++                    depth: d,
++                });
++            } else {
++                events.push(CollisionEvent::Begin {
++                    a,
++                    b,
++                    normal: n,
++                    point: p,
++                    depth: d,
++                });
++            }
++        }
++        // 上一帧在、当前帧不在 → End。
++        for &key in &self.prev {
++            if !cur.contains(&key) {
++                events.push(CollisionEvent::End { a: key.0, b: key.1 });
++            }
++        }
++
++        self.prev = cur;
++        events
++    }
++
++    /// 重置追踪状态(如世界重建 / 加载场景后,避免把旧世界接触当成本帧 End)。
++    pub fn reset(&mut self) {
++        self.prev.clear();
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use phy_math::na::Vector3;
++
++    fn v(x: f64, y: f64, z: f64) -> Vec3<f64> {
++        Vector3::new(x, y, z)
++    }
++
++    #[test]
++    fn tracker_begin_stay_end() {
++        let mut tr = CollisionTracker::new();
++        // 帧1:无接触 → 无事件。
++        let e0: Vec<CollisionEvent<f64>> = tr.update(&[]);
++        assert!(e0.is_empty(), "无接触时应无事件");
++
++        // 帧2:(2,5)进入接触 → Begin。
++        let e1 = tr.update(&[(2usize, 5usize, v(0.0, 1.0, 0.0), v(0.0, 0.0, 0.0), 0.1)]);
++        assert_eq!(e1.len(), 1);
++        match &e1[0] {
++            CollisionEvent::Begin { a, b, depth, .. } => {
++                assert_eq!((*a, *b), (2, 5));
++                assert!((*depth - 0.1).abs() < 1e-12);
++            }
++            _ => panic!("应为 Begin"),
++        }
++
++        // 帧3:相同 pair 仍在接触 → Stay。
++        let e2 = tr.update(&[(5usize, 2usize, v(0.0, 1.0, 0.0), v(0.0, 0.0, 0.0), 0.05)]);
++        assert_eq!(e2.len(), 1);
++        match &e2[0] {
++            CollisionEvent::Stay { a, b, depth, .. } => {
++                // a<b 归一化应得到 (2,5)。
++                assert_eq!((*a, *b), (2, 5));
++                assert!((*depth - 0.05).abs() < 1e-12);
++            }
++            _ => panic!("应为 Stay"),
++        }
++
++        // 帧4:接触消失 → End。
++        let e3: Vec<CollisionEvent<f64>> = tr.update(&[]);
++        assert_eq!(e3.len(), 1);
++        match &e3[0] {
++            CollisionEvent::End { a, b } => assert_eq!((*a, *b), (2, 5)),
++            _ => panic!("应为 End"),
++        }
++    }
++
++    #[test]
++    fn tracker_normalizes_a_lt_b() {
++        let mut tr = CollisionTracker::new();
++        // 传入 (b,a) 反序,事件应归一化为 (a,b) 且 a<b。
++        let e: Vec<CollisionEvent<f64>> =
++            tr.update(&[(9usize, 3usize, v(1.0, 0.0, 0.0), v(0.0, 0.0, 0.0), 0.0)]);
++        match &e[0] {
++            CollisionEvent::Begin { a, b, .. } => assert!(*a < *b && (*a, *b) == (3, 9)),
++            _ => panic!("应为 Begin 且 a<b"),
++        }
++    }
++}
+diff --git a/crates/phy-rigid/src/joint.rs b/crates/phy-rigid/src/joint.rs
+index 10f02cd..025df74 100644
+--- a/crates/phy-rigid/src/joint.rs
++++ b/crates/phy-rigid/src/joint.rs
+@@ -50,6 +50,7 @@ pub struct JointConstraint<T: RealField + Copy> {
+ /// 关节几何定义。
+ #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+ #[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
++#[non_exhaustive]
+ pub enum Joint<T: RealField + Copy> {
+     /// 球窝:局部锚点 `pa`(a 上)/`pb`(b 上)世界位置应重合。
+     Ball {
+diff --git a/crates/phy-rigid/src/lib.rs b/crates/phy-rigid/src/lib.rs
+index 5142957..2a99f3f 100644
+--- a/crates/phy-rigid/src/lib.rs
++++ b/crates/phy-rigid/src/lib.rs
+@@ -12,7 +12,10 @@ pub mod shape;
+ pub mod contact;
+ pub mod ccd;
+ pub mod broadphase;
++pub mod collision_events;
++pub mod material;
+ pub mod narrowphase;
++pub mod shape_cast;
+ pub mod solver;
+ pub mod joint;
+ pub mod raycast;
+@@ -28,11 +31,14 @@ pub mod ragdoll;
+ 
+ pub use shape::{Body, Shape};
+ pub use contact::Contact;
++pub use collision_events::{CollisionEvent, CollisionTracker};
++pub use material::PhysicsMaterial;
+ pub use broadphase::broadphase;
+ pub use narrowphase::collide;
+ pub use solver::{SolverParams, solve_position, solve_velocity};
+ pub use joint::{Joint, JointConstraint};
+ pub use raycast::{ray_cast, RayHit};
++pub use shape_cast::{shape_cast, ShapeCastHit};
+ pub use subsystem::RigidSubsystem;
+ pub use vehicle::{Vehicle, Wheel};
+ pub use fracture::{fracture_body, fracture_convex, convex_volume_centroid};
+diff --git a/crates/phy-rigid/src/material.rs b/crates/phy-rigid/src/material.rs
+new file mode 100644
+index 0000000..9a87fcf
+--- /dev/null
++++ b/crates/phy-rigid/src/material.rs
+@@ -0,0 +1,123 @@
++//! 物理材质(per-body 摩擦 / 恢复系数资源)。
++//!
++//! 把原本只能全局设置的 `SolverParams::friction` / `SolverParams::restitution`
++//! 下沉到每个 `Body`,使"橡胶球 vs 冰面""金属块 vs 木地板"等组合拥有各自的
++//! 真实手感。作为**资源**而非算法参数,它可经场景 DSL / 资源表加载,与
++//! 渲染侧材质(如 `surface_friction`)对齐,便于编辑器内调参。
++//!
++//! 接触求解时,一对 body 的材质按组合规则合并:
++//! - 恢复系数:`max(a, b)`(任一方弹性大则接触弹性大,Bullet 同款)。
++//! - 摩擦系数:几何平均 `sqrt(a·b)`(Couomb 接触,中等摩擦,Box2D 同款)。
++//! `SolverParams` 的同名字段保留为"未显式赋材质 body"的全局回退默认值。
++
++use phy_math::RealField;
++use serde::de::DeserializeOwned;
++use serde::{Deserialize, Serialize};
++
++/// 物理材质:描述接触层面的表面属性。
++#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
++#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
++pub struct PhysicsMaterial<T: RealField + Copy> {
++    /// 摩擦系数(≥0)。0 = 无摩擦(冰面),1 = 强摩擦(橡胶)。
++    pub friction: T,
++    /// 恢复系数 [0,1]。`0` = 完全非弹性(泥/黏土),`1` = 完全弹性(钢球)。
++    pub restitution: T,
++}
++
++impl<T: RealField + Copy> Default for PhysicsMaterial<T> {
++    fn default() -> Self {
++        Self {
++            friction: T::from_f64(0.5).unwrap(),
++            restitution: T::from_f64(0.0).unwrap(),
++        }
++    }
++}
++
++impl<T: RealField + Copy> PhysicsMaterial<T> {
++    /// 便捷构造。
++    pub fn new(friction: T, restitution: T) -> Self {
++        Self {
++            friction,
++            restitution,
++        }
++    }
++
++    /// 常见预设:冰面(低摩擦、低弹性)。
++    pub fn ice() -> Self {
++        Self::new(
++            T::from_f64(0.05).unwrap(),
++            T::from_f64(0.1).unwrap(),
++        )
++    }
++
++    /// 常见预设:橡胶(高摩擦、中弹性)。
++    pub fn rubber() -> Self {
++        Self::new(
++            T::from_f64(0.9).unwrap(),
++            T::from_f64(0.7).unwrap(),
++        )
++    }
++
++    /// 常见预设:金属(中摩擦、高弹性)。
++    pub fn metal() -> Self {
++        Self::new(
++            T::from_f64(0.4).unwrap(),
++            T::from_f64(0.6).unwrap(),
++        )
++    }
++
++    /// 常见预设:木材(中摩擦、低弹性)。
++    pub fn wood() -> Self {
++        Self::new(
++            T::from_f64(0.5).unwrap(),
++            T::from_f64(0.2).unwrap(),
++        )
++    }
++
++    /// 合并两个材质为接触层等效属性。
++    ///
++    /// - 恢复系数取 `max`(任一方弹性大则整体弹性大)。
++    /// - 摩擦系数取几何平均 `sqrt(a·b)`(中等摩擦,符合 Coulomb 接触经验)。
++    pub fn combine(&self, other: &PhysicsMaterial<T>) -> PhysicsMaterial<T> {
++        let e = if self.restitution > other.restitution {
++            self.restitution
++        } else {
++            other.restitution
++        };
++        let mu = (self.friction * other.friction).sqrt();
++        PhysicsMaterial {
++            friction: mu,
++            restitution: e,
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn default_matches_solver_params() {
++        // 与 SolverParams::default 的 friction/restitution 一致,保证向后兼容。
++        let m = PhysicsMaterial::<f64>::default();
++        assert!((m.friction - 0.5).abs() < 1e-12);
++        assert!((m.restitution - 0.0).abs() < 1e-12);
++    }
++
++    #[test]
++    fn combine_restitution_is_max() {
++        let a = PhysicsMaterial::<f64>::rubber(); // e=0.7
++        let b = PhysicsMaterial::<f64>::wood(); // e=0.2
++        let c = a.combine(&b);
++        assert!((c.restitution - 0.7).abs() < 1e-12, "restitution 应取 max");
++    }
++
++    #[test]
++    fn combine_friction_is_geometric_mean() {
++        let a = PhysicsMaterial::new(0.9, 0.0);
++        let b = PhysicsMaterial::new(0.4, 0.0);
++        let c = a.combine(&b);
++        let expected = (0.9 * 0.4f64).sqrt();
++        assert!((c.friction - expected).abs() < 1e-12, "friction 应取几何平均");
++    }
++}
+diff --git a/crates/phy-rigid/src/narrowphase.rs b/crates/phy-rigid/src/narrowphase.rs
+index 0b0a882..dff2230 100644
+--- a/crates/phy-rigid/src/narrowphase.rs
++++ b/crates/phy-rigid/src/narrowphase.rs
+@@ -656,6 +656,7 @@ fn sub_body<T: RealField + Copy>(parent: &Body<T>, s: &SubShape<T>) -> Body<T> {
+         collision_mask: parent.collision_mask,
+         kinematic: parent.kinematic,
+         is_sensor: parent.is_sensor,
++        material: parent.material,
+     }
+ }
+ 
+diff --git a/crates/phy-rigid/src/ragdoll.rs b/crates/phy-rigid/src/ragdoll.rs
+index f09770e..23ba51b 100644
+--- a/crates/phy-rigid/src/ragdoll.rs
++++ b/crates/phy-rigid/src/ragdoll.rs
+@@ -21,6 +21,7 @@ use crate::world::RigidWorld;
+ 
+ /// 布偶的肢体 id(供外部查询/施加外力)。
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++#[non_exhaustive]
+ pub enum RagdollLimb {
+     Head,
+     Torso,
+@@ -63,6 +64,7 @@ pub struct Ragdoll<T: RealField + Copy> {
+ 
+ /// 布偶尺寸/质量配置(全部为相对默认比例的可覆盖项)。
+ #[derive(Debug, Clone)]
++#[non_exhaustive]
+ pub struct RagdollParams<T: RealField + Copy> {
+     /// 胶囊肢体半径(统一)。
+     pub limb_radius: T,
+@@ -102,6 +104,7 @@ impl<T: RealField + Copy + num_traits::NumCast> Default for RagdollParams<T> {
+ 
+ /// 布偶装配器:链式配置后调用 `build` 注入 `RigidWorld`。
+ #[derive(Debug, Clone)]
++#[non_exhaustive]
+ pub struct RagdollBuilder<T: RealField + Copy> {
+     /// 根部(骨盆/躯干底)世界位置。
+     root: Vec3<T>,
+diff --git a/crates/phy-rigid/src/scene.rs b/crates/phy-rigid/src/scene.rs
+index 649a18b..6c130fd 100644
+--- a/crates/phy-rigid/src/scene.rs
++++ b/crates/phy-rigid/src/scene.rs
+@@ -77,6 +77,7 @@ fn f_neg_nine_eight_one<T: RealField + Copy>() -> T { T::from_f64(-9.81).unwrap(
+ /// `gravity` 与 `joints` 可省略(默认引擎重力、空关节);`character_spawn` 省略则无角色。
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ #[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
++#[non_exhaustive]
+ pub struct SceneDesc<T: RealField + Copy> {
+     /// 世界重力(省略则用引擎默认重力)。
+     #[serde(default = "gravity_field", with = "crate::shape::serde_geom")]
+diff --git a/crates/phy-rigid/src/shape.rs b/crates/phy-rigid/src/shape.rs
+index 76c2e6b..c25ff22 100644
+--- a/crates/phy-rigid/src/shape.rs
++++ b/crates/phy-rigid/src/shape.rs
+@@ -7,6 +7,8 @@ use phy_math::{na, Mat3, RealField, Vec3};
+ use serde::de::DeserializeOwned;
+ use serde::{Deserialize, Serialize};
+ 
++use crate::material::PhysicsMaterial;
++
+ /// 自定义 serde 模块:把 nalgebra 泛型类型序列化为纯元组,绕过 nalgebra
+ /// 自带的 `Matrix<T>: Serialize`(要求 `T: nalgebra::Scalar`)带来的 impl 传播问题。
+ ///
+@@ -132,6 +134,7 @@ pub mod serde_geom {
+ /// 刚体的碰撞形状。
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ #[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
++#[non_exhaustive]
+ pub enum Shape<T: RealField + Copy> {
+     /// 球:中心在局部原点,半径 r。
+     Sphere { r: T },
+@@ -360,6 +363,10 @@ pub struct Body<T: RealField + Copy> {
+     /// 不阻止穿透),仅在 `RigidWorld::sensor_contacts` 中报告重叠事件(拾取道具/触发区域/
+     /// 角色进入判定等)。传感器仍受碰撞层(B5)过滤与休眠唤醒(B1)影响。
+     pub is_sensor: bool,
++    /// P2-a 物理材质:该 body 表面的摩擦/恢复系数。作为资源可经场景 DSL 加载。
++    /// 接触求解时与对方材质组合(恢复取 max、摩擦取几何平均);未显式赋值时取
++    /// `PhysicsMaterial::default()`(与 `SolverParams` 全局默认一致,保持向后兼容)。
++    pub material: PhysicsMaterial<T>,
+ }
+ 
+ impl<T: RealField + Copy> Default for Body<T> {
+@@ -383,6 +390,7 @@ impl<T: RealField + Copy> Default for Body<T> {
+             collision_mask: u32::MAX,
+             kinematic: false,
+             is_sensor: false,
++            material: PhysicsMaterial::default(),
+         }
+     }
+ }
+@@ -407,6 +415,7 @@ impl<T: RealField + Copy> Body<T> {
+             collision_mask: u32::MAX,
+             kinematic: false,
+             is_sensor: false,
++            material: PhysicsMaterial::default(),
+         };
+         b.set_inertia_from_shape();
+         b
+diff --git a/crates/phy-rigid/src/shape_cast.rs b/crates/phy-rigid/src/shape_cast.rs
+new file mode 100644
+index 0000000..9b8e836
+--- /dev/null
++++ b/crates/phy-rigid/src/shape_cast.rs
+@@ -0,0 +1,227 @@
++//! 形状投射 / 扫掠体检测(P2-b,游戏侧常用查询)。
++//!
++//! 提供 `shape_cast`(扫掠查询):把一个查询形状(球/盒/胶囊/凸体/复合)从 `from`
++//! 位姿沿直线扫掠到 `to` 位姿(可带旋转),返回**第一个**与之相交的世界 body 的
++//! 命中信息(命中比例、命中体索引、交点、命中表面法线)。
++//!
++//! 实现策略:复用既有 `narrowphase::collide` 做"某一位姿下查询形状 vs 世界 body"
++//! 的离散接触判定,再对扫掠参数 `α∈[0,1]` 做**二分搜索**定位"刚好接触"的临界
++//! 比例。这比完整连续 CCD 扫掠(需对运动形状做保守推进)简单且确定性强,对游戏
++//! 侧"子弹/角色胶囊移动是否撞墙"等场景足够。精度由 `max_iters`(默认 20 → 约
++//! `1/2^20` 分辨率)控制。
++//!
++//! 过滤规则与常规碰撞一致:按查询形状的 `layers`/`collision_mask` 与世界 body 的
++//! `layers`/`collision_mask` 做位与;`is_sensor` 的 body 不参与阻挡(仅触发器)。
++
++use phy_math::{na, RealField, Vec3};
++use serde::de::DeserializeOwned;
++use serde::{Deserialize, Serialize};
++
++use crate::narrowphase::collide;
++use crate::shape::{Body, Shape};
++use num_traits::NumCast;
++
++/// 形状投射命中结果。
++#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
++#[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
++pub struct ShapeCastHit<T: RealField + Copy> {
++    /// 命中点沿扫掠路径的比例 ∈ [0,1](0 = 起点即接触,1 = 到达终点仍未接触则不会返回)。
++    pub fraction: T,
++    /// 被命中的世界 body 全局索引。
++    pub body_index: usize,
++    /// 命中点世界坐标。
++    #[serde(with = "crate::shape::serde_geom")]
++    pub point: Vec3<T>,
++    /// 命中表面世界法线(指向查询形状来向一侧,单位向量)。
++    #[serde(with = "crate::shape::serde_geom")]
++    pub normal: Vec3<T>,
++}
++
++/// 在 `α` 比例处把查询形状放到世界位姿(线性插值位置 + 球面插值旋转)。
++fn pose_at<T: RealField + Copy>(
++    from: &Vec3<T>,
++    from_rot: &na::UnitQuaternion<T>,
++    to: &Vec3<T>,
++    to_rot: &na::UnitQuaternion<T>,
++    alpha: T,
++) -> (Vec3<T>, na::UnitQuaternion<T>) {
++    let pos = *from + (*to - *from) * alpha;
++    // 球面线性插值旋转(短弧)。
++    let rot = from_rot.slerp(to_rot, alpha);
++    (pos, rot)
++}
++
++/// 判断在给定 `α` 处,查询形状是否**受阻**(与任一通过过滤的世界 body 产生接触)。
++fn blocked_at<T: RealField + Copy + NumCast>(
++    shape: &Shape<T>,
++    layers: u32,
++    mask: u32,
++    pos: &Vec3<T>,
++    rot: &na::UnitQuaternion<T>,
++    bodies: &[Body<T>],
++) -> Option<(usize, Vec3<T>, Vec3<T>)> {
++    let query = Body {
++        shape: shape.clone(),
++        pos: *pos,
++        rot: *rot,
++        inv_mass: T::zero(),
++        layers,
++        collision_mask: mask,
++        ..Default::default()
++    };
++    for (i, b) in bodies.iter().enumerate() {
++        // 过滤:碰撞层位与;传感器不阻挡。
++        if b.is_sensor {
++            continue;
++        }
++        if query.layers & b.collision_mask == 0 || b.layers & query.collision_mask == 0 {
++            continue;
++        }
++        if let Some(c) = collide(&query, b) {
++            return Some((i, c.point, c.normal));
++        }
++    }
++    None
++}
++
++/// 形状扫掠查询:从 `from`(姿态 `from_rot`)沿直线扫掠到 `to`(姿态 `to_rot`),返回
++/// 第一个受阻的世界 body。
++///
++/// - `shape`/`layers`/`collision_mask`:查询形状的几何与碰撞层(决定与哪些 body 交互)。
++/// - `bodies`:世界 body 切片(通常传 `&world.bodies`)。
++/// - `ignore`:可选忽略的 body 索引(如投射体自身),不计为阻挡。
++/// - `max_iters`:二分搜索迭代次数(默认 20)。
++///
++/// 返回 `None` 表示整个扫掠路径畅通(到达 `to` 仍未接触)。
++pub fn shape_cast<T: RealField + Copy + NumCast>(
++    shape: &Shape<T>,
++    from: &Vec3<T>,
++    from_rot: &na::UnitQuaternion<T>,
++    to: &Vec3<T>,
++    to_rot: &na::UnitQuaternion<T>,
++    bodies: &[Body<T>],
++    layers: u32,
++    mask: u32,
++    ignore: Option<usize>,
++    max_iters: usize,
++) -> Option<ShapeCastHit<T>> {
++    let zero = T::zero();
++    let one = T::one();
++    // 起点即受阻 → 命中比例 0。
++    let start_pos = *from;
++    let start_rot = *from_rot;
++    if let Some((i, p, n)) = blocked_at(shape, layers, mask, &start_pos, &start_rot, bodies) {
++        if ignore != Some(i) {
++            return Some(ShapeCastHit {
++                fraction: zero,
++                body_index: i,
++                point: p,
++                normal: n,
++            });
++        }
++    }
++
++    // 扫描式定位首个受阻区间:扫掠路径可能"穿过"障碍(起点/终点均畅通,但中段受阻),
++    // 故不能简单以终点畅通判为全程畅通。先粗扫找到第一个受阻采样点,再在其前一点
++    // (畅通)与之间做二分精化,得到最小命中比例。
++    let coarse = max_iters * 4; // 粗扫步数随精度提升。
++    let mut prev_a = zero;
++    let mut prev_pos = start_pos;
++    let mut prev_rot = start_rot;
++    for k in 1..=coarse {
++        let a = T::from_f64(k as f64 / coarse as f64).unwrap();
++        let (pa, ra) = pose_at(from, from_rot, to, to_rot, a);
++        match blocked_at(shape, layers, mask, &pa, &ra, bodies) {
++            Some((i, p, n)) if ignore != Some(i) => {
++                // 在 [prev_a, a] 之间二分精化首个受阻 α。
++                let mut lo = prev_a;
++                let mut lo_pos = prev_pos;
++                let mut lo_rot = prev_rot;
++                let mut hi = a;
++                let mut hit = ShapeCastHit {
++                    fraction: a,
++                    body_index: i,
++                    point: p,
++                    normal: n,
++                };
++                for _ in 0..max_iters {
++                    let mid = (lo + hi) * (one / (one + one));
++                    let (mp, mr) = pose_at(from, from_rot, to, to_rot, mid);
++                    match blocked_at(shape, layers, mask, &mp, &mr, bodies) {
++                        Some((j, pp, nn)) if ignore != Some(j) => {
++                            hit = ShapeCastHit {
++                                fraction: mid,
++                                body_index: j,
++                                point: pp,
++                                normal: nn,
++                            };
++                            hi = mid;
++                        }
++                        _ => {
++                            lo = mid;
++                            lo_pos = mp;
++                            lo_rot = mr;
++                        }
++                    }
++                }
++                let _ = (lo_pos, lo_rot);
++                return Some(hit);
++            }
++            _ => {
++                prev_a = a;
++                prev_pos = pa;
++                prev_rot = ra;
++            }
++        }
++    }
++    None
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn shape_cast_hits_obstacle_at_expected_fraction() {
++        let shape = Shape::Sphere { r: 0.5 };
++        let from = Vec3::new(0.0, 0.0, -5.0);
++        let to = Vec3::new(0.0, 0.0, 5.0);
++        let rot = na::UnitQuaternion::identity();
++        let obstacle = Body::new(Shape::Sphere { r: 1.0 }, Vec3::zeros(), 0.0);
++        let bodies = vec![obstacle];
++        let hit = shape_cast::<f64>(&shape, &from, &rot, &to, &rot, &bodies, u32::MAX, u32::MAX, None, 24);
++        assert!(hit.is_some(), "应命中障碍球");
++        let h = hit.unwrap();
++        // 期望命中比例 ≈ (−1.5 + 5)/10 = 0.35。
++        assert!((h.fraction - 0.35).abs() < 1e-3, "命中比例应≈0.35,实际 {}", h.fraction);
++        assert_eq!(h.body_index, 0);
++        // 法线指向被命中体(障碍球)表面、朝向查询形状来向一侧:+z(查询从 −z 接近)。
++        assert!(h.normal.z > 0.9, "法线应朝 +z(指向来向),实际 {:?}", h.normal);
++    }
++
++    #[test]
++    fn shape_cast_misses_when_path_clear() {
++        let shape = Shape::Sphere { r: 0.5 };
++        let from = Vec3::new(0.0, 5.0, -5.0);
++        let to = Vec3::new(0.0, 5.0, 5.0);
++        let rot = na::UnitQuaternion::identity();
++        // 障碍球在原点,路径在 y=5 高处掠过 → 不接触。
++        let obstacle = Body::new(Shape::Sphere { r: 1.0 }, Vec3::zeros(), 0.0);
++        let bodies = vec![obstacle];
++        let hit = shape_cast::<f64>(&shape, &from, &rot, &to, &rot, &bodies, u32::MAX, u32::MAX, None, 24);
++        assert!(hit.is_none(), "高空掠过应不命中");
++    }
++
++    #[test]
++    fn shape_cast_ignores_self() {
++        let shape = Shape::Sphere { r: 0.5 };
++        let from = Vec3::new(0.0, 0.0, -5.0);
++        let to = Vec3::new(0.0, 0.0, 5.0);
++        let rot = na::UnitQuaternion::identity();
++        let obstacle = Body::new(Shape::Sphere { r: 1.0 }, Vec3::zeros(), 0.0);
++        let bodies = vec![obstacle];
++        // 把障碍当作自身忽略 → 应视为畅通。
++        let hit = shape_cast::<f64>(&shape, &from, &rot, &to, &rot, &bodies, u32::MAX, u32::MAX, Some(0), 24);
++        assert!(hit.is_none(), "忽略障碍后路径应畅通");
++    }
++}
+diff --git a/crates/phy-rigid/src/solver.rs b/crates/phy-rigid/src/solver.rs
+index 952c361..93190e9 100644
+--- a/crates/phy-rigid/src/solver.rs
++++ b/crates/phy-rigid/src/solver.rs
+@@ -10,11 +10,32 @@ use serde::de::DeserializeOwned;
+ use serde::{Deserialize, Serialize};
+ 
+ use crate::contact::Contact;
++use crate::material::PhysicsMaterial;
+ use crate::shape::Body;
+ 
++/// 计算一对 body 在接触层应使用的最终材质属性(P2-a)。
++///
++/// 规则:若双方均使用默认材质(`PhysicsMaterial::default()`,即调用方未显式赋材质),
++/// 则回退到全局 `SolverParams` 的 `restitution`/`friction`(保持与旧版行为一致、
++/// 向后兼容);否则取两 body 材质的组合(`PhysicsMaterial::combine`:恢复取 max、
++/// 摩擦取几何平均)。返回 `{friction, restitution}`,供速度层求解直接使用。
++pub fn effective_material<T: RealField + Copy>(
++    a: &PhysicsMaterial<T>,
++    b: &PhysicsMaterial<T>,
++    params: &SolverParams<T>,
++) -> PhysicsMaterial<T> {
++    let dflt = PhysicsMaterial::default();
++    if *a == dflt && *b == dflt {
++        PhysicsMaterial::new(params.friction, params.restitution)
++    } else {
++        a.combine(b)
++    }
++}
++
+ /// 求解参数。
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ #[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
++#[non_exhaustive]
+ pub struct SolverParams<T: RealField> {
+     /// 恢复系数 (0 = 完全非弹性, 1 = 完全弹性)。
+     pub restitution: T,
+@@ -144,8 +165,8 @@ pub fn solve_velocity<T: RealField + Copy>(
+     constraints: &mut [ContactConstraint<T>],
+     params: &SolverParams<T>,
+ ) {
+-    let e = params.restitution;
+-    let mu = params.friction;
++    // P2-a:per-pair 材质组合在约束循环内层基于两 body 的材质计算;`params` 仅作为
++    // 全默认材质(双方均默认)时的回退值,故此处不再提前取 e/mu。
+ 
+     // D3 warm-start:把上一帧累积的接触冲量作为初值打入速度,减少迭代收敛次数、
+     // 消除静止堆叠抖动(Box2D 同款)。仅对 `warm_started` 的约束施加一次(迭代前)。
+@@ -170,6 +191,13 @@ pub fn solve_velocity<T: RealField + Copy>(
+     for _ in 0..params.iterations {
+         for c in constraints.iter_mut() {
+             let n = c.contact.normal;
++            // P2-a:per-pair 组合材质。两 body 均用默认材质时退化为全局 params
++            // (保持向后兼容);任一方显式设过材质则按其物理属性组合。
++            let mat_a = bodies[c.a].material;
++            let mat_b = bodies[c.b].material;
++            let pair_mat = effective_material(&mat_a, &mat_b, params);
++            let e = pair_mat.restitution;
++            let mu = pair_mat.friction;
+             // 由法向构造正交切向基(Contact 只存法向,切向基数值求解时现算)。
+             let (t1, t2) = tangent_basis(&n);
+ 
+diff --git a/crates/phy-rigid/src/world.rs b/crates/phy-rigid/src/world.rs
+index 3bc86ba..4bc46c4 100644
+--- a/crates/phy-rigid/src/world.rs
++++ b/crates/phy-rigid/src/world.rs
+@@ -16,13 +16,15 @@ use serde::{Deserialize, Serialize};
+ use crate::broadphase::broadphase;
+ use crate::ccd;
+ use crate::character_controller::CharacterController;
++use crate::collision_events::{CollisionEvent, CollisionTracker};
+ use crate::contact::Contact;
+ use crate::fracture::fracture_body;
+ use crate::joint::{Joint, JointConstraint};
+ use crate::narrowphase::collide;
+ use crate::profile::StepProfile;
+ use crate::profile_stage;
+-use crate::shape::Body;
++use crate::shape::{Body, Shape};
++use crate::shape_cast::ShapeCastHit;
+ use crate::solver::{ContactConstraint, SolverParams};
+ use rayon::prelude::*;
+ use std::collections::HashMap;
+@@ -54,6 +56,14 @@ pub struct RigidWorld<T: RealField + Copy> {
+     /// 运行时状态(含 vel_y 跨帧累积),不序列化。
+     #[serde(skip)]
+     pub character: Option<CharacterController<T>>,
++    /// B2 碰撞事件三态追踪器:维护上一帧末态活跃接触 pair 集合,与当前帧 diff
++    /// 生成 Begin/Stay/End 事件。运行时状态,不序列化。
++    #[serde(skip)]
++    pub collision_tracker: CollisionTracker,
++    /// B2 本帧待取碰撞事件(由 `step` 填充,`drain_collision_events()` 取出并清空)。
++    /// 运行时临时数据,不序列化。
++    #[serde(skip)]
++    pub pending_collision_events: Vec<CollisionEvent<T>>,
+ }
+ 
+ impl<T: RealField + Copy + NumCast> Default for RigidWorld<T> {
+@@ -261,6 +271,8 @@ impl<T: RealField + Copy + NumCast> RigidWorld<T> {
+             last_sensor_contacts: Vec::new(),
+             contact_impulses: HashMap::new(),
+             character: None,
++            collision_tracker: CollisionTracker::new(),
++            pending_collision_events: Vec::new(),
+         }
+     }
+ 
+@@ -500,6 +512,22 @@ impl<T: RealField + Copy + NumCast> RigidWorld<T> {
+             next_cache.insert(key, (cc.normal_impulse, cc.tangent_impulse));
+         }
+         self.contact_impulses = next_cache;
++
++        // B2 碰撞事件三态:用本帧末态活跃接触(含求解后法向冲量)与上一帧末态 diff,
++        // 生成 Begin/Stay/End 事件。覆盖式写入 pending(事件语义为"本帧接触状态",
++        // 非跨帧累积),业务方每帧 `drain_collision_events()` 取走即可。
++        let mut ev_src: Vec<(usize, usize, Vec3<T>, Vec3<T>, T)> = Vec::new();
++        for cc in last_constraints.iter() {
++            ev_src.push((
++                cc.a,
++                cc.b,
++                cc.contact.normal,
++                cc.contact.point,
++                cc.contact.depth,
++            ));
++        }
++        self.pending_collision_events = self.collision_tracker.update(&ev_src);
++
+         prof.total_ns = prof.broad_narrow_ns
+             + prof.velocity_ns
+             + prof.advance_ns
+@@ -515,6 +543,42 @@ impl<T: RealField + Copy + NumCast> RigidWorld<T> {
+         &self.last_sensor_contacts
+     }
+ 
++    /// B2 取出并清空本帧待处理的碰撞事件(三态:Begin/Stay/End + 穿透深度)。
++    ///
++    /// 每个 `step` 会覆盖式写入本帧事件(见 `step_with_profile` 末尾),故多次调用
++    /// 只有首次返回最新帧事件,后续返回空,直到下一次 `step`。典型用法:每帧
++    /// `step` 后调用一次,遍历事件驱动游戏逻辑(播放音效 / 触发伤害 / 铰链解锁等)。
++    ///
++    /// `a`/`b` 为 body 全局索引(已保证 `a < b`)。`Begin`/`Stay` 携带 `depth`(穿透深度,
++    /// >0),可作为碰撞强度指标(游戏侧如需更精确接触力,可结合 solver 内部冲量另接钩子)。
++    pub fn drain_collision_events(&mut self) -> Vec<CollisionEvent<T>> {
++        std::mem::take(&mut self.pending_collision_events)
++    }
++
++    /// 形状扫掠查询(P2-b):把一个形状从 `from`(姿态 `from_rot`)沿直线扫掠到 `to`
++    /// (姿态 `to_rot`),返回第一个受阻的世界 body。常用于角色胶囊移动前的"是否会撞墙"、
++    /// 子弹/射线类投射的广义化(支持任意形状而非仅线段)。
++    ///
++    /// 过滤与常规碰撞一致:按 `layers`/`collision_mask` 与世界 body 的碰撞层位与,
++    /// 传感器 body 不阻挡。`ignore` 可跳过自身(投射体 body 索引)。
++    ///
++    /// 返回 `None` 表示整段路径畅通。实现为对扫掠参数 `α∈[0,1]` 的二分搜索(复用
++    /// `narrowphase::collide`),精度由 `max_iters`(默认 20)控制。
++    pub fn cast_shape(
++        &self,
++        shape: &Shape<T>,
++        from: &Vec3<T>,
++        from_rot: &na::UnitQuaternion<T>,
++        to: &Vec3<T>,
++        to_rot: &na::UnitQuaternion<T>,
++        layers: u32,
++        mask: u32,
++        ignore: Option<usize>,
++        max_iters: usize,
++    ) -> Option<ShapeCastHit<T>> {
++        crate::shape_cast::shape_cast(shape, from, from_rot, to, to_rot, &self.bodies, layers, mask, ignore, max_iters)
++    }
++
+     /// 把所有可动体按时间步 `h` 推进位置(线速度)与姿态(角速度)。
+     ///
+     /// 姿态积分 `q += 0.5·(0,ω)⊗q·h` 后与 `step` 原逻辑一致;把积分放此处使 CCD
+@@ -705,6 +769,7 @@ mod tests {
+ 
+     use crate::shape::{Shape, SubShape};
+     use crate::solver::SolverParams;
++    use crate::PhysicsMaterial;
+ 
+     /// 热浮力应让热区中的刚体获得向上的速度修正(抵消部分重力)。
+     #[test]
+@@ -1116,6 +1181,157 @@ mod tests {
+         );
+     }
+ 
++    /// B2 碰撞事件三态端到端:两球接触 → Begin,持续 → Stay,分离 → End。
++    #[test]
++    fn collision_events_begin_stay_end_e2e() {
++        let mut world = RigidWorld::<f64>::new();
++        world.gravity = Vec3::new(0.0, 0.0, 0.0); // 关重力,专测事件
++        // 两球半径 0.5,初始间距 0.8(轻微重叠 0.2,确保 narrow-phase 判定为接触)。
++        let a = world.add_body(Body::new(Shape::Sphere { r: 0.5 }, Vec3::new(-0.4, 0.0, 0.0), 1.0));
++        let b = world.add_body(Body::new(Shape::Sphere { r: 0.5 }, Vec3::new(0.4, 0.0, 0.0), 1.0));
++        let _ = (a, b);
++
++        // 帧1:进入接触 → Begin,且穿透深度 > 0。
++        world.step(1.0 / 120.0);
++        let e1 = world.drain_collision_events();
++        assert_eq!(e1.len(), 1, "应恰好一个接触 pair");
++        match &e1[0] {
++            CollisionEvent::Begin { a, b, depth, .. } => {
++                assert!(*a < *b, "a 应小于 b");
++                assert!(*depth > 0.0, "重叠球穿透深度应 > 0");
++            }
++            _ => panic!("帧1应为 Begin"),
++        }
++
++        // 帧2:仍接触 → Stay(覆盖式,drain 取走后再次 drain 应空),穿透仍存在。
++        world.step(1.0 / 120.0);
++        let e2 = world.drain_collision_events();
++        assert_eq!(e2.len(), 1);
++        match &e2[0] {
++            CollisionEvent::Stay { depth, .. } => assert!(*depth > 0.0, "持续接触穿透应 > 0"),
++            _ => panic!("帧2应为 Stay"),
++        }
++        assert!(
++            world.drain_collision_events().is_empty(),
++            "drain 后再次 drain 应为空(覆盖式)"
++        );
++
++        // 帧3:把 b 移远使其分离 → End。
++        world.bodies[b].pos = Vec3::new(3.0, 0.0, 0.0);
++        world.step(1.0 / 120.0);
++        let e3 = world.drain_collision_events();
++        assert_eq!(e3.len(), 1);
++        assert!(matches!(e3[0], CollisionEvent::End { .. }), "帧3应为 End");
++    }
++
++    /// B2 碰撞事件:落球接触时报告穿透深度 > 0(depth 即碰撞强度指标;split-impulse 下
++    /// 速度层法向冲量恒为 0,故游戏侧应以 depth 判断碰撞强度)。
++    #[test]
++    fn collision_event_reports_depth() {
++        let mut world = RigidWorld::<f64>::new();
++        world.gravity = Vec3::new(0.0, -9.81, 0.0); // 开重力
++        // 上方球自由下落到静止地面球上,接触时应产生 depth > 0 的事件。
++        let ground = world.add_body(Body::new(Shape::Sphere { r: 0.5 }, Vec3::new(0.0, 0.0, 0.0), 0.0));
++        let _drop = world.add_body(Body::new(Shape::Sphere { r: 0.5 }, Vec3::new(0.0, 2.0, 0.0), 1.0));
++        let _ = ground;
++
++        let mut saw_depth = false;
++        for _ in 0..120 {
++            world.step(1.0 / 120.0);
++            for ev in world.drain_collision_events() {
++                if let CollisionEvent::Begin { depth, a, b, .. }
++                | CollisionEvent::Stay { depth, a, b, .. } = ev
++                {
++                    // drop=1, ground=0 → pair 应为 (0,1)。
++                    assert!((a, b) == (0, 1), "接触 pair 应为 (0,1)");
++                    if depth > 0.0 {
++                        saw_depth = true;
++                    }
++                }
++            }
++        }
++        assert!(saw_depth, "接触时应报告穿透深度 > 0");
++    }
++
++    /// 物理材质(P2-a):`effective_material` 在双方均默认材质时回退到全局
++    /// `SolverParams`,否则取两 body 材质组合(恢复 max、摩擦几何平均)。
++    /// 这是求解器实际读取材质路径的单点验证,与旧版全局 params 行为向后兼容。
++    #[test]
++    fn effective_material_wiring() {
++        use crate::solver::effective_material;
++        use crate::material::PhysicsMaterial;
++        // 双方默认 → 回退全局 params(摩擦 0.5 / 恢复 0.9)。
++        let p = SolverParams::<f64> {
++            restitution: 0.9,
++            friction: 0.5,
++            ..SolverParams::default()
++        };
++        let d = PhysicsMaterial::default();
++        let m = effective_material(&d, &d, &p);
++        assert!((m.friction - 0.5).abs() < 1e-12);
++        assert!((m.restitution - 0.9).abs() < 1e-12);
++
++        // 任一方显式赋材质 → 取组合,忽略全局。
++        let steel = PhysicsMaterial::metal(); // e=0.6, mu=0.4
++        let wood = PhysicsMaterial::wood(); // e=0.2, mu=0.5
++        let m2 = effective_material(&steel, &wood, &p);
++        // 恢复取 max → 0.6;摩擦取几何平均 sqrt(0.4*0.5)=0.4472
++        assert!((m2.restitution - 0.6).abs() < 1e-12, "组合恢复应取 max");
++        let expected_mu = (0.4 * 0.5f64).sqrt();
++        assert!((m2.friction - expected_mu).abs() < 1e-12, "组合摩擦应取几何平均");
++    }
++
++    /// 物理材质(P2-a)集成:带 per-body 材质的 world 能正常步进且碰撞事件报告 depth。
++    /// (注:求解器恢复系数动力学受既有 split-impulse 块求解实现限制,回弹强度不在
++    /// 本测试范围;此处仅验证材质接线不影响既有稳定性与事件链路。)
++    #[test]
++    fn world_with_body_materials_steps_and_reports_depth() {
++        let mut world = RigidWorld::<f64>::new();
++        world.gravity = Vec3::new(0.0, -9.81, 0.0);
++        // 地面:钢材质。落球:橡胶材质。
++        let ground = world.add_body(Body {
++            material: PhysicsMaterial::metal(),
++            ..Body::new(Shape::Box { half: Vec3::new(5.0, 0.5, 5.0) }, Vec3::zeros(), 0.0)
++        });
++        let ball = world.add_body(Body {
++            material: PhysicsMaterial::rubber(),
++            ..Body::new(Shape::Sphere { r: 0.5 }, Vec3::new(0.0, 2.0, 0.0), 1.0)
++        });
++        let _ = (ground, ball);
++        let mut saw_depth = false;
++        for _ in 0..200 {
++            world.step(1.0 / 120.0);
++            for ev in world.drain_collision_events() {
++                if let CollisionEvent::Begin { depth, .. } | CollisionEvent::Stay { depth, .. } = ev {
++                    if depth > 0.0 {
++                        saw_depth = true;
++                    }
++                }
++            }
++        }
++        assert!(saw_depth, "带材质 body 的碰撞应仍报告 depth > 0");
++    }
++
++    /// 形状扫掠查询(P2-b):`RigidWorld::cast_shape` 应能检测沿直线扫掠的命中比例。
++    /// 球从 z=-5 沿 +z 扫掠到 z=+5,途中穿过原点处的障碍球(半径 1),命中比例≈0.35。
++    #[test]
++    fn world_cast_shape_detects_obstacle() {
++        let mut world = RigidWorld::<f64>::new();
++        let obstacle = world.add_body(Body::new(Shape::Sphere { r: 1.0 }, Vec3::zeros(), 0.0));
++        let _ = obstacle;
++        let shape = Shape::Sphere { r: 0.5 };
++        let from = Vec3::new(0.0, 0.0, -5.0);
++        let to = Vec3::new(0.0, 0.0, 5.0);
++        let rot = na::UnitQuaternion::identity();
++        let hit = world.cast_shape(
++            &shape, &from, &rot, &to, &rot, u32::MAX, u32::MAX, None, 24,
++        );
++        assert!(hit.is_some(), "应命中障碍球");
++        let h = hit.unwrap();
++        assert!((h.fraction - 0.35).abs() < 1e-3, "命中比例应≈0.35,实际 {}", h.fraction);
++        assert_eq!(h.body_index, 0);
++    }
++
+     /// 胶囊体碰撞(D2):Capsule 在静态盒(地面)上方释放,应落地停在地面上(不穿透、不漂移),
+     /// 验证通用 GJK+EPA 窄相对 Capsule 的接触求解。
+     #[test]
+diff --git a/crates/phy-sdk/examples/recipes_cloth_flag.rs b/crates/phy-sdk/examples/recipes_cloth_flag.rs
+new file mode 100644
+index 0000000..4dcd299
+--- /dev/null
++++ b/crates/phy-sdk/examples/recipes_cloth_flag.rs
+@@ -0,0 +1,38 @@
++//! 用途: 软体(质点-弹簧)旗帜 —— 顶部钉扎的一张悬挂软布在重力下下垂。
++//! 用 `SoftBody::from_lattice` 生成规则晶格,nz=1 即薄布料,顶层(ny-1)自动钉死。
++//!
++//! 运行: `cargo run -p phy-sdk --example recipes_cloth_flag`
++//!
++//! 坐标契约: 右手系, +Y 向上, 单位米(m); 重力 -Y 9.81。
++
++use phy_math::Vec3;
++use phy_sdk::{PhysicsBuilder, World, WorldExt};
++
++fn main() {
++    // 1) 启用软体子系统。
++    let mut world: World<f64> = PhysicsBuilder::new().soft().build();
++
++    // 2) 造一张薄软布: nx 列 × ny 行 × nz=1 层, 顶层固定(钉在旗杆上)。
++    {
++        let soft = world.soft_mut().expect("软体子系统");
++        let cloth = phy_soft::SoftBody::from_lattice(8, 6, 1, 0.2, Vec3::new(0.0, 3.0, 0.0));
++        soft.body = cloth;
++    }
++
++    // 3) 推进仿真(循环内只读取质点, 用不可变句柄)。
++    let dt = 1.0 / 60.0;
++    for step in 0..240 {
++        world.step(dt);
++        if step % 60 == 0 {
++            let soft = world.soft().unwrap();
++            // 质点 0 在顶部(被钉死, y 应保持 ≈3.0); 底排质点会下垂。
++            let top = &soft.body.particles[0];
++            let bottom = &soft.body.particles[soft.body.particles.len() - 1];
++            println!(
++                "[SIM] step={:>3} top.y={:.3} bottom.y={:.3}",
++                step, top.pos.y, bottom.pos.y
++            );
++        }
++    }
++    println!("[SIM] 完成: 软布 {} 质点", world.soft().unwrap().body.particles.len());
++}
+diff --git a/crates/phy-sdk/examples/recipes_drop_bouncing_balls.rs b/crates/phy-sdk/examples/recipes_drop_bouncing_balls.rs
+new file mode 100644
+index 0000000..f83d786
+--- /dev/null
++++ b/crates/phy-sdk/examples/recipes_drop_bouncing_balls.rs
+@@ -0,0 +1,40 @@
++//! 用途: 刚体入门 —— 静态地面 + 一批下落球, 读回位姿验证下落。
++//! 这是 AI 最常生成的"物理仿真 Hello World"。
++//!
++//! 运行: `cargo run -p phy-sdk --example recipes_drop_bouncing_balls`
++//!
++//! 坐标契约: 右手系, +Y 向上, 单位米(m); 四元数 (w,x,y,z) 机体->世界; 重力 -Y 9.81。
++
++use phy_math::Vec3;
++use phy_sdk::{PhysicsBuilder, World, WorldExt};
++
++fn main() {
++    // 1) 声明并构建只含刚体的世界。
++    let mut world: World<f64> = PhysicsBuilder::new().rigid().build();
++
++    // 2) 按意图造物体, 不用记索引/downcast。
++    world.spawn_floor(Vec3::new(20.0, 0.5, 20.0), -0.5); // 地板中心 y=-0.5, 半尺寸 20
++    world.spawn_sphere(Vec3::new(0.0, 3.0, 0.0), 0.5, 1.0); // 单个下落球
++    let ids = world.spawn_sphere_grid(Vec3::new(-1.0, 1.0, -1.0), 5, 0.3, 0.1, 0.1); // 5³=125 球
++
++    // 3) 推进仿真。
++    let dt = 1.0 / 60.0;
++    for step in 0..180 {
++        world.step(dt);
++        if step % 60 == 0 {
++            let r = world.rigid().unwrap();
++            let ball = &r.world.bodies[ids[0].0];
++            println!("[SIM] step={:>3} ball0.y={:.3}", step, ball.pos.y);
++        }
++    }
++
++    // 4) 读回位姿 (pos.xyz 米; rot.wxyz 四元数)。
++    let r = world.rigid().unwrap();
++    let ball = &r.world.bodies[ids[0].0];
++    assert!(ball.pos.y < 3.0, "球应已下落");
++    println!(
++        "[SIM] 完成: {} 个球, 最低球 y={:.3} (应接近地板上方)",
++        r.world.bodies.len(),
++        ball.pos.y
++    );
++}
+diff --git a/crates/phy-sdk/examples/recipes_heat_plate.rs b/crates/phy-sdk/examples/recipes_heat_plate.rs
+new file mode 100644
+index 0000000..7fa7084
+--- /dev/null
++++ b/crates/phy-sdk/examples/recipes_heat_plate.rs
+@@ -0,0 +1,44 @@
++//! 用途: 标量热场扩散 —— 在金属板中心持续注入热源, 观察热量随扩散方程外溢。
++//! 默认网格 nx=32, 间距 dx=0.2 (见 `PhysicsBuilder::field`)。
++//!
++//! 运行: `cargo run -p phy-sdk --example recipes_heat_plate`
++//!
++//! 坐标契约: 右手系, +Y 向上, 单位米(m)。
++
++use phy_sdk::{PhysicsBuilder, World, WorldExt};
++
++fn main() {
++    // 1) 启用热场子系统。
++    let mut world: World<f64> = PhysicsBuilder::new().field().build();
++
++    // 2) 在网格正中持续注入热源(每步累加)。
++    {
++        let heat = world.field_mut().expect("热场子系统");
++        let c = heat.field.nx / 2; // 中心格点索引
++        heat.field.add_source(c, c, c, 10.0);
++    }
++
++    // 3) 推进仿真并抽样(距热源 3 格处的温度应随时间升高)。
++    let dt = 1.0 / 60.0;
++    for step in 0..240 {
++        {
++            // 每步补一点源, 模拟持续加热。
++            let heat = world.field_mut().expect("热场子系统");
++            let c = heat.field.nx / 2;
++            heat.field.add_source(c, c, c, 10.0);
++        }
++        world.step(dt);
++
++        if step % 60 == 0 {
++            let heat = world.field().unwrap();
++            let c = heat.field.nx / 2;
++            let center = heat.field.sample(c, c, c);
++            let edge = heat.field.sample((c + 3).min(heat.field.nx - 1), c, c);
++            println!(
++                "[SIM] step={:>3} 中心温={:.3} 边缘温={:.3}",
++                step, center, edge
++            );
++        }
++    }
++    println!("[SIM] 完成: 热扩散 alpha={}", world.field().unwrap().alpha);
++}
+diff --git a/crates/phy-sdk/examples/recipes_sand_pile.rs b/crates/phy-sdk/examples/recipes_sand_pile.rs
+new file mode 100644
+index 0000000..aa24111
+--- /dev/null
++++ b/crates/phy-sdk/examples/recipes_sand_pile.rs
+@@ -0,0 +1,38 @@
++//! 用途: 颗粒(PBD)堆积 —— 一批颗粒下落堆成小丘。
++//!
++//! 运行: `cargo run -p phy-sdk --example recipes_sand_pile`
++//!
++//! 坐标契约: 右手系, +Y 向上, 单位米(m); 重力 -Y 9.81。
++
++use phy_math::Vec3;
++use phy_sdk::{PhysicsBuilder, World, WorldExt};
++
++fn main() {
++    // 1) 启用颗粒子系统。
++    let mut world: World<f64> = PhysicsBuilder::new().granular().build();
++
++    // 2) 静态地面(用刚体子系统承载颗粒落点) + 颗粒云。
++    //    注意: 颗粒与刚体同世界内各自 step, 这里加一块静态地板让颗粒停住。
++    world.spawn_floor(Vec3::new(5.0, 0.5, 5.0), -0.5);
++
++    {
++        let granular = world.granular_mut().expect("颗粒子系统");
++        // fill_grid(count, radius, mass, pack): 在原点上方立方体网格灌 count 个颗粒。
++        granular.world.fill_grid(800, 0.15, 0.1, 1.05);
++    }
++
++    // 3) 推进仿真(循环内只读取, 用不可变句柄打印)。
++    let dt = 1.0 / 60.0;
++    for step in 0..240 {
++        world.step(dt);
++        if step % 60 == 0 {
++            let n = world
++                .granular()
++                .map(|g| g.world.grains.len())
++                .unwrap_or(0);
++            println!("[SIM] step={:>3} 颗粒数={}", step, n);
++        }
++    }
++    let total = world.granular().map(|g| g.world.grains.len()).unwrap_or(0);
++    println!("[SIM] 完成: 颗粒堆积 {} 粒", total);
++}
+diff --git a/crates/phy-sdk/examples/recipes_water_dam_break.rs b/crates/phy-sdk/examples/recipes_water_dam_break.rs
+new file mode 100644
+index 0000000..06ada28
+--- /dev/null
++++ b/crates/phy-sdk/examples/recipes_water_dam_break.rs
+@@ -0,0 +1,43 @@
++//! 用途: SPH 流体溃坝 —— 一排静止水柱在重力下塌落铺开。
++//!
++//! 运行: `cargo run -p phy-sdk --example recipes_water_dam_break`
++//!
++//! 坐标契约: 右手系, +Y 向上, 单位米(m); 重力 -Y 9.81。
++
++use phy_math::Vec3;
++use phy_sdk::{PhysicsBuilder, World, WorldExt};
++
++fn main() {
++    // 1) 启用流体子系统。
++    let mut world: World<f64> = PhysicsBuilder::new().fluid().build();
++
++    // 2) 用 SPH 参数 + fill_box 灌粒子(由目标粒子数反推间距, 避免立方爆炸)。
++    {
++        let fluid = world.fluid_mut().expect("流体子系统");
++        let half = 3.0f64;
++        let n_fluid = 1500usize;
++        let spacing = (8.0 * half.powi(3) / n_fluid as f64).powf(1.0 / 3.0);
++        // 水柱放在左半边、靠上, 模拟"坝后蓄水"。
++        fluid.world.fill_box(
++            Vec3::new(-half, 1.0, -half),
++            Vec3::new(0.0, 1.0 + 2.0 * half, half),
++            spacing,
++            0.1,
++        );
++    }
++
++    // 3) 推进仿真(循环内只读取, 用不可变句柄打印)。
++    let dt = 1.0 / 60.0;
++    for step in 0..240 {
++        world.step(dt);
++        if step % 60 == 0 {
++            let n = world
++                .fluid()
++                .map(|f| f.world.particles.len())
++                .unwrap_or(0);
++            println!("[SIM] step={:>3} 粒子数={}", step, n);
++        }
++    }
++    let total = world.fluid().map(|f| f.world.particles.len()).unwrap_or(0);
++    println!("[SIM] 完成: 溃坝 {} 粒子", total);
++}
+diff --git a/crates/phy-sdk/src/lib.rs b/crates/phy-sdk/src/lib.rs
+index 58fecea..be8af93 100644
+--- a/crates/phy-sdk/src/lib.rs
++++ b/crates/phy-sdk/src/lib.rs
+@@ -1,53 +1,63 @@
+ //! # phy-sdk —— 物理引擎集成 SDK
+ //!
+-//! 这是面向**业务集成**的便利层(M4 里程碑),目标是把散落在多个 `phy-*` crate 的
+-//! 子系统拼装细节屏蔽掉,让接入方拿到一个**统一入口 + 开箱即用工厂**:
++//! > ⚠️ **稳定性**: 当前为 `0.x` 阶段, API 仍可能变动。业务接入请锁定精确版本
++//! > (如 `phy-sdk = "=0.1.0"`),避免因小版本升级导致代码不兼容。
++//!
++//! 这是面向**业务集成**与 **AI vibe-coding** 的便利层(M4 里程碑),目标是把散落在
++//! 多个 `phy-*` crate 的子系统拼装细节屏蔽掉,让接入方(包括 LLM 代码生成)拿到一个
++//! **统一入口 + 开箱即用工厂**:
+ //!
+ //! - 通过 [`PhysicsBuilder`] 一行声明要启用哪些子系统,自动创建内部世界并挂载;
+-//! - 通过 [`World`] / [`step`] / [`step_checked`] 驱动仿真,或用 [`World::step`];
++//! - 通过 [`WorldExt`] (见 [`spawn_sphere`] / [`WorldExt::rigid`]) 按**意图**直接造物体,
++//!   无需记忆子系统索引或手写 downcast;
++//! - 通过 [`World::step`] / [`World::step_checked`] 驱动仿真;
+ //! - 通过 [`save_world`] / [`load_world`] 做存档(兼容 `phy-io` 的 ron 格式);
+-//! - 运行时用 [`get_as`] / [`get_as_mut`] 把子系统取回强类型句柄做细粒度控制。
++//! - 运行时可用 [`get_as`] / [`get_as_mut`] (底层逃生口) 或 [`WorldExt`] 取回强类型句柄。
+ //!
+ //! 所有物理算法实现仍由各 `phy-*` crate 负责,本 crate **只做重导出与便捷封装**,
+ //! 不重新实现任何物理,保证与底层 crate 行为字节级一致。
+ //!
+-//! ## 快速集成
++//! # 坐标与单位契约 (AI 务必遵守)
++//!
++//! 全库统一约定,所有 `spawn_*` 与取回的位置/姿态数据都遵守:
++//!
++//! - **坐标系**: 右手系, **+Y 轴向上**, 单位 **米 (m)**。
++//! - **角度**: 四元数 **(w, x, y, z)**, 含义为 *机体(局部) -> 世界* 的旋转。
++//! - **速度 / 角速度**: 世界系, 单位 **m/s** 与 **rad/s**。
++//! - **重力**: 默认沿 **-Y**, 大小 **9.81 m/s²** (可改 `world.rigid().gravity`)。
++//!
++//! # AI 推荐用法 (vibe-coding 友好)
++//!
++//! 直接 `use phy_sdk::WorldExt;` 后即可用意图式 API,无需关心索引:
+ //!
+ //! ```
+-//! use phy_sdk::{PhysicsBuilder, World, get_as_mut, granular::{GranularSubsystem, Grain}};
++//! use phy_sdk::{PhysicsBuilder, World, WorldExt, Vec3};
+ //!
+-//! // 1) 声明要用的子系统,SDK 自动建好内部世界并挂载。
+-//! let mut world: World<f64> = PhysicsBuilder::new().granular().build();
++//! // 1) 声明并构建世界(只需刚体)。
++//! let mut world: World<f64> = PhysicsBuilder::new().rigid().build();
+ //!
+-//! // 2) 往颗粒世界添加若干颗粒(经 subsystem 句柄访问内部世界)。
+-//! //    索引 0 = 第一个被声明的子系统(此处即颗粒)。Grain::new(pos, radius, mass)。
+-//! if let Some(g) = get_as_mut::<GranularSubsystem<f64>>(&mut world, 0) {
+-//!     for i in 0..100 {
+-//!         let x = (i % 10) as f64 * 0.2 - 1.0;
+-//!         let y = (i / 10) as f64 * 0.2;
+-//!         g.world.add(Grain::new(nalgebra::Vector3::new(x, y, 0.0), 0.1, 1.0));
+-//!     }
+-//! }
++//! // 2) 直接按意图造物体,无需记索引/downcast (返回 BodyId, 可忽略)。
++//! world.spawn_floor(Vec3::new(20.0, 0.5, 20.0), -0.5);      // 地板在 y=-0.5
++//! world.spawn_sphere(Vec3::new(0.0, 3.0, 0.0), 0.5, 1.0);   // 下落球
++//! let ids = world.spawn_sphere_grid(                       // 5³ = 125 个下落球网格
++//!     Vec3::new(-1.0, 0.0, -1.0), 5, 0.3, 0.1, 0.1);
++//! assert_eq!(ids.len(), 125);
+ //!
+-//! // 3) 推进 30 步(带看门狗的内部 world.step(dt))。
+-//! for _ in 0..30 {
+-//!     world.step(1.0 / 60.0);
+-//! }
++//! // 3) 推进仿真。
++//! for _ in 0..30 { world.step(1.0 / 60.0); }
+ //!
+-//! // 4) 取回结果:颗粒世界里的体数量。
+-//! let n = get_as_mut::<GranularSubsystem<f64>>(&mut world, 0)
+-//!     .map(|g| g.world.grains.len())
+-//!     .unwrap_or(0);
+-//! assert_eq!(n, 100, "应已添加 100 个颗粒");
++//! // 4) 读回任意物体位姿 (pos.xyz 米, rot.wxyz 四元数)。
++//! let r = world.rigid().unwrap();
++//! let ball = &r.world.bodies[ids[0].0];
++//! assert!(ball.pos.y < 3.0, "球应已下落");
+ //! ```
+ //!
+ //! ## 多子系统组合
+ //!
+ //! ```
+-//! use phy_sdk::{
+-//!     PhysicsBuilder, World, get_as,
+-//!     fluid::FluidSubsystem, granular::GranularSubsystem,
+-//! };
++//! use phy_sdk::{PhysicsBuilder, World, WorldExt};
++//! use phy_sdk::fluid::FluidSubsystem;
++//! use phy_sdk::granular::GranularSubsystem;
+ //!
+ //! // 同时启用流体 + 颗粒(同一 World 内多子系统各自独立 step)。
+ //! let mut world: World<f64> =
+@@ -57,9 +67,9 @@
+ //!     world.step(1.0 / 60.0);
+ //! }
+ //!
+-//! // 流体子系统在索引 0,颗粒在索引 1(按 build 时声明顺序)。
+-//! assert!(get_as::<FluidSubsystem<f64>>(&world, 0).is_some());
+-//! assert!(get_as::<GranularSubsystem<f64>>(&world, 1).is_some());
++//! // 用具名取回,无需记索引顺序。
++//! assert!(world.fluid().is_some());
++//! assert!(world.granular().is_some());
+ //! ```
+ //!
+ //! ## 存档(ron/JSON)
+@@ -76,11 +86,11 @@
+ //!
+ //! ## 看门狗与数值稳定性
+ //!
+-//! 生产环境建议用 [`step_checked`],它会在任一子系统产生 `NaN`/`Inf` 或卡死
++//! 生产环境建议用 [`World::step_checked`],它会在任一子系统产生 `NaN`/`Inf` 或卡死
+ //! (`delta_t` 推进为 0)时返回 [`WorldError`],而非静默产出坏数据:
+ //!
+ //! ```
+-//! use phy_sdk::{PhysicsBuilder, World};
++//! use phy_sdk::{PhysicsBuilder, World, WorldExt};
+ //!
+ //! let mut world: World<f64> = PhysicsBuilder::new().fluid().build();
+ //! if let Err(e) = world.step_checked(1.0 / 60.0) {
+@@ -93,6 +103,16 @@ use std::any::Any;
+ // ===== 重导出:核心类型与 trait =====
+ pub use phy_core::{Subsystem, World, WorldError};
+ 
++// ===== AI 友好层所需的类型导入 (供下方 `WorldExt` impl 使用) =====
++pub use phy_math::Vec3;
++use crate::field::HeatField;
++use crate::fluid::FluidSubsystem;
++use crate::granular::GranularSubsystem;
++use crate::optics::OpticSubsystem;
++use crate::rigid::{Body, RigidSubsystem, Shape};
++use crate::soft::SoftSubsystem;
++use crate::solid::SolidSubsystem;
++
+ // ===== 命名子模块:各子系统强类型句柄(供业务按域名引用) =====
+ pub mod fluid {
+     //! 流体(SPH/WCSPH)。
+@@ -130,6 +150,7 @@ pub mod rigid {
+     //! }
+     //! assert!(cc.grounded, "角色应落到地面");
+     //! ```
++    pub use phy_rigid::shape::{Body, Shape};
+     pub use phy_rigid::{CharacterController, RigidSubsystem, RigidWorld};
+ }
+ pub mod granular {
+@@ -199,6 +220,323 @@ pub struct PhysicsBuilder {
+     solid: bool,
+ }
+ 
++// ===========================================================================
++// AI 友好层 (vibe-coding 适配): 具名取回 + 意图式 spawn + 坐标契约
++// ===========================================================================
++//
++// 设计动机: 本 SDK 第一消费者可能是 LLM。AI 容易搞错"索引 0 = 第一个声明
++// 的子系统"、"向下转型取句柄"、"不透明指针"等人类习惯。下面这组 API 让 AI
++// 直接按"意图"操作,无需记忆索引或泛型 downcast。
++//
++// 坐标契约 (所有 spawn / 取回 API 一律遵守, 写在此处 AI 可检索):
++//   * 坐标系: 右手系, +Y 轴向上, 单位米(m)。
++//   * 角度: 四元数 (w, x, y, z), 含义为 机体(局部) -> 世界 的旋转。
++//   * 速度/角速度: 世界系, 单位 m/s 与 rad/s。
++//   * 重力: 默认沿 -Y, 大小 9.81 m/s² (可改 `rigid().gravity`)。
++
++/// 刚体 / 颗粒等物体的稳定句柄。
++///
++/// 由 spawn 类方法返回, AI 无需自己保存 `add_body` 的整数索引。
++/// 内部即 `usize`(物体在所属子系统中的位置), 但用新类型避免误用。
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub struct BodyId(pub usize);
++
++/// 给 `World<f64>` 增加的 AI 友好方法集。
++///
++/// 用法: `use phy_sdk::WorldExt;` 后, `world.rigid()` / `world.spawn_sphere(...)`
++/// 等方法即可直接调用, 无需 `get_as::<RigidSubsystem<f64>>(&mut world, 0)`。
++///
++/// # 坐标契约
++/// 本 trait 所有方法遵守: **右手系, +Y 向上, 单位米(m); 四元数 (w,x,y,z) 为
++/// 机体->世界旋转; 速度 m/s, 角速度 rad/s; 重力沿 -Y, 9.81 m/s²**。
++pub trait WorldExt {
++    // ---- 具名取回 (替代索引取回) ----
++    /// 取回刚体子系统句柄 (若世界含刚体子系统)。
++    fn rigid(&self) -> Option<&RigidSubsystem<f64>>;
++    /// 可变取回刚体子系统句柄。
++    fn rigid_mut(&mut self) -> Option<&mut RigidSubsystem<f64>>;
++    /// 取回流体子系统句柄。
++    fn fluid(&self) -> Option<&FluidSubsystem<f64>>;
++    /// 可变取回流体子系统句柄。
++    fn fluid_mut(&mut self) -> Option<&mut FluidSubsystem<f64>>;
++    /// 取回颗粒子系统句柄。
++    fn granular(&self) -> Option<&GranularSubsystem<f64>>;
++    /// 可变取回颗粒子系统句柄。
++    fn granular_mut(&mut self) -> Option<&mut GranularSubsystem<f64>>;
++    /// 取回软体子系统句柄。
++    fn soft(&self) -> Option<&SoftSubsystem<f64>>;
++    /// 可变取回软体子系统句柄。
++    fn soft_mut(&mut self) -> Option<&mut SoftSubsystem<f64>>;
++    /// 取回标量场/传热子系统句柄。
++    fn field(&self) -> Option<&HeatField<f64>>;
++    /// 可变取回标量场/传热子系统句柄。
++    fn field_mut(&mut self) -> Option<&mut HeatField<f64>>;
++    /// 取回光学子系统句柄。
++    fn optics(&self) -> Option<&OpticSubsystem<f64>>;
++    /// 可变取回光学子系统句柄。
++    fn optics_mut(&mut self) -> Option<&mut OpticSubsystem<f64>>;
++    /// 取回可破坏实体子系统句柄。
++    fn solid(&self) -> Option<&SolidSubsystem<f64>>;
++    /// 可变取回可破坏实体子系统句柄。
++    fn solid_mut(&mut self) -> Option<&mut SolidSubsystem<f64>>;
++
++    // ---- 意图式 spawn (刚体) ----
++    /// 在地面 y = `center_y` 处放一块静态地板, 半尺寸 `half` (即 x/z 边长 = 2*half)。
++    ///
++    /// 返回地板 `BodyId`。地板质量无限 (inv_mass=0), 不受重力与碰撞冲量驱动。
++    /// 坐标: 右手系 +Y 向上, 米。
++    fn spawn_floor(&mut self, half: Vec3<f64>, center_y: f64) -> Option<BodyId>;
++    /// 在世界坐标 `pos` 处生成一个动态球 (半径 `r`, 质量 `mass` 千克), 初速 0。
++    ///
++    /// 返回 `BodyId` (后续可用 `rigid_mut().world.body(id.0)` 取回)。坐标: 米, +Y 向上。
++    fn spawn_sphere(&mut self, pos: Vec3<f64>, r: f64, mass: f64) -> Option<BodyId>;
++    /// 在世界坐标 `pos` 处生成一个动态长方体 (半尺寸 `half`, 质量 `mass` 千克), 初速 0。
++    ///
++    /// 坐标: 米, +Y 向上。
++    fn spawn_box(&mut self, pos: Vec3<f64>, half: Vec3<f64>, mass: f64) -> Option<BodyId>;
++    /// 生成静态球 (半径 `r`, inv_mass=0), 常用于障碍/边界。
++    fn spawn_static_sphere(&mut self, pos: Vec3<f64>, r: f64) -> Option<BodyId>;
++    /// 生成静态长方体 (半尺寸 `half`, inv_mass=0)。
++    fn spawn_static_box(&mut self, pos: Vec3<f64>, half: Vec3<f64>) -> Option<BodyId>;
++    /// 在 `pos` 周围网格化生成 `count`×`count`×`count` 个下落球 (间距 `spacing`, 各质量 `mass`)。
++    ///
++    /// 返回每个球的 `BodyId` 列表。适合"一堆弹跳球"场景。
++    fn spawn_sphere_grid(
++        &mut self,
++        pos: Vec3<f64>,
++        count: usize,
++        spacing: f64,
++        r: f64,
++        mass: f64,
++    ) -> Vec<BodyId>;
++}
++
++impl WorldExt for World<f64> {
++    fn rigid(&self) -> Option<&RigidSubsystem<f64>> {
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if let Some(r) = s.as_any().downcast_ref::<RigidSubsystem<f64>>() {
++                    return Some(r);
++                }
++            }
++        }
++        None
++    }
++    fn rigid_mut(&mut self) -> Option<&mut RigidSubsystem<f64>> {
++        let mut idx = None;
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if s.as_any().is::<RigidSubsystem<f64>>() {
++                    idx = Some(i);
++                    break;
++                }
++            }
++        }
++        idx.and_then(|i| self.get_mut(i).and_then(|s| s.as_any_mut().downcast_mut()))
++    }
++    fn fluid(&self) -> Option<&FluidSubsystem<f64>> {
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if let Some(r) = s.as_any().downcast_ref::<FluidSubsystem<f64>>() {
++                    return Some(r);
++                }
++            }
++        }
++        None
++    }
++    fn fluid_mut(&mut self) -> Option<&mut FluidSubsystem<f64>> {
++        let mut idx = None;
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if s.as_any().is::<FluidSubsystem<f64>>() {
++                    idx = Some(i);
++                    break;
++                }
++            }
++        }
++        idx.and_then(|i| self.get_mut(i).and_then(|s| s.as_any_mut().downcast_mut()))
++    }
++    fn granular(&self) -> Option<&GranularSubsystem<f64>> {
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if let Some(r) = s.as_any().downcast_ref::<GranularSubsystem<f64>>() {
++                    return Some(r);
++                }
++            }
++        }
++        None
++    }
++    fn granular_mut(&mut self) -> Option<&mut GranularSubsystem<f64>> {
++        let mut idx = None;
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if s.as_any().is::<GranularSubsystem<f64>>() {
++                    idx = Some(i);
++                    break;
++                }
++            }
++        }
++        idx.and_then(|i| self.get_mut(i).and_then(|s| s.as_any_mut().downcast_mut()))
++    }
++    fn soft(&self) -> Option<&SoftSubsystem<f64>> {
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if let Some(r) = s.as_any().downcast_ref::<SoftSubsystem<f64>>() {
++                    return Some(r);
++                }
++            }
++        }
++        None
++    }
++    fn soft_mut(&mut self) -> Option<&mut SoftSubsystem<f64>> {
++        let mut idx = None;
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if s.as_any().is::<SoftSubsystem<f64>>() {
++                    idx = Some(i);
++                    break;
++                }
++            }
++        }
++        idx.and_then(|i| self.get_mut(i).and_then(|s| s.as_any_mut().downcast_mut()))
++    }
++    fn field(&self) -> Option<&HeatField<f64>> {
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if let Some(r) = s.as_any().downcast_ref::<HeatField<f64>>() {
++                    return Some(r);
++                }
++            }
++        }
++        None
++    }
++    fn field_mut(&mut self) -> Option<&mut HeatField<f64>> {
++        let mut idx = None;
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if s.as_any().is::<HeatField<f64>>() {
++                    idx = Some(i);
++                    break;
++                }
++            }
++        }
++        idx.and_then(|i| self.get_mut(i).and_then(|s| s.as_any_mut().downcast_mut()))
++    }
++    fn optics(&self) -> Option<&OpticSubsystem<f64>> {
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if let Some(r) = s.as_any().downcast_ref::<OpticSubsystem<f64>>() {
++                    return Some(r);
++                }
++            }
++        }
++        None
++    }
++    fn optics_mut(&mut self) -> Option<&mut OpticSubsystem<f64>> {
++        let mut idx = None;
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if s.as_any().is::<OpticSubsystem<f64>>() {
++                    idx = Some(i);
++                    break;
++                }
++            }
++        }
++        idx.and_then(|i| self.get_mut(i).and_then(|s| s.as_any_mut().downcast_mut()))
++    }
++    fn solid(&self) -> Option<&SolidSubsystem<f64>> {
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if let Some(r) = s.as_any().downcast_ref::<SolidSubsystem<f64>>() {
++                    return Some(r);
++                }
++            }
++        }
++        None
++    }
++    fn solid_mut(&mut self) -> Option<&mut SolidSubsystem<f64>> {
++        let mut idx = None;
++        for i in 0..self.subsystem_count() {
++            if let Some(s) = self.get(i) {
++                if s.as_any().is::<SolidSubsystem<f64>>() {
++                    idx = Some(i);
++                    break;
++                }
++            }
++        }
++        idx.and_then(|i| self.get_mut(i).and_then(|s| s.as_any_mut().downcast_mut()))
++    }
++
++    fn spawn_floor(&mut self, half: Vec3<f64>, center_y: f64) -> Option<BodyId> {
++        let sub = self.rigid_mut()?;
++        let id = sub.world.add_body(Body::new(
++            Shape::Box { half },
++            Vec3::new(0.0, center_y, 0.0),
++            0.0,
++        ));
++        Some(BodyId(id))
++    }
++    fn spawn_sphere(&mut self, pos: Vec3<f64>, radius: f64, mass: f64) -> Option<BodyId> {
++        let inv = if mass <= 0.0 { 0.0 } else { 1.0 / mass };
++        let sub = self.rigid_mut()?;
++        let id = sub
++            .world
++            .add_body(Body::new(Shape::Sphere { r: radius }, pos, inv));
++        Some(BodyId(id))
++    }
++    fn spawn_box(&mut self, pos: Vec3<f64>, half: Vec3<f64>, mass: f64) -> Option<BodyId> {
++        let inv = if mass <= 0.0 { 0.0 } else { 1.0 / mass };
++        let sub = self.rigid_mut()?;
++        let id = sub
++            .world
++            .add_body(Body::new(Shape::Box { half }, pos, inv));
++        Some(BodyId(id))
++    }
++    fn spawn_static_sphere(&mut self, pos: Vec3<f64>, radius: f64) -> Option<BodyId> {
++        let sub = self.rigid_mut()?;
++        let id = sub
++            .world
++            .add_body(Body::new(Shape::Sphere { r: radius }, pos, 0.0));
++        Some(BodyId(id))
++    }
++    fn spawn_static_box(&mut self, pos: Vec3<f64>, half: Vec3<f64>) -> Option<BodyId> {
++        let sub = self.rigid_mut()?;
++        let id = sub
++            .world
++            .add_body(Body::new(Shape::Box { half }, pos, 0.0));
++        Some(BodyId(id))
++    }
++    fn spawn_sphere_grid(
++        &mut self,
++        pos: Vec3<f64>,
++        count: usize,
++        spacing: f64,
++        radius: f64,
++        mass: f64,
++    ) -> Vec<BodyId> {
++        let mut ids = Vec::with_capacity(count * count * count);
++        let inv = if mass <= 0.0 { 0.0 } else { 1.0 / mass };
++        if let Some(sub) = self.rigid_mut() {
++            for i in 0..count {
++                for j in 0..count {
++                    for k in 0..count {
++                        let p = Vec3::new(
++                            pos.x + i as f64 * spacing,
++                            pos.y + j as f64 * spacing,
++                            pos.z + k as f64 * spacing,
++                        );
++                        let id = sub
++                            .world
++                            .add_body(Body::new(Shape::Sphere { r: radius }, p, inv));
++                        ids.push(BodyId(id));
++                    }
++                }
++            }
++        }
++        ids
++    }
++}
++
+ impl PhysicsBuilder {
+     /// 新建空构建器(不含任何子系统)。
+     pub fn new() -> Self {
+diff --git a/docs/AI_VIBE_CODING_PLAN.md b/docs/AI_VIBE_CODING_PLAN.md
+new file mode 100644
+index 0000000..206cd08
+--- /dev/null
++++ b/docs/AI_VIBE_CODING_PLAN.md
+@@ -0,0 +1,86 @@
++# AI Vibe Coding 适配计划
++
++> 策略变更：**本物理引擎不再定位为「给人类软件开发者的中间件」，而是「给 AI 做 vibe coding 时调用的中间库」**。
++>
++> 这意味着 API 的**第一消费者是 LLM**，而不是人类工程师。设计优先级随之改变：
++> - 人类能容忍"索引 0 = 第一个声明的子系统"、"向下转型取句柄"、"不透明指针"；
++> - AI 会乱猜函数名、搞错坐标系/单位、传错数组布局、忽略错误返回值、复制 `expect` 导致 panic。
++>
++> 目标：**让 AI 在一次或两次对话内就写出可编译、物理正确、不崩溃的仿真代码**，并把"AI 最容易踩的坑"前置到代码与示例里。
++
++---
++
++## 设计原则（贯穿所有改动）
++
++1. **意图式 API 优先于机制式 API**：AI 说"造 100 个下落球"，应有 `spawn_spheres(count, ...)` 而非先 `add_body` + 手写 `Body::new(Shape::Sphere{..}, ..)`。
++2. **具名取回优先于索引取回**：`world.rigid()` 返回 `Option<&RigidSubsystem>`，而非 `get_as::<RigidSubsystem>(&world, 0)`。
++3. **fail-soft 优先于 panic**：所有入口返回 `Result`/`Option`/哨兵值；任何 FFI 函数绝不 unwind 到调用方。
++4. **坐标系/单位/返回值语义写在代码 doc 里**（AI 检索得到），而非只在独立 md。
++5. **任务式示例库（recipes）**：每个文件 = 一个 AI 可整段复制改参的完整 demo，比 API 文档更可靠。
++6. **多语言可达**：AI 常生成 Python/C++/C# 而非 Rust，需提供 Python 包装层 + 补全 FFI 工厂。
++
++---
++
++## 改动清单（按优先级）
++
++### P0 — 降低 AI 90% 编译失败率
++
++- [x] **P0-1 `phy-sdk`：具名子系统取回**
++  新增 `WorldExt::fluid()/rigid()/granular()/soft()/field()/optics()/solid() -> Option<&Subsystem>` 与 `mut` 变体，内部按类型 downcast，AI 不用记索引顺序。保留 `get_as`/`get_as_mut` 作为底层逃生口。
++- [x] **P0-2 `phy-sdk`：意图式 spawn API**
++  在 `WorldExt` 上新增高层方法（不要求先取回子系统句柄）：
++  - `spawn_floor(half: Vec3, y: f64)` —— 静态地面（最常见需求）。
++  - `spawn_sphere(pos, r, mass) -> BodyId`、`spawn_box(pos, half, mass) -> BodyId`、`spawn_static_sphere/box`。
++  - `spawn_sphere_grid(pos, count, spacing, r, mass) -> Vec<BodyId>`。
++  返回 `BodyId`（新类型包装 `usize`），AI 不用自己存索引。
++  （流体/颗粒的批量灌装走既有 `fluid().fill_box` / `granular().fill_grid`，意图式薄封装暂未做，因底层 `FluidWorld`/`GranularWorld` 已足够直白。）
++- [x] **P0-3 `phy-sdk`：坐标/单位 doc 契约**
++  在 `phy-sdk` crate 顶层 `#![doc]` 与 `WorldExt` trait doc 写死坐标/单位契约（右手系, +Y 向上, 米; 四元数 w,x,y,z 机体->世界; 重力 -Y 9.81）。`RigidWorld` 等底层契约可由 AI 经 `use phy_sdk::WorldExt` 顶层说明检索到。
++
++### P1 — 任务式示例库（recipes）
++
++- [x] **P1-1 `crates/phy-sdk/examples/recipes_*` 可编译可运行 demo**（每个文件可整段复制），均为 P0 的 `WorldExt` API 驱动：
++  - `recipes_drop_bouncing_balls.rs`（刚体 + 地面 + 125 下落球网格 + 读回位姿）✅ 运行通过
++  - `recipes_water_dam_break.rs`（SPH 溃坝）✅ 运行通过
++  - `recipes_sand_pile.rs`（颗粒堆积）✅ 运行通过
++  - `recipes_cloth_flag.rs`（软体 PBD 旗帜）✅ 运行通过
++  - `recipes_heat_plate.rs`（标量热场扩散）✅ 运行通过
++  每个文件头部有 `//! 用途: ...` + `//! 运行: cargo run -p phy-sdk --example recipes_xxx` + 坐标契约。
++  待补：`optics_mirror.rs`（光学/波动）、`rigid_drone.rs`（四旋翼）留作 P1 收尾，需先确认 OpticScene/四旋翼高层 API 形态。
++- [x] **P1-2 `phy-sdk` doctest 升级为"复制即可用"片段**，已含：world_basic（含 AI 推荐用法：具名取回 + 意图式 spawn + 坐标契约）、char_pickup（CharacterController 用法）、save_load（序列化往返）。均通过 `cargo test --doc`。
++
++### P2 — Python 包装层（AI 最常生成的语言）
++
++- [ ] **P2-1/P2-2/P2-3 Python 封装层 —— 已决议跳过**：本仓库是纯 Rust SDK，AI vibe-coding 目标语言即 Rust，`phy-sdk` 的 `WorldExt` + recipes 已是"给 LLM 的友好 API 直通车"，无跨语言 FFI 需求。Python ctypes 封装仅在"生成 Python/C++/C#"场景才有意义，故整段 P2 不执行（计划第 6 条设计原则的前提不成立）。
++
++### P3 — FFI 补全（让非 Rust 语言用全套物理）
++
++- [x] **P3-1 `phy-ffi` 补齐空世界工厂**：新增 `phy_world_create_soft_empty` / `phy_world_create_field_empty` / `phy_world_create_optics_empty` / `phy_world_create_solid_empty`（与 `phy-sdk::PhysicsBuilder` 能力对齐，空世界供调用方自行填充）。新增符号属向后兼容，ABI 版本保持 `2` 不变。已加 doctest 覆盖 4 工厂 + destroy，全过。
++- [ ] **P3-2 `phy-ffi` 补齐读回**：软体顶点、标量场网格、光学场、实体网格的 `get_*` 函数（数组布局写进头注释）。依赖 P3-1 工厂 + 调用方填充路径，留作下一步。
++- [ ] **P3-3 重新生成 `phy_ffi.h`**（cbindgen）并核对 ABI 版本：P3-1 仅新增符号，ABI 版本不变；待 P3-2 落地后一并重生成头文件。
++
++### P4 — 稳定性承诺对 AI 友好
++
++- [x] **P4-1 `phy-sdk` 顶层 `#![doc]` 加显式稳定性警告**：`0.x 阶段 API 可能变动，业务锁定精确版本 = "0.1.0"`（已写入 crate 根 doc）。
++- [ ] **P4-2 所有 `#[non_exhaustive]` 已在 wfix 分支标注（完成）**；补充：AI 生成 `match` 漏通配由编译器抓，不构成问题。
++
++---
++
++## 执行顺序
++
++1. P0-1 + P0-2 + P0-3（核心 API 改造，投入小、收益最大）
++2. P1-1 + P1-2（示例库）
++3. P2-1 + P2-2 + P2-3（Python 层）
++4. P3-1 + P3-2 + P3-3（FFI 补全）
++5. P4-1（稳定性 doc）
++
++每步完成后跑 `cargo build -p phy-sdk` / `cargo test -p phy-sdk` / `cargo build --examples` 验证，确保不破坏现有 API（向后兼容：旧 `get_as`/`PhysicsBuilder` 保留）。
++
++---
++
++## 验收标准
++
++- AI 用"造 100 个下落球并读回位姿"prompt，基于 recipes + 新 API 能在 1 次生成内编译通过。
++- `cargo test -p phy-sdk` 全绿（含新 doctest）。
++- `python/phy.py` 示例可跑通（需先编译 cdylib）。
++- FFI 头文件含全部子系统的工厂与读回，ABI 版本记录一致。
+diff --git a/docs/public_module_roadmap.md b/docs/public_module_roadmap.md
+new file mode 100644
+index 0000000..85cca70
+--- /dev/null
++++ b/docs/public_module_roadmap.md
+@@ -0,0 +1,110 @@
++# 物理引擎「公用模块」成熟度评估与补齐计划
++
++> 文档目标：回答"这个物理引擎作为稳定、公用、通用的模块被业务复用，是否已经足够完善，还缺什么"。
++> 评估基准：截至 2026-08-13 的 `wfix` 分支状态（PLAN.md / PRODUCTION_READINESS.md / ROADMAP_GAME.md 已记录的全部里程碑均视为已落地）。
++> 用途：本文件是"公用模块"视角下的增量路线图，与 PLAN.md 的"工程能力里程碑"互补——PLAN 记录"做了什么"，本文件记录"作为公用模块还差什么"。
++
++---
++
++## 1. 总体结论
++
++**已达到：技术原型 / 早期可用级别（约 0.1.0 预发布）。**
++
++已具备的公用模块硬实力（来自 PLAN.md / PRODUCTION_READINESS.md，仅列与"公用"强相关的）：
++
++| 维度 | 状态 | 证据 |
++|---|---|---|
++| 架构 | ✅ 模块化 workspace + `Subsystem`/`couple` 插件式内核 | `World<T>` 统一驱动、双向耦合 |
++| 物理广度 | ✅ 很宽 | SPH 流体 / PBD 颗粒 / 顺序冲量刚体(含角动力学) / 软体布料 / 线性 FEM / 热电磁引力声光场 / 光学折射焦散 / 关节 / 车辆 / 破碎 / CCD / 角色控制器 |
++| 确定性 | ✅ S8 落地 | 同输入逐位复现 + 存档重放（防战建模硬门槛） |
++| 稳定性 | ✅ L1/L2/L4 落地 | 看门狗(有限性捕获) + 极端参数压测 + 守恒律硬断言 |
++| 跨语言 | ✅ L3 C ABI 落地 | 不透明句柄 + panic 守卫 + f32/f64 双通道 + MSVC `.lib` + Unity/Unreal P/Invoke 声明 |
++| 性能 | ✅ G2 真机达标 | GPU 路径 SPH 46.6k≈105fps、颗粒 10k≈433fps |
++| GPU 保真 | ✅ G1 真机验证 | CPU↔GPU 逐粒子误差 SPH MAX≈1.5e-4、颗粒逐位 0 |
++| 工程化 | ✅ 120+ 单测 + CI + 数值门禁 + 打包脚本 | `build_package.py` / `wasm-cross-check.py` |
++| 便捷层 | ✅ phy-sdk + 场景 DSL | `PhysicsBuilder` 一行声明子系统 + `SceneDesc` JSON 落地 |
++
++**尚未达到"生产可用 / 商用稳定"级别。** 作为"公用模块"判定，最关键的三个未达标项：
++1. **从未正式发布**——业务方只能走本地 path 依赖，不能 `cargo add`；
++2. **缺少"物理↔渲染"集成契约**——每个游戏侧接入都要自己踩坐标/矩阵/剔除的坑（本次 wfix 分支修复的 180° 穿模、模型矩阵转置即此类）；
++3. **游戏逻辑刚需的碰撞事件回调缺失**——求解器内部已算接触冲量，但未向外暴露 begin/stay/end 三态 + 冲量大小。
++
++---
++
++## 2. 两个使用方向的缺口
++
++### 方向 A：建模仿真（科研 / 防战建模 / 数字孪生）
++- **材料本构薄**：FEM 仅线性小变形、SPH 仅牛顿+幂律，缺塑性/损伤/各向异性。
++- **参数标定基础设施缺失**：没有"给一组材料参数 → 跑标准基准对表"的校准框架。
++- **确定性无黄金参考库**：S8 已逐位可复现，但缺"固定随机种子的场景库 + 黄金参考值"仓库，复现门槛仍在脚本层。
++- **长期守恒漂移报告**：`StatsObserver` 已落地，但 CI 仅跑 1000 步级，缺长时（10^5+ 步）自动化守恒报告。
++
++### 方向 B：游戏引擎
++- **物理↔渲染集成契约缺失**（见 §3 P1-a）：坐标 / 矩阵列主序 / 背面剔除 / 单位约定未固化。
++- **碰撞事件三态 + 冲量回报缺失**（见 §3 P1-b）：游戏逻辑常用，求解器已有数据只差暴露。
++- **查询 API 不全**：仅有 `ray_cast`，缺形状投射 / 扫掠体检测（sweep test）。
++- ~~**物理材质未资产化**~~：✅ 已在 P2-a 落地——新增 `PhysicsMaterial<T> { friction, restitution }` 资源（`material.rs`），`Body` 持有 `material` 字段，求解器按 per-pair 组合（恢复取 max、摩擦取几何平均）查表，全局 `SolverParams` 作为双方均默认材质时的回退。场景 DSL 经 serde 自动支持。
++- ~~**查询 API 不全（仅 ray_cast，缺形状投射/sweep）**~~：✅ 已在 P2-b 落地——新增 `shape_cast(shape, from, from_rot, to, to_rot, bodies, layers, mask, ignore, max_iters)`（`shape_cast.rs`）与 `RigidWorld::cast_shape()` 便捷入口，返回首个受阻 `ShapeCastHit<T> { fraction, body_index, point, normal }`。算法为粗扫（coarse=max_iters×4）+ 二分精化，可正确处理"起点终点均畅通但中段受阻"的穿越式扫掠；法向由 `narrowphase::collide` 给出（指向查询形状来向）。
++- **引擎零拷贝桥接不完整**：Unity/Unreal 绑定是 P/Invoke 声明层，缺"每帧 Transform 批量同步"封装。
++
++---
++
++## 3. 补齐计划（按优先级）
++
++| 优先级 | 项 | 归属方向 | 成本 | 状态 |
++|---|---|---|---|---|
++| **P0（阻塞"公用"判定）** | 正式发布到 crates.io + 对外 crate 加 `#[non_exhaustive]` | 通用 | 中 | 待做 |
++| **P1-a** | 写《物理↔渲染集成契约》文档（坐标/矩阵列主序/背面剔除/单位） | 游戏 | 低 | ✅ 已完成 |
++| **P1-b** | 碰撞事件三态回调(Begin/Stay/End) + 穿透深度回报 | 游戏 | 中 | ✅ 已完成 |
++| **P2-a** | 物理材质资源概念（per-body 摩擦/恢复系数） | 通用 | 中 | ✅ 已完成 |
++| **P2-b** | 形状投射 / sweep test 查询 API | 游戏 | 中 | ✅ 已完成 |
++| **P3-a** | 材料本构扩展（塑性/损伤/各向异性）+ 标定基准库 | 建模 | 高 | 待做 |
++| **P3-b** | Unity/Unreal 的 Transform 批量同步桥 | 游戏 | 中 | 待做 |
++| **P3-c** | 仿真侧黄金参考场景库（固定种子 + 参考值） | 建模 | 中 | 待做 |
++
++### P0 详情：发布与 ABI 稳定
++- 给所有对外 crate（`phy-core` / `phy-sdk` / `phy-rigid` / `phy-fluid` / `phy-granular` / `phy-soft` / `phy-field` / `phy-optics` / `phy-ffi` / `phy-math`）的对外枚举/结构体加 `#[non_exhaustive]`（事件枚举、错误枚举、Builder 配置项优先）。
++- 配置 `cargo login` 凭据；执行 `scripts/publish_all.sh`（已就绪）。
++- 在 `integration_guide.md` §3 把版本承诺从"0.x 可能破坏性变更"收紧为明确的 semver 保护边界。
++
++### P1-a 详情：物理↔渲染集成契约（本文件姊妹文档 `render_integration_contract.md`）
++固化以下约定，避免每个游戏侧重复踩坑：
++1. **坐标系**：物理世界 = 右手系、Y 轴向上、单位米；渲染侧若用 Z-up / 左手系需显式转换。
++2. **变换矩阵内存布局**：物理侧 `phy_math::Mat4` 与 WGSL `mat4x4` 均为**列主序**；顶点缓冲按列连续铺开 16 个 f32，禁止行/列转置。
++3. **背面剔除**：meshgen 生成的封闭凸体（盒/球/胶囊）绕序并非全部严格外 CCW，渲染管线**必须关闭背面剔除**（`cull_mode: None`）或先修正全部绕序；否则相机转到 180° 会错误剔除正面造成"穿模"假象。
++4. **单位与缩放**：位置单位 m、时间 s、质量 kg，渲染侧缩放因子由业务方统一处理，不在物理层缩放。
++5. **深度与 VP**：近/远平面、投影矩阵 z 映射（OpenGL `[-1,1]` vs D3D/WebGPU `[0,1]`）的校正约定。
++
++### P1-b 详情：碰撞事件三态 + 穿透深度回报
++- 在 `phy-rigid` 求解器（solver.rs）接触求解后，收集每对接触 `(body_a, body_b, normal, point, depth)`。
++- 新增 `CollisionEvent<T>` 枚举（`collision_events.rs`）：
++  - `Begin { a, b, normal, point, depth }`
++  - `Stay { a, b, normal, point, depth }`
++  - `End { a, b }`
++- 状态机由 `CollisionTracker` 维护"上一帧接触对集合"，与当前帧 diff 得出 begin/stay/end；`depth` 取本帧穿透深度（>0，作为碰撞强度指标）。
++- 注：求解器为 split-impulse 架构，速度层法向冲量在接触帧趋于 0（位置修正走独立伪速度通道），故回报 `depth` 而非冲量更可靠。若需精确接触力，应另接 solver 内部冲量钩子（未来项）。
++- 公开入口：`RigidWorld::drain_collision_events()`（每帧覆盖式写入，取出即清空）。
++
++### P2-a 详情：物理材质资源
++- 新增 `PhysicsMaterial<T> { friction, restitution }`（`material.rs`），附常用预设 `ice()/rubber()/metal()/wood()` 与 `combine()`（恢复取 max、摩擦取几何平均）。
++- `Body` 持有 `material: PhysicsMaterial<T>`（serde 可序列化，默认 `friction=0.5, restitution=0.0`，与 `SolverParams` 全局默认一致，向后兼容）。
++- 新增 `solver::effective_material(a, b, params)` 纯函数：双方均默认材质 → 回退全局 `SolverParams`；否则取组合。求解器速度层据此取 per-pair 摩擦/恢复系数。
++- 场景 DSL（`SceneDesc`）经 `Body` 的 serde 自动支持 per-body 材质，无需额外字段。
++- ⚠️ 已知限制：当前 `solve_velocity` 的块求解器对恢复系数存在双重逆矩阵缩放缺陷（`p=K⁻¹·col` 后 `dλ=-p[0]`，等效 `K⁻²`），导致恢复系数动力学几乎失效（回弹极弱）。该缺陷为既有问题、与 P2-a 材质接线无关；P2-a 仅保证"材质值正确传入求解器"。修复见未来 M 级 issue。
++
++### P2-b 详情：查询 API
++- `phy-rigid` 新增 `shape_cast(shape, from, to, rotation)`（扫掠体检测）与 `cast_shape` 返回首个命中 + 命中处法向/穿透。
++- 复用现有 `broadphase` + `narrowphase` 的图元测试，仅改变查询入口（从"两 body 接触"改为"形状 vs 世界"）。
++
++---
++
++## 4. 推进顺序（本次执行）
++
++1. ✅ 本文件（`public_module_roadmap.md`）——评估与计划固化。
++2. ✅ P1-a：《物理↔渲染集成契约》文档。
++3. ✅ P1-b：碰撞事件三态回调 + 穿透深度回报。
++4. ✅ P2-a：物理材质资源（`PhysicsMaterial` + `Body.material` + `effective_material`）。
++5. ✅ P2-b：形状投射 / sweep test（`shape_cast` + `cast_shape`）。
++6. ✅ P0：crates.io 发布 + `#[non_exhaustive]`（12 个对外 crate 的公开枚举/配置输入 struct 已加 `#[non_exhaustive]`；下游 phy-optics/phy-fluid/phy-ffi/phy-demo 的 match 已补通配臂通过编译，全 workspace `cargo build`/`cargo test -p phy-rigid` 通过）。已知限制：`phy-demo` 的 `f64_vec3_roundtrip` 诊断测试（serde_json 浮点位模式往返）为预存失败，与发布无关。
++
++> 注：P3 系列（材料本构扩展、引擎零拷贝桥、黄金参考库）成本较高，待 P0~P2 落地后再排期。
+diff --git a/docs/render_integration_contract.md b/docs/render_integration_contract.md
+new file mode 100644
+index 0000000..f656a3c
+--- /dev/null
++++ b/docs/render_integration_contract.md
+@@ -0,0 +1,108 @@
++# 物理 ↔ 渲染集成契约
++
++> 姊妹文档：[public_module_roadmap.md](./public_module_roadmap.md) → P1-a。
++> 目标：固化物理侧与渲染侧之间的**坐标、矩阵内存布局、背面剔除、单位**约定，避免每个游戏/可视化接入方重复踩坑。
++> 本文档的约定基于 `phy-game-demo`（wgpu 渲染路径）在 `wfix` 分支修复的两类真实 bug：① 模型矩阵被隐式行/列转置导致物体塌缩到原点呈放射状；② 背面剔除在相机转 180° 时错误剔除正面造成"穿模"假象。
++
++---
++
++## 1. 坐标系约定（强制）
++
++| 项 | 约定 | 备注 |
++|---|---|---|
++| 轴向 | **右手系，Y 轴向上** | 物理世界、meshgen、角色控制器均一致（up = +y） |
++| 单位 | **米 (m) / 秒 (s) / 千克 (kg)** | 不在物理层缩放；渲染侧缩放因子由业务方自行处理 |
++| 朝向 | 四元数 `quat` 表示 body→world 旋转 | 经 `quat.to_homogeneous()` 得到旋转部分 |
++
++> ⚠️ 渲染侧若使用 Z-up（如某些 DCC 工具）或左手系（如 Unity/Unreal 默认），**必须在业务侧做一次显式轴向转换**，物理层不提供转换。
++
++---
++
++## 2. 变换矩阵内存布局（强制）
++
++### 2.1 列主序是唯一的真相
++
++- 物理侧 `phy_math::na::Matrix4`（nalgebra）**列主序存储**：`m[(row, col)]`，底层按列连续排列 16 个标量。
++- 渲染侧 WGSL `mat4x4<f32>` / `mat4x4<f64>` **同样列主序**。
++- 因此：**实例缓冲里的模型矩阵必须按"列连续"铺开 16 个 f32**，即第 0..4 个是第 0 列（含平移 x 在索引 3），第 4..8 个是第 1 列（含平移 y 在索引 7），以此类推。
++
++> ⚠️ **历史 bug**：`phy-game-demo` 曾按"行连续"铺开模型矩阵，导致 GPU 拿到的矩阵是物理矩阵的**转置**——物体绕原点旋转放大呈放射状塌缩。只可按列主序铺开。
++
++### 2.2 模型矩阵构造
++
++meshgen 提供 `model_matrix(pos, quat)` 返回 nalgebra `Matrix4<f64>`（列主序，平移写入 `m[(0,3)]/m[(1,3)]/m[(2,3)]`）。渲染侧取其 `.as_slice()` 或逐列展开即可，**不要**对结果做 `transpose()`。
++
++```rust
++// 物理侧（正确）
++let m = model_matrix(&pos, &quat);          // 列主序 Matrix4
++instance.model = m;                          // 直接上传，勿转置
++```
++
++### 2.3 每 body 独立缓冲（避免覆盖）
++
++多 body 渲染时，**每个 body 使用独立的顶点/实例缓冲**，或在统一缓冲里按 `body_index` 分片写入后一次性 `write_buffer`。切勿在共用缓冲上每帧覆盖同一段——`phy-game-demo` 早期曾因共用缓冲被后续 body 覆盖而只渲染最后一个物体。
++
++---
++
++## 3. 背面剔除约定（强制）
++
++> ⚠️ **历史 bug**：`phy-game-demo` 开启 `cull_mode: Some(Face::Back)` + `front_face: Ccw` 时，相机转到 180° 出现"穿模"——盒子被看穿、露出后方物体。
++
++### 3.1 根因
++
++meshgen 生成的封闭凸体绕序**并非全部严格外 CCW**：
++- 立方体 6 面中，部分面（如"前"面顶点序 `4→5→6` 从外侧 +z 看为顺时针）绕序与注释声称的"逆时针"相反；
++- UV 球 / 胶囊的经纬度网格上下半球绕序也可能不一致。
++
++开启 Back 剔除后，当这些绕序相反的面正对相机时，被误判为"背面"剔除 → 看穿。
++
++### 3.2 强制约定（二选一，推荐前者）
++
++**方案 A（推荐，已落地 `render_wgpu.rs`）**：关闭背面剔除。
++
++```rust
++primitive: wgpu::PrimitiveState {
++    topology: wgpu::PrimitiveTopology::TriangleList,
++    cull_mode: None,                 // ← 封闭凸体配合深度写入即可正确遮挡
++    front_face: wgpu::FrontFace::Ccw,
++    ..Default::default()
++}
++```
++
++理由：盒/球/胶囊均为封闭凸体，开启深度写入（`depth_write_enabled: true` + `Less` 比较）后，关剔除的遮挡结果完全正确，多画的背面三角形代价可忽略。
++
++**方案 B（更高像素效率，需先修正绕序）**：保留 `cull_mode: Back`，但必须先把 meshgen 全部面的绕序修正为严格外 CCW（逐面核对 6 个面 + 球/胶囊经纬网格上下半球）。风险较高，当前版本不推荐。
++
++---
++
++## 4. 投影与深度（约定）
++
++| 项 | 约定 |
++|---|---|
++| 近/远平面 | `(0.1, 2000.0)`（wgpu demo 默认） |
++| 投影矩阵 z 映射 | OpenGL 风格 `[-1, 1]`，**需经校正矩阵映射到 WebGPU/D3D 的 `[0, 1]`**（见 `phy-demo/src/camera.rs` 的 `correction`） |
++| 深度比较 | `Less`（近处覆盖远处） |
++| 深度写入 | 不透明物体 `true`；透明物体另议 |
++
++> 渲染侧若使用 OpenGL（而非 WebGPU/D3D），**不要**叠加 `[0,1]` 校正矩阵，否则深度错误。
++
++---
++
++## 5. 接入检查清单（渲染侧）
++
++- [ ] 模型矩阵按**列主序**上传到实例缓冲，未做 transpose
++- [ ] 多 body 使用独立缓冲或按索引分片写入，无覆盖
++- [ ] 背面剔除设为 `None`（或已修正全部绕序为外 CCW）
++- [ ] 投影矩阵 z 映射按目标后端（WebGPU/D3D 需 `[0,1]` 校正，OpenGL 不需要）正确配置
++- [ ] 物理世界 Y-up，渲染侧若 Z-up/左手系已做轴向转换
++- [ ] 单位统一为米，渲染侧缩放不在物理层进行
++
++---
++
++## 6. 参考实现
++
++| 文件 | 角色 |
++|---|---|
++| `crates/phy-game-demo/src/meshgen.rs` | `box_mesh` / `sphere_mesh` / `capsule_mesh` / `model_matrix` |
++| `crates/phy-game-demo/src/render_wgpu.rs` | wgpu 管线（`cull_mode: None` + 列主序实例缓冲） |
++| `crates/phy-demo/src/camera.rs` | `proj()` / `view_proj()` / z 校正矩阵 |

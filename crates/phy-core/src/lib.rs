@@ -25,6 +25,7 @@ pub use replay::{FrameInput, Replay, ReplayPlayer, Rng};
 
 /// 引擎错误类型。
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("subsystem step failed: {0}")]
     Step(String),
@@ -35,6 +36,7 @@ pub enum Error {
 /// 由 `World::step_checked` / `step_skipping_checked` 在子系统 `validate` 失败、
 /// 或某子系统在一帧内时间未推进(`dt` 被吞掉)时抛出。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum WorldError {
     /// 某子系统在步进后包含非有限数值(NaN / Inf)。
     #[error("子系统 {subsystem} 字段 {field} 出现非有限值(NaN/Inf)")]

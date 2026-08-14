@@ -35,3 +35,4 @@ _*.txt
 # 打包产物(build_package.py 输出,非源码)
 /pkg
 *.log  
+gpu_dump.png 

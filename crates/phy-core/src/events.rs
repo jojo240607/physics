@@ -17,6 +17,7 @@ use phy_math::RealField;
 /// 内置的世界事件(常用、可直接匹配的那些)。
 ///
 /// 自定义事件可走 [`EventBus::publish`] 的 `Box<dyn Any>` 通道,订阅者 downcast 取出。
+#[non_exhaustive]
 pub enum WorldEvent<T: RealField> {
     /// 世界完成一个时间步:`t` 为该步结束后的全局时间,`dt` 为步长。
     Step { t: T, dt: T },
@@ -41,6 +42,7 @@ pub struct EventBus<T: RealField> {
 
 /// 事件种类标签:用于在分发时快速分流,避免每次都 downcast 全部订阅者。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EventKind {
     /// 内置世界事件(对应 [`WorldEvent`])。
     World,

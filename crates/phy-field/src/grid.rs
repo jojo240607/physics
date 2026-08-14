@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 /// 边界条件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Bc {
     /// 边界固定为 `bc_val`(狄利克雷)。
     Dirichlet,

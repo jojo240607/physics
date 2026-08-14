@@ -7,6 +7,8 @@ use phy_math::{na, Mat3, RealField, Vec3};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::material::PhysicsMaterial;
+
 /// 自定义 serde 模块:把 nalgebra 泛型类型序列化为纯元组,绕过 nalgebra
 /// 自带的 `Matrix<T>: Serialize`(要求 `T: nalgebra::Scalar`)带来的 impl 传播问题。
 ///
@@ -132,6 +134,7 @@ pub mod serde_geom {
 /// 刚体的碰撞形状。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
+#[non_exhaustive]
 pub enum Shape<T: RealField + Copy> {
     /// 球:中心在局部原点,半径 r。
     Sphere { r: T },
@@ -360,6 +363,10 @@ pub struct Body<T: RealField + Copy> {
     /// 不阻止穿透),仅在 `RigidWorld::sensor_contacts` 中报告重叠事件(拾取道具/触发区域/
     /// 角色进入判定等)。传感器仍受碰撞层(B5)过滤与休眠唤醒(B1)影响。
     pub is_sensor: bool,
+    /// P2-a 物理材质:该 body 表面的摩擦/恢复系数。作为资源可经场景 DSL 加载。
+    /// 接触求解时与对方材质组合(恢复取 max、摩擦取几何平均);未显式赋值时取
+    /// `PhysicsMaterial::default()`(与 `SolverParams` 全局默认一致,保持向后兼容)。
+    pub material: PhysicsMaterial<T>,
 }
 
 impl<T: RealField + Copy> Default for Body<T> {
@@ -383,6 +390,7 @@ impl<T: RealField + Copy> Default for Body<T> {
             collision_mask: u32::MAX,
             kinematic: false,
             is_sensor: false,
+            material: PhysicsMaterial::default(),
         }
     }
 }
@@ -407,6 +415,7 @@ impl<T: RealField + Copy> Body<T> {
             collision_mask: u32::MAX,
             kinematic: false,
             is_sensor: false,
+            material: PhysicsMaterial::default(),
         };
         b.set_inertia_from_shape();
         b

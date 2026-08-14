@@ -77,6 +77,7 @@ fn f_neg_nine_eight_one<T: RealField + Copy>() -> T { T::from_f64(-9.81).unwrap(
 /// `gravity` 与 `joints` 可省略(默认引擎重力、空关节);`character_spawn` 省略则无角色。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "T: RealField + Copy + Serialize + DeserializeOwned")]
+#[non_exhaustive]
 pub struct SceneDesc<T: RealField + Copy> {
     /// 世界重力(省略则用引擎默认重力)。
     #[serde(default = "gravity_field", with = "crate::shape::serde_geom")]

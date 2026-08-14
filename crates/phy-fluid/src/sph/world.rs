@@ -535,6 +535,7 @@ impl<T: RealField + Copy + ToPrimitive> FluidWorld<T> {
                 .iter()
                 .map(|sub| Self::body_volume(&sub.shape))
                 .fold(T::zero(), |a, b| a + b),
+            _ => T::zero(), // Shape 新变体安全降级
         }
     }
 

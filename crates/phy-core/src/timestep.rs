@@ -16,6 +16,7 @@ use crate::world::World;
 
 /// 时间步长控制模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StepMode {
     /// 固定子步长 `max_dt`:尾数累积到下一帧,子步数 = ceil(frame_dt/max_dt)。
     /// 最稳定,子步大小恒定,适合科研/确定性回放。

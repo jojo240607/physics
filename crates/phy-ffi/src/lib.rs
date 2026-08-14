@@ -44,14 +44,20 @@ use std::ffi::CStr;
 use std::panic::{self, AssertUnwindSafe};
 
 use phy_core::World;
+use phy_field::{HeatField, ScalarField, Bc};
 use phy_fluid::{FluidSubsystem, FluidWorld, SphParams};
 use phy_granular::subsystem::GranularSubsystem;
 use phy_granular::world::GranularWorld;
 use phy_math::Vec3;
+use phy_optics::{OpticScene, OpticSubsystem, Precision};
 use phy_rigid::shape::Shape;
 use phy_rigid::subsystem::RigidSubsystem;
 use phy_rigid::world::RigidWorld;
 use phy_rigid::Body;
+use phy_soft::SoftBody;
+use phy_soft::SoftSubsystem;
+use phy_solid::SolidSubsystem;
+use phy_solid::SolidWorld;
 
 /// 不透明句柄。C/C++ 侧只见 `PhyWorldHandle *`,不可解引用;
 /// 真实 `World<f64>` 由 Rust 侧 `Box` 拥有,经指针转换在边界传递。
@@ -219,7 +225,7 @@ pub extern "C" fn phy_world_create_rigid() -> *mut PhyWorldHandle {
 /// （如四旋翼仿真：调用方自行 `phy_world_rigid_add_body` 添加机体与可选地面）。
 #[no_mangle]
 pub extern "C" fn phy_world_create_rigid_empty() -> *mut PhyWorldHandle {
-    let mut rworld = RigidWorld::<f64>::new();
+    let rworld = RigidWorld::<f64>::new();
     let mut world = World::<f64>::new();
     world.add_subsystem(Box::new(RigidSubsystem::new(rworld)));
     box_world(world)
@@ -237,6 +243,86 @@ pub extern "C" fn phy_world_create_granular() -> *mut PhyWorldHandle {
 #[no_mangle]
 pub extern "C" fn phy_world_create_coupled() -> *mut PhyWorldHandle {
     guard(build_coupled_world)
+        .map(box_world)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+// ---- 空世界工厂(供 P3 跨语言调用方自行填充; 与 `phy-sdk::PhysicsBuilder` 能力对齐) ----
+
+fn build_soft_world() -> World<f64> {
+    let mut world = World::<f64>::new();
+    // 空软体(无质点/弹簧), 调用方经 `phy_world_*` 后续接口填充。
+    world.add_subsystem(Box::new(SoftSubsystem::new(SoftBody::new(0.0))));
+    world
+}
+
+fn build_field_world() -> World<f64> {
+    let mut world = World::<f64>::new();
+    // 默认 16³ 热扩散场, 间距 1.0, Neumann 边界(与 `PhysicsBuilder::field` 一致)。
+    let grid = ScalarField::new(16, 16, 16, 1.0, 0.0, Bc::Neumann);
+    world.add_subsystem(Box::new(HeatField::new(grid, 0.1)));
+    world
+}
+
+fn build_optics_world() -> World<f64> {
+    let mut world = World::<f64>::new();
+    // 空光学场景(默认精度), 调用方自行 `add` 光学体。
+    world.add_subsystem(Box::new(OpticSubsystem::new(OpticScene::new(), Precision::Realtime)));
+    world
+}
+
+fn build_solid_world() -> World<f64> {
+    let mut world = World::<f64>::new();
+    // 空可破坏实体(FEM): 钢参数 (young=200e9, poisson=0.3, rho=7850), 调用方自行建网格。
+    let sworld = SolidWorld::new(200e9, 0.3, 7850.0);
+    world.add_subsystem(Box::new(SolidSubsystem::new(sworld)));
+    world
+}
+
+/// 创建**空**软体(可变形)世界。调用方自行填充质点/弹簧。
+///
+/// # 示例
+/// ```
+/// use phy_ffi::{phy_world_create_soft_empty, phy_world_create_field_empty,
+///               phy_world_create_optics_empty, phy_world_create_solid_empty,
+///               phy_world_destroy};
+/// for w in [
+///     phy_world_create_soft_empty(),
+///     phy_world_create_field_empty(),
+///     phy_world_create_optics_empty(),
+///     phy_world_create_solid_empty(),
+/// ] {
+///     assert!(!w.is_null());
+///     phy_world_destroy(w); // 空指针安全 no-op
+/// }
+/// ```
+#[no_mangle]
+pub extern "C" fn phy_world_create_soft_empty() -> *mut PhyWorldHandle {
+    guard(build_soft_world)
+        .map(box_world)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// 创建**空**标量热场世界(默认 16³ 网格)。调用方经 `phy_world_*` 注入热源/读取温度。
+#[no_mangle]
+pub extern "C" fn phy_world_create_field_empty() -> *mut PhyWorldHandle {
+    guard(build_field_world)
+        .map(box_world)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// 创建**空**光学/波动世界。调用方自行添加光学体。
+#[no_mangle]
+pub extern "C" fn phy_world_create_optics_empty() -> *mut PhyWorldHandle {
+    guard(build_optics_world)
+        .map(box_world)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// 创建**空**可破坏实体(FEM)世界(钢参数)。调用方自行建网格节点/单元。
+#[no_mangle]
+pub extern "C" fn phy_world_create_solid_empty() -> *mut PhyWorldHandle {
+    guard(build_solid_world)
         .map(box_world)
         .unwrap_or(std::ptr::null_mut())
 }
@@ -271,6 +357,7 @@ pub extern "C" fn phy_world_step_checked(w: *mut PhyWorldHandle, dt: f64) -> i32
         Some(Ok(())) => 0,
         Some(Err(phy_core::WorldError::NonFinite { .. })) => 2,
         Some(Err(phy_core::WorldError::Stalled { .. })) => 3,
+        Some(Err(_)) => 4, // 未来新增错误变体安全降级
         None => -1,
     }
 }
